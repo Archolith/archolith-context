@@ -16,8 +16,8 @@ logger = structlog.get_logger()
 async def create_belongs_to(session_id: str, fact_id: str) -> None:
     """Link a fact to its session."""
     cypher = f"""
-    MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
-    MATCH (f:{CONTEXT_SESSION_LABEL}:Fact {{fact_id: $fact_id}})
+MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
+MATCH (f:{CONTEXT_SESSION_LABEL}:Fact {{fact_id: $fact_id}})
     MERGE (f)-[:BELONGS_TO]->(s)
     """
     await run_write(cypher, {"session_id": session_id, "fact_id": fact_id})
@@ -44,8 +44,8 @@ async def create_touches(session_id: str, file_path: str, status: FileStatus, tu
             ELSE f.last_read_turn
         END
     WITH f
-    MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
-    MERGE (s)-[:TOUCHES]->(f)
+MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
+MERGE (s)-[:TOUCHES]->(f)
     """
     await run_write(cypher, {
         "path": file_path,
@@ -83,8 +83,8 @@ async def store_decision(
         superseded_by: null
     }})
     WITH d
-    MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
-    MERGE (d)-[:BELONGS_TO]->(s)
+MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
+MERGE (d)-[:BELONGS_TO]->(s)
     RETURN d.decision_id
     """
     results = await run_write(cypher, {

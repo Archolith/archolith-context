@@ -49,7 +49,10 @@ async def extract_facts(
     try:
         resp = await http_client.post(
             f"{settings.extractor_base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {settings.extractor_api_key}"},
+        headers={
+                "Authorization": f"Bearer {settings.extractor_api_key}",
+                "Content-Type": "application/json",
+            },
             content=json.dumps(payload).encode(),
         )
         resp.raise_for_status()
@@ -93,6 +96,15 @@ def _parse_extraction_response(content: str, turn_number: int) -> ExtractionResu
         )
 
     facts = data.get("facts", [])
+    # Normalize: model sometimes returns bare strings instead of dicts
+    normalized_facts = []
+    for f in facts:
+        if isinstance(f, str):
+            normalized_facts.append({"content": f, "fact_type": "observation", "confidence": 0.5})
+        elif isinstance(f, dict):
+            normalized_facts.append(f)
+    facts = normalized_facts
+
     files_touched = [f.get("path", "") for f in data.get("files_touched", []) if f.get("path")]
     decisions = data.get("decisions", [])
 

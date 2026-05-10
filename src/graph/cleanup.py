@@ -17,8 +17,8 @@ async def expire_sessions() -> int:
     """Mark sessions past their TTL as expired."""
     settings = get_settings()
     cypher = f"""
-    MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{status: 'active'}})
-    WHERE duration.between(s.last_active, datetime()).hours > $ttl_hours
+MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{status: 'active'}})
+WHERE duration.between(s.last_active, datetime()).hours > $ttl_hours
     SET s.status = 'expired'
     RETURN count(s) AS expired
     """
@@ -48,7 +48,7 @@ async def delete_expired_sessions() -> int:
 async def list_active_sessions() -> list[dict]:
     """List all active sessions (for admin/metrics endpoint)."""
     cypher = f"""
-    MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{status: 'active'}})
+MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{status: 'active'}})
     RETURN s.session_id AS session_id,
            s.fingerprint AS fingerprint,
            s.turn_number AS turn_number,

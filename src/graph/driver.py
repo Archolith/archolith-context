@@ -56,23 +56,23 @@ def get_database() -> str:
 # --- Index creation (run once on startup) ---
 
 CREATE_INDEXES_CYPHER = """
-CREATE CONSTRAINT session_id IF NOT EXISTS
-FOR (n:ContextSession) REQUIRE n.session_id IS UNIQUE;
+CREATE CONSTRAINT session_id_unique IF NOT EXISTS
+FOR (n:Session) REQUIRE n.session_id IS UNIQUE;
 
-CREATE CONSTRAINT session_fingerprint IF NOT EXISTS
-FOR (n:ContextSession) REQUIRE n.fingerprint IS UNIQUE;
+CREATE CONSTRAINT session_fingerprint_unique IF NOT EXISTS
+FOR (n:Session) REQUIRE n.fingerprint IS UNIQUE;
 
 CREATE INDEX fact_type_idx IF NOT EXISTS
-FOR (n:ContextSession) ON (n.fact_type);
+FOR (n:Fact) ON (n.fact_type);
 
 CREATE INDEX fact_valid_until_idx IF NOT EXISTS
-FOR (n:ContextSession) ON (n.valid_until);
+FOR (n:Fact) ON (n.valid_until);
 
 CREATE INDEX session_last_active_idx IF NOT EXISTS
-FOR (n:ContextSession) ON (n.last_active);
+FOR (n:Session) ON (n.last_active);
 
 CREATE INDEX session_status_idx IF NOT EXISTS
-FOR (n:ContextSession) ON (n.status);
+FOR (n:Session) ON (n.status);
 """
 
 

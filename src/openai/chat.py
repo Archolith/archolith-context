@@ -1,12 +1,12 @@
-"""/v1/chat/completions endpoint — proxy with session resolution and extraction."""
+""" /v1/chat/completions endpoint — proxy with session resolution and extraction."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 import structlog
 from fastapi import APIRouter, Request
+from starlette.background import BackgroundTasks
 from starlette.responses import Response, StreamingResponse
 
 from src.config import get_settings
@@ -27,7 +27,7 @@ router = APIRouter()
 
 
 @router.post("/chat/completions")
-async def chat_completions(request: Request) -> Response:
+async def chat_completions(request: Request, background_tasks: BackgroundTasks) -> Response:
     """Accept OpenAI chat completion requests, forward to upstream,
     resolve session, and trigger async fact extraction."""
     settings = get_settings()
@@ -74,13 +74,13 @@ async def chat_completions(request: Request) -> Response:
 
     if req.stream:
         return await _handle_streaming(
-            request, upstream_url, upstream_headers, request_body,
+            request, background_tasks, upstream_url, upstream_headers, request_body,
             session_id=session_id, turn_number=turn_number,
             messages=body.get("messages", []),
         )
     else:
         return await _handle_non_streaming(
-            request, upstream_url, upstream_headers, request_body,
+            request, background_tasks, upstream_url, upstream_headers, request_body,
             session_id=session_id, turn_number=turn_number,
             messages=body.get("messages", []),
         )
@@ -88,6 +88,7 @@ async def chat_completions(request: Request) -> Response:
 
 async def _handle_streaming(
     request: Request,
+    background_tasks: BackgroundTasks,
     url: str,
     headers: dict,
     body: bytes,
@@ -96,6 +97,7 @@ async def _handle_streaming(
     messages: list[dict] | None = None,
 ) -> StreamingResponse:
     """Stream SSE chunks from upstream with response capture and extraction."""
+    capture_holder = {"capture": None}
 
     async def stream_generator():
         try:
@@ -107,26 +109,12 @@ async def _handle_streaming(
                     yield f"data: {error_body.decode()}\n\n"
                     return
 
-                capture = None
                 async for line, cap in stream_with_capture(resp):
                     if cap is not None:
-                        capture = cap
+                        capture_holder["capture"] = cap
                         continue
                     if line:
                         yield line + "\n\n"
-
-                # Fire async extraction if session exists
-                if session_id and capture:
-                    asyncio.create_task(
-                        _run_extraction(
-                            client=request.app.state.extractor_client,
-                            session_id=session_id,
-                            turn_number=turn_number,
-                            messages=messages or [],
-                            response_text=capture.get_full_text(),
-                            truncated=capture.truncated,
-                        )
-                    )
 
         except Exception as e:
             logger.error("streaming_error", error=str(e), exc_info=True)
@@ -134,6 +122,22 @@ async def _handle_streaming(
                 {"error": {"message": f"Internal proxy error: {e}", "type": "server_error"}}
             )
             yield f"data: {error}\n\n"
+
+    # Schedule extraction as a background task that runs after streaming completes
+    if session_id:
+        async def post_stream_extraction():
+            capture = capture_holder["capture"]
+            if capture and capture.get_full_text():
+                await _run_extraction(
+                    client=request.app.state.extractor_client,
+                    session_id=session_id,
+                    turn_number=turn_number,
+                    messages=messages or [],
+                    response_text=capture.get_full_text(),
+                    truncated=capture.truncated,
+                )
+
+        background_tasks.add_task(post_stream_extraction)
 
     return StreamingResponse(
         stream_generator(),
@@ -143,11 +147,13 @@ async def _handle_streaming(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+        background=background_tasks,
     )
 
 
 async def _handle_non_streaming(
     request: Request,
+    background_tasks: BackgroundTasks,
     url: str,
     headers: dict,
     body: bytes,
@@ -165,7 +171,7 @@ async def _handle_non_streaming(
     except httpx.ConnectError as e:
         return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
 
-    # Fire extraction for non-streaming response
+    # Schedule extraction as background task
     if session_id:
         try:
             data = resp.json()
@@ -176,19 +182,23 @@ async def _handle_non_streaming(
                 response_text = msg.get("content", "") or ""
 
             if response_text:
-                asyncio.create_task(
-                    _run_extraction(
-                        client=request.app.state.extractor_client,
-                        session_id=session_id,
-                        turn_number=turn_number,
-                        messages=messages or [],
-                        response_text=response_text,
-                    )
+                background_tasks.add_task(
+                    _run_extraction,
+                    client=request.app.state.extractor_client,
+                    session_id=session_id,
+                    turn_number=turn_number,
+                    messages=messages or [],
+                    response_text=response_text,
                 )
         except Exception as e:
             logger.warning("non_streaming_extraction_setup_failed", error=str(e))
 
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        background=background_tasks,
+    )
 
 
 async def _run_extraction(
@@ -231,6 +241,7 @@ async def _run_extraction(
         )
 
         if not result or not result.facts:
+            logger.info("extraction_empty", session_id=session_id, turn=turn_number)
             return
 
         # Store facts
@@ -282,4 +293,4 @@ async def _run_extraction(
         )
 
     except Exception as e:
-        logger.warning("extraction_task_failed", session_id=session_id, turn=turn_number, error=str(e))
+        logger.warning("extraction_task_failed", session_id=session_id, turn=turn_number, error=str(e), exc_info=True)

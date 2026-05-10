@@ -23,8 +23,16 @@ logger = structlog.get_logger()
 CONTEXT_SESSION_LABEL = "ContextSession"
 MEMORY_LABEL = "Memory"
 
+# All valid labels for session-scoped nodes
+_SESSION_LABELS = {"ContextSession", "Session", "Fact", "File", "Decision"}
+
 # Regex to detect MATCH clauses that already specify our label
 _LABEL_PATTERN = re.compile(rf":\s*{CONTEXT_SESSION_LABEL}\b", re.IGNORECASE)
+
+# Also accept any of the session-scoped sub-labels (they always co-occur with :ContextSession)
+_SESSION_LABEL_PATTERN = re.compile(
+    rf":\s*(?:{'|'.join(_SESSION_LABELS)})\b", re.IGNORECASE
+)
 
 # Patterns that indicate a read-only query (no label guard needed for reads
 # that explicitly target memory, but we still log a warning)
@@ -48,13 +56,13 @@ def _validate_cypher(cypher: str) -> None:
     if _MEMORY_LABEL_PATTERN.search(cypher):
         return
 
-    # Check if any MATCH clause includes :ContextSession
-    if _LABEL_PATTERN.search(cypher):
+    # Check if any MATCH/CREATE/MERGE clause includes a session-scoped label
+    if _SESSION_LABEL_PATTERN.search(cypher):
         return
 
-    # Check for MERGE/CREATE with label (not just MATCH)
+    # Check for MERGE/CREATE with any session label
     create_pattern = re.compile(
-        rf"(?:CREATE|MERGE)\s*\([^)]*:\s*{CONTEXT_SESSION_LABEL}\b", re.IGNORECASE
+        rf"(?:CREATE|MERGE)\s*\([^)]*:\s*(?:{'|'.join(_SESSION_LABELS)})\b", re.IGNORECASE
     )
     if create_pattern.search(cypher):
         return
@@ -93,7 +101,7 @@ async def run_write(
     db = get_database()
 
     async with driver.session(database=db) as session:
-        async with session.begin_transaction() as tx:
+        async with await session.begin_transaction() as tx:
             result = await tx.run(cypher, params or {})
             records = await result.data()
             await tx.commit()
