@@ -47,13 +47,13 @@ def _rewrite_messages(
     assembled_context: "AssembledContext",
     coherence_tail_size: int,
 ) -> list[dict]:
-    """Rewrite the messages array: keep system + coherence tail, replace middle with graph context.
+    """Rewrite the messages array: merge graph context into system prompt + coherence tail.
 
     Strategy:
-    1. Keep the original system message (if present) — it's the harness identity
-    2. Inject the graph-assembled context as an additional system message
-    3. Keep the last N messages as the "coherence tail" (recent context the model needs)
-    4. Discard the middle messages (replaced by graph context)
+    1. Merge graph-assembled context INTO the original system message
+       (NVIDIA API rejects multiple consecutive system messages)
+    2. Keep the last N messages as the "coherence tail" (recent context the model needs)
+    3. Discard the middle messages (replaced by graph context)
 
     This reduces a 100K+ token linear history to ~15-20K of curated context.
     """
@@ -62,25 +62,55 @@ def _rewrite_messages(
 
     result = []
 
-    # 1. Preserve the original system message
+    # 1. Merge graph context into the original system message
     system_msg = None
     rest = []
     for msg in original_messages:
         if msg.get("role") == "system" and system_msg is None:
-            system_msg = msg
+            system_msg = msg.copy()
         else:
             rest.append(msg)
 
+    # Build the combined system message: original + graph context
+    graph_content = "\n\n".join(
+        m.get("content", "") for m in assembled_context.graph_context
+    )
     if system_msg:
+        system_msg["content"] = system_msg.get("content", "") + "\n\n" + graph_content
         result.append(system_msg)
+    else:
+        # No original system message — graph context becomes the system message
+        result.append({"role": "system", "content": graph_content})
 
-    # 2. Inject graph-assembled context as a system message
-    for ctx_msg in assembled_context.graph_context:
-        result.append(ctx_msg)
-
-    # 3. Keep the coherence tail (last N messages)
+    # 2. Keep the coherence tail (last N messages)
     tail = rest[-coherence_tail_size:] if len(rest) > coherence_tail_size else rest
-    result.extend(tail)
+
+    # 3. Ensure role alternation: after system messages, the first non-system
+    #    message must be 'user'. Strip any leading assistant/tool messages.
+    while tail and tail[0].get("role") not in ("user",):
+        tail = tail[1:]
+
+    # 4. Validate alternation: merge any consecutive duplicate roles
+    validated_tail = []
+    for msg in tail:
+        if validated_tail:
+            prev_role = validated_tail[-1].get("role")
+            curr_role = msg.get("role")
+            if prev_role == "user" and curr_role == "user":
+                prev_content = validated_tail[-1].get("content", "")
+                curr_content = msg.get("content", "")
+                if isinstance(prev_content, str) and isinstance(curr_content, str):
+                    validated_tail[-1]["content"] = prev_content + "\n\n" + curr_content
+                    continue
+            if prev_role == "assistant" and curr_role == "assistant":
+                prev_content = validated_tail[-1].get("content", "")
+                curr_content = msg.get("content", "")
+                if isinstance(prev_content, str) and isinstance(curr_content, str):
+                    validated_tail[-1]["content"] = prev_content + "\n\n" + curr_content
+                    continue
+        validated_tail.append(msg)
+
+    result.extend(validated_tail)
 
     return result
 

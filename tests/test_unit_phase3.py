@@ -161,7 +161,7 @@ class TestRewriteMessages:
         assert result == original
 
     def test_rewrites_with_context(self):
-        """Messages should be rewritten with graph context injected."""
+        """Messages should be rewritten with graph context merged into system message."""
         original = [
             {"role": "system", "content": "You are helpful."},
             {"role": "user", "content": "Turn 1"},
@@ -180,17 +180,20 @@ class TestRewriteMessages:
         )
         result = _rewrite_messages(original, assembled, coherence_tail_size=3)
 
-        # Should have: system + graph_context + last 3 messages
+        # Should have: merged system msg + coherence tail
         assert result[0]["role"] == "system"
-        assert result[0]["content"] == "You are helpful."  # Original system preserved
-        assert result[1]["content"] == "graph context here"  # Graph context injected
-        # Coherence tail: last 3 messages (assistant R2, user T3... actually last 3 from rest)
-        # rest = [user T1, assistant R1, user T2, assistant R2, user T3]
-        # tail = last 3: [assistant R1, user T2, assistant R2, user T3] -> last 3 = [user T2, assistant R2, user T3]
-        assert len(result) == 2 + 3  # system + graph_ctx + 3 tail
+        # Graph context is MERGED into the system message, not a separate message
+        assert "You are helpful." in result[0]["content"]
+        assert "graph context here" in result[0]["content"]
+        # Only ONE system message (NVIDIA rejects consecutive system messages)
+        system_count = sum(1 for m in result if m["role"] == "system")
+        assert system_count == 1
+        # Coherence tail: last 3 from rest = [user T2, assistant R2, user T3]
+        # After stripping leading non-user: same since T2 is user
+        assert len(result) == 1 + 3  # 1 merged system + 3 tail
 
     def test_preserves_system_prompt(self):
-        """The original system prompt should always be preserved."""
+        """The original system prompt should be preserved within the merged system message."""
         original = [
             {"role": "system", "content": "You are a coding assistant."},
             {"role": "user", "content": "Write code"},
@@ -204,7 +207,10 @@ class TestRewriteMessages:
             session_id="test",
         )
         result = _rewrite_messages(original, assembled, coherence_tail_size=3)
-        assert result[0]["content"] == "You are a coding assistant."
+        # System prompt is merged with graph context
+        assert "You are a coding assistant." in result[0]["content"]
+        assert "assembled context" in result[0]["content"]
+        assert result[0]["role"] == "system"
 
     def test_small_message_count(self):
         """When messages are fewer than tail size, all are kept."""
@@ -221,11 +227,14 @@ class TestRewriteMessages:
             session_id="test",
         )
         result = _rewrite_messages(original, assembled, coherence_tail_size=5)
-        # All non-system messages should be in the tail
-        assert len(result) == 3  # system + graph_ctx + 1 user
+        # Merged system message + 1 user message
+        assert len(result) == 2  # 1 merged system + 1 user
 
     def test_no_system_message(self):
-        """Works correctly when there's no system message."""
+        """Works correctly when there's no system message.
+
+        Graph context becomes the system message, then coherence tail follows.
+        """
         original = [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi"},
@@ -240,10 +249,83 @@ class TestRewriteMessages:
             session_id="test",
         )
         result = _rewrite_messages(original, assembled, coherence_tail_size=2)
-        # No system msg to preserve, so: graph_ctx + tail
+        # Graph context becomes the system message
+        assert result[0]["role"] == "system"
         assert result[0]["content"] == "ctx"
-        # Tail: last 2 messages
-        assert len(result) == 3  # graph_ctx + 2 tail
+        # Tail [assistant, user] → leading assistant stripped → [user]
+        non_system = [m for m in result if m["role"] != "system"]
+        assert non_system[0]["role"] == "user"
+
+    def test_strips_leading_assistant_from_tail(self):
+        """Coherence tail starting with 'assistant' must be stripped for role alternation."""
+        original = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Turn 1"},
+            {"role": "assistant", "content": "Response 1"},
+            {"role": "user", "content": "Turn 2"},
+            {"role": "assistant", "content": "Response 2"},
+            {"role": "user", "content": "Turn 3"},
+        ]
+        assembled = AssembledContext(
+            system_message={"role": "system", "content": "graph ctx"},
+            graph_context=[{"role": "system", "content": "graph ctx"}],
+            coherence_tail=[],
+            token_estimate=500,
+            facts_retrieved=5,
+            session_id="test",
+        )
+        # With tail_size=2, tail would be [assistant R2, user T3]
+        # The leading assistant must be stripped → only [user T3] remains
+        result = _rewrite_messages(original, assembled, coherence_tail_size=2)
+        # After system msgs, first non-system must be 'user'
+        non_system = [m for m in result if m["role"] != "system"]
+        assert non_system[0]["role"] == "user"
+
+    def test_merges_consecutive_duplicate_roles(self):
+        """Consecutive same-role messages in the tail should be merged."""
+        original = [
+            {"role": "system", "content": "System"},
+            {"role": "user", "content": "Hello"},
+            {"role": "user", "content": "World"},  # consecutive user messages
+            {"role": "assistant", "content": "Hi"},
+        ]
+        assembled = AssembledContext(
+            system_message={"role": "system", "content": "ctx"},
+            graph_context=[{"role": "system", "content": "ctx"}],
+            coherence_tail=[],
+            token_estimate=100,
+            facts_retrieved=3,
+            session_id="test",
+        )
+        result = _rewrite_messages(original, assembled, coherence_tail_size=10)
+        # Check no consecutive same-role messages in result (excluding system)
+        non_system = [m for m in result if m["role"] != "system"]
+        for i in range(1, len(non_system)):
+            assert non_system[i]["role"] != non_system[i - 1]["role"], \
+                f"Consecutive {non_system[i]['role']} messages at positions {i-1} and {i}"
+
+    def test_role_alternation_with_tool_messages(self):
+        """Tool messages between user/assistant should not break alternation logic."""
+        original = [
+            {"role": "system", "content": "System"},
+            {"role": "user", "content": "Run this"},
+            {"role": "assistant", "content": "Let me check"},
+            {"role": "tool", "content": "result: 42"},
+            {"role": "assistant", "content": "The answer is 42"},
+            {"role": "user", "content": "Next question"},
+        ]
+        assembled = AssembledContext(
+            system_message={"role": "system", "content": "ctx"},
+            graph_context=[{"role": "system", "content": "ctx"}],
+            coherence_tail=[],
+            token_estimate=100,
+            facts_retrieved=3,
+            session_id="test",
+        )
+        result = _rewrite_messages(original, assembled, coherence_tail_size=10)
+        # After system messages, the first message must be 'user' (not 'tool' or 'assistant')
+        non_system = [m for m in result if m["role"] != "system"]
+        assert non_system[0]["role"] == "user"
 
 
 class TestColdStartLogic:
