@@ -1,0 +1,404 @@
+{
+  "timestamp": "2026-05-10T15:23:48",
+  "model": "gpt-4.1-mini",
+  "turns": 5,
+  "summary": {
+    "json_parse_rate": 1.0,
+    "accuracy": 0.6875,
+    "noise_ratio": 0.3333333333333333,
+    "atomicity_rate": 0.7333333333333334,
+    "total_facts": 15,
+    "total_ground_truth": 16,
+    "total_matched": 11,
+    "total_noise": 5,
+    "total_non_atomic": 4,
+    "total_prompt_tokens": 4425,
+    "total_completion_tokens": 900,
+    "estimated_cost_usd": 0.00321,
+    "cost_per_turn_usd": 0.000642,
+    "gate_pass": false
+  },
+  "per_turn": [
+    {
+      "turn": "?",
+      "raw_content": "{\n  \"facts\": [\n    {\n      \"content\": \"A Python class named Calculator was created\",\n      \"fact_type\": \"state\",\n      \"confidence\": 1.0\n    },\n    {\n      \"content\": \"Calculator class has an add method that takes two float arguments and returns their sum as a float\",\n      \"fact_type\": \"state\",\n      \"confidence\": 1.0\n    }\n  ],\n  \"files_touched\": [],\n  \"decisions\": [],\n  \"invalidated\": []\n}",
+      "parsed_facts": [
+        {
+          "content": "A Python class named Calculator was created",
+          "fact_type": "state",
+          "confidence": 1.0
+        },
+        {
+          "content": "Calculator class has an add method that takes two float arguments and returns their sum as a float",
+          "fact_type": "state",
+          "confidence": 1.0
+        }
+      ],
+      "ground_truth": [
+        "Calculator class created",
+        "Calculator has an add method",
+        "add method takes two float parameters",
+        "add method returns sum of inputs"
+      ],
+      "score": {
+        "json_parsed": true,
+        "total_facts_extracted": 2,
+        "ground_truth_count": 4,
+        "matched_gt": 4,
+        "unmatched_gt": [],
+        "accuracy": 1.0,
+        "signal_facts": 2,
+        "noise_facts": 0,
+        "noise_facts_detail": [],
+        "noise_ratio": 0.0,
+        "non_atomic": 1,
+        "non_atomic_detail": [
+          [
+            1,
+            "Calculator class has an add method that takes two float arguments and returns th",
+            "compound"
+          ]
+        ],
+        "type_distribution": {
+          "state": 2
+        },
+        "avg_confidence": 1.0,
+        "decisions": 0,
+        "files_touched": 0,
+        "invalidated": 0
+      },
+      "usage": {
+        "prompt_tokens": 828,
+        "completion_tokens": 107,
+        "total_tokens": 935,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      }
+    },
+    {
+      "turn": "?",
+      "raw_content": "{\n  \"facts\": [\n    {\n      \"content\": \"Calculator class now contains a subtract method that takes two floats and returns their difference\",\n      \"fact_type\": \"file_state\",\n      \"confidence\": 1.0\n    },\n    {\n      \"content\": \"The subtract method in Calculator follows the same pattern as the add method\",\n      \"fact_type\": \"observation\",\n      \"confidence\": 1.0\n    }\n  ],\n  \"files_touched\": [],\n  \"decisions\": [],\n  \"invalidated\": []\n}",
+      "parsed_facts": [
+        {
+          "content": "Calculator class now contains a subtract method that takes two floats and returns their difference",
+          "fact_type": "file_state",
+          "confidence": 1.0
+        },
+        {
+          "content": "The subtract method in Calculator follows the same pattern as the add method",
+          "fact_type": "observation",
+          "confidence": 1.0
+        }
+      ],
+      "ground_truth": [
+        "subtract method added to Calculator",
+        "subtract method takes two float parameters",
+        "subtract method returns difference"
+      ],
+      "score": {
+        "json_parsed": true,
+        "total_facts_extracted": 2,
+        "ground_truth_count": 3,
+        "matched_gt": 3,
+        "unmatched_gt": [],
+        "accuracy": 1.0,
+        "signal_facts": 2,
+        "noise_facts": 0,
+        "noise_facts_detail": [],
+        "noise_ratio": 0.0,
+        "non_atomic": 1,
+        "non_atomic_detail": [
+          [
+            0,
+            "Calculator class now contains a subtract method that takes two floats and return",
+            "compound"
+          ]
+        ],
+        "type_distribution": {
+          "file_state": 1,
+          "observation": 1
+        },
+        "avg_confidence": 1.0,
+        "decisions": 0,
+        "files_touched": 0,
+        "invalidated": 0
+      },
+      "usage": {
+        "prompt_tokens": 843,
+        "completion_tokens": 112,
+        "total_tokens": 955,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      }
+    },
+    {
+      "turn": "?",
+      "raw_content": "{\n  \"facts\": [\n    {\n      \"content\": \"Calculator class methods add and subtract now raise TypeError if inputs are not numeric\",\n      \"fact_type\": \"state\",\n      \"confidence\": 0.95\n    },\n    {\n      \"content\": \"Type checking was added to add and subtract methods to handle non-numeric inputs\",\n      \"fact_type\": \"state\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"files_touched\": [],\n  \"decisions\": [\n    {\n      \"summary\": \"Added type checking to both add and subtract methods\",\n      \"rationale\": \"To add error handling for non-numeric inputs as requested\"\n    }\n  ],\n  \"invalidated\": []\n}",
+      "parsed_facts": [
+        {
+          "content": "Calculator class methods add and subtract now raise TypeError if inputs are not numeric",
+          "fact_type": "state",
+          "confidence": 0.95
+        },
+        {
+          "content": "Type checking was added to add and subtract methods to handle non-numeric inputs",
+          "fact_type": "state",
+          "confidence": 0.95
+        }
+      ],
+      "ground_truth": [
+        "error handling added to all Calculator methods",
+        "TypeError raised for non-numeric inputs",
+        "isinstance check used for type validation"
+      ],
+      "score": {
+        "json_parsed": true,
+        "total_facts_extracted": 2,
+        "ground_truth_count": 3,
+        "matched_gt": 1,
+        "unmatched_gt": [
+          [
+            "error handling added to all Calculator methods",
+            0.3333333333333333
+          ],
+          [
+            "isinstance check used for type validation",
+            0.2
+          ]
+        ],
+        "accuracy": 0.3333333333333333,
+        "signal_facts": 2,
+        "noise_facts": 0,
+        "noise_facts_detail": [],
+        "noise_ratio": 0.0,
+        "non_atomic": 1,
+        "non_atomic_detail": [
+          [
+            0,
+            "Calculator class methods add and subtract now raise TypeError if inputs are not ",
+            "compound"
+          ]
+        ],
+        "type_distribution": {
+          "state": 2
+        },
+        "avg_confidence": 0.95,
+        "decisions": 1,
+        "files_touched": 0,
+        "invalidated": 0
+      },
+      "usage": {
+        "prompt_tokens": 902,
+        "completion_tokens": 151,
+        "total_tokens": 1053,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      }
+    },
+    {
+      "turn": "?",
+      "raw_content": "{\n  \"facts\": [\n    {\n      \"content\": \"test_calculator.py contains unit tests for the Calculator class using pytest\",\n      \"fact_type\": \"file_state\",\n      \"confidence\": 1.0\n    },\n    {\n      \"content\": \"test_calculator.py contains test_add function that asserts Calculator.add(2, 3) equals 5\",\n      \"fact_type\": \"file_state\",\n      \"confidence\": 1.0\n    },\n    {\n      \"content\": \"test_calculator.py contains test_subtract function that asserts Calculator.subtract(5, 3) equals 2\",\n      \"fact_type\": \"file_state\",\n      \"confidence\": 1.0\n    },\n    {\n      \"content\": \"test_calculator.py contains test_add_type_error function that asserts Calculator.add raises TypeError when called with ('a', 1)\",\n      \"fact_type\": \"file_state\",\n      \"confidence\": 1.0\n    },\n    {\n      \"content\": \"test_calculator.py contains test_subtract_type_error function that asserts Calculator.subtract raises TypeError when called with (2, 'b')\",\n      \"fact_type\": \"file_state\",\n      \"confidence\": 1.0\n    },\n    {\n      \"content\": \"The test file covers normal operations and error handling for the Calculator class\",\n      \"fact_type\": \"observation\",\n      \"confidence\": 0.95\n    }\n  ],\n  \"files_touched\": [\n    {\n      \"path\": \"test_calculator.py\",\n      \"status\": \"created\"\n    }\n  ],\n  \"decisions\": [],\n  \"invalidated\": []\n}",
+      "parsed_facts": [
+        {
+          "content": "test_calculator.py contains unit tests for the Calculator class using pytest",
+          "fact_type": "file_state",
+          "confidence": 1.0
+        },
+        {
+          "content": "test_calculator.py contains test_add function that asserts Calculator.add(2, 3) equals 5",
+          "fact_type": "file_state",
+          "confidence": 1.0
+        },
+        {
+          "content": "test_calculator.py contains test_subtract function that asserts Calculator.subtract(5, 3) equals 2",
+          "fact_type": "file_state",
+          "confidence": 1.0
+        },
+        {
+          "content": "test_calculator.py contains test_add_type_error function that asserts Calculator.add raises TypeError when called with ('a', 1)",
+          "fact_type": "file_state",
+          "confidence": 1.0
+        },
+        {
+          "content": "test_calculator.py contains test_subtract_type_error function that asserts Calculator.subtract raises TypeError when called with (2, 'b')",
+          "fact_type": "file_state",
+          "confidence": 1.0
+        },
+        {
+          "content": "The test file covers normal operations and error handling for the Calculator class",
+          "fact_type": "observation",
+          "confidence": 0.95
+        }
+      ],
+      "ground_truth": [
+        "test_calculator.py created with pytest tests",
+        "tests cover add and subtract methods",
+        "tests cover TypeError for non-numeric inputs"
+      ],
+      "score": {
+        "json_parsed": true,
+        "total_facts_extracted": 6,
+        "ground_truth_count": 3,
+        "matched_gt": 1,
+        "unmatched_gt": [
+          [
+            "tests cover add and subtract methods",
+            0.2
+          ],
+          [
+            "tests cover TypeError for non-numeric inputs",
+            0.2
+          ]
+        ],
+        "accuracy": 0.3333333333333333,
+        "signal_facts": 1,
+        "noise_facts": 5,
+        "noise_facts_detail": [
+          [
+            1,
+            "test_calculator.py contains test_add function that asserts calculator.add(2, 3) "
+          ],
+          [
+            2,
+            "test_calculator.py contains test_subtract function that asserts calculator.subtr"
+          ],
+          [
+            3,
+            "test_calculator.py contains test_add_type_error function that asserts calculator"
+          ],
+          [
+            4,
+            "test_calculator.py contains test_subtract_type_error function that asserts calcu"
+          ],
+          [
+            5,
+            "the test file covers normal operations and error handling for the calculator cla"
+          ]
+        ],
+        "noise_ratio": 0.8333333333333334,
+        "non_atomic": 1,
+        "non_atomic_detail": [
+          [
+            5,
+            "The test file covers normal operations and error handling for the Calculator cla",
+            "compound"
+          ]
+        ],
+        "type_distribution": {
+          "file_state": 5,
+          "observation": 1
+        },
+        "avg_confidence": 0.99,
+        "decisions": 0,
+        "files_touched": 1,
+        "invalidated": 0
+      },
+      "usage": {
+        "prompt_tokens": 904,
+        "completion_tokens": 340,
+        "total_tokens": 1244,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      }
+    },
+    {
+      "turn": "?",
+      "raw_content": "{\n  \"facts\": [\n    {\n      \"content\": \"Calculator class now includes a multiply method that multiplies two numeric inputs\",\n      \"fact_type\": \"file_state\",\n      \"confidence\": 1.0\n    },\n    {\n      \"content\": \"multiply method raises TypeError if inputs are not numeric\",\n      \"fact_type\": \"file_state\",\n      \"confidence\": 1.0\n    },\n    {\n      \"content\": \"test_calculator.py was updated to include tests for the multiply method\",\n      \"fact_type\": \"file_state\",\n      \"confidence\": 0.9\n    }\n  ],\n  \"files_touched\": [\n    {\n      \"path\": \"calculator.py\",\n      \"status\": \"modified\"\n    },\n    {\n      \"path\": \"test_calculator.py\",\n      \"status\": \"modified\"\n    }\n  ],\n  \"decisions\": [],\n  \"invalidated\": []\n}",
+      "parsed_facts": [
+        {
+          "content": "Calculator class now includes a multiply method that multiplies two numeric inputs",
+          "fact_type": "file_state",
+          "confidence": 1.0
+        },
+        {
+          "content": "multiply method raises TypeError if inputs are not numeric",
+          "fact_type": "file_state",
+          "confidence": 1.0
+        },
+        {
+          "content": "test_calculator.py was updated to include tests for the multiply method",
+          "fact_type": "file_state",
+          "confidence": 0.9
+        }
+      ],
+      "ground_truth": [
+        "multiply method added to Calculator",
+        "multiply method has same error handling pattern",
+        "test_calculator.py updated with multiply tests"
+      ],
+      "score": {
+        "json_parsed": true,
+        "total_facts_extracted": 3,
+        "ground_truth_count": 3,
+        "matched_gt": 2,
+        "unmatched_gt": [
+          [
+            "multiply method has same error handling pattern",
+            0.3333333333333333
+          ]
+        ],
+        "accuracy": 0.6666666666666666,
+        "signal_facts": 3,
+        "noise_facts": 0,
+        "noise_facts_detail": [],
+        "noise_ratio": 0.0,
+        "non_atomic": 0,
+        "non_atomic_detail": [],
+        "type_distribution": {
+          "file_state": 3
+        },
+        "avg_confidence": 0.97,
+        "decisions": 0,
+        "files_touched": 2,
+        "invalidated": 0
+      },
+      "usage": {
+        "prompt_tokens": 948,
+        "completion_tokens": 190,
+        "total_tokens": 1138,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      }
+    }
+  ]
+}

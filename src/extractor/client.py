@@ -105,8 +105,26 @@ def _parse_extraction_response(content: str, turn_number: int) -> ExtractionResu
             normalized_facts.append(f)
     facts = normalized_facts
 
-    files_touched = [f.get("path", "") for f in data.get("files_touched", []) if f.get("path")]
-    decisions = data.get("decisions", [])
+    # Normalize files_touched: model may return bare strings, or dicts with "path"/"file" keys
+    raw_files = data.get("files_touched", [])
+    normalized_files = []
+    for f in raw_files:
+        if isinstance(f, str):
+            normalized_files.append(f)
+        elif isinstance(f, dict):
+            # Accept both "path" and "file" keys
+            path = f.get("path") or f.get("file") or f.get("name") or ""
+            if path:
+                normalized_files.append(path)
+    files_touched = normalized_files
+
+    # Normalize decisions: model may return bare strings instead of dicts
+    decisions = []
+    for d in data.get("decisions", []):
+        if isinstance(d, str):
+            decisions.append({"summary": d})
+        elif isinstance(d, dict):
+            decisions.append(d)
 
     # Collect invalidated fact descriptions for matching
     invalidated = data.get("invalidated", [])

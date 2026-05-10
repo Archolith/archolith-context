@@ -6,36 +6,52 @@ SYSTEM_PROMPT = """You are a fact extraction assistant for a coding session cont
 Your job is to analyze an AI assistant's response and the user's request from a coding
 session, and extract structured facts that will be useful for future context assembly.
 
-Extract the following categories:
+## Output Schema
 
-1. **facts**: Discrete pieces of knowledge from this turn
-   - file_state: "src/app.ts now exports handleAuth"
-   - error: "build fails with TypeError on line 42"
-   - tool_result: condensed tool output (key information only)
-   - state: "tests passing", "migration applied", "dependencies installed"
-   - observation: general findings about the code or project
+You MUST respond with a single JSON object matching this exact schema:
 
-2. **files_touched**: Files referenced or modified, with status
-   - read: file was read/inspected
-   - modified: file was edited
-   - created: new file created
-   - deleted: file removed
+```json
+{
+  "facts": [
+    {"content": "<atomic fact as a single sentence>", "fact_type": "<type>", "confidence": <0.0-1.0>}
+  ],
+  "files_touched": [
+    {"path": "<file path>", "status": "read|modified|created|deleted"}
+  ],
+  "decisions": [
+    {"summary": "<what was decided>", "rationale": "<why, if stated, or null>"}
+  ],
+  "invalidated": [
+    "<description of a previously-extracted fact that is now superseded>"
+  ]
+}
+```
 
-3. **decisions**: Explicit choices made
-   - summary: what was decided
-   - rationale: why (if stated)
+## Fact Types
 
-4. **invalidated**: Facts from earlier turns that are now superseded
-   - e.g., "build fails" is invalidated when "build fixed" appears
-   - e.g., "using approach A" is invalidated when "switched to approach B"
+- **file_state**: A file's current state or what changed ("src/app.ts now exports handleAuth")
+- **error**: An error encountered ("build fails with TypeError on line 42")
+- **tool_result**: Condensed key information from tool output
+- **state**: A project state change ("tests passing", "migration applied", "dependencies installed")
+- **observation**: General findings about the code or project
 
-IMPORTANT RULES:
-- Be conservative: over-extract rather than under-extract
-- Each fact should be atomic and self-contained
-- Include file paths exactly as they appear
-- For errors, include the error type and location
-- For decisions, capture the "why" if it's stated
-- Mark facts as invalidated ONLY when the new turn clearly contradicts or resolves them
+## Rules
+
+1. Each fact MUST be a JSON object with `content`, `fact_type`, and `confidence` keys.
+   Do NOT return bare strings in the facts array.
+2. Each fact MUST be atomic and self-contained — a single verifiable statement.
+   BAD: "test_calculator.py contains tests for add and subtract methods"
+   GOOD: "test_calculator.py contains test_add function"
+   GOOD: "test_calculator.py contains test_subtract function"
+3. Include file paths exactly as they appear in the response.
+4. For errors, include the error type and location.
+5. For decisions, capture the "why" if it is stated.
+6. Mark facts as invalidated ONLY when the new turn clearly contradicts or resolves them.
+7. Set confidence based on how certain the fact is:
+   - 0.9-1.0: Directly stated or shown in code
+   - 0.7-0.89: Strongly implied
+   - 0.5-0.69: Inferred
+8. Be conservative: over-extract rather than under-extract, but keep each fact atomic.
 
 You MUST respond with valid JSON only, no other text."""
 
@@ -81,4 +97,5 @@ def build_extraction_prompt(
         parts.append(f"\n### Tool results:\n{tool_results[:4000]}")
 
     parts.append("\n\nExtract facts as JSON. Respond with ONLY the JSON object.")
+    parts.append(f"\n{EXAMPLE_PROMPT}")
     return "\n".join(parts)
