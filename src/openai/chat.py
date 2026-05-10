@@ -1,4 +1,4 @@
-""" /v1/chat/completions endpoint — proxy with session resolution and extraction."""
+""" /v1/chat/completions endpoint — proxy with session resolution, context assembly, and extraction."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from fastapi import APIRouter, Request
 from starlette.background import BackgroundTasks
 from starlette.responses import Response, StreamingResponse
 
+from src.assembler.context import assemble_context
 from src.config import get_settings
 from src.extractor.client import extract_facts
 from src.graph import cleanup as cleanup_repo
@@ -26,10 +27,68 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
+def _estimate_input_tokens(messages: list[dict]) -> int:
+    """Rough estimate of total input tokens in a messages array."""
+    total_chars = 0
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            # Multi-part content
+            for part in content:
+                if isinstance(part, dict):
+                    total_chars += len(part.get("text", ""))
+        elif isinstance(content, str):
+            total_chars += len(content)
+    return max(1, total_chars // 3)
+
+
+def _rewrite_messages(
+    original_messages: list[dict],
+    assembled_context: "AssembledContext",
+    coherence_tail_size: int,
+) -> list[dict]:
+    """Rewrite the messages array: keep system + coherence tail, replace middle with graph context.
+
+    Strategy:
+    1. Keep the original system message (if present) — it's the harness identity
+    2. Inject the graph-assembled context as an additional system message
+    3. Keep the last N messages as the "coherence tail" (recent context the model needs)
+    4. Discard the middle messages (replaced by graph context)
+
+    This reduces a 100K+ token linear history to ~15-20K of curated context.
+    """
+    if not assembled_context or not assembled_context.graph_context:
+        return original_messages
+
+    result = []
+
+    # 1. Preserve the original system message
+    system_msg = None
+    rest = []
+    for msg in original_messages:
+        if msg.get("role") == "system" and system_msg is None:
+            system_msg = msg
+        else:
+            rest.append(msg)
+
+    if system_msg:
+        result.append(system_msg)
+
+    # 2. Inject graph-assembled context as a system message
+    for ctx_msg in assembled_context.graph_context:
+        result.append(ctx_msg)
+
+    # 3. Keep the coherence tail (last N messages)
+    tail = rest[-coherence_tail_size:] if len(rest) > coherence_tail_size else rest
+    result.extend(tail)
+
+    return result
+
+
 @router.post("/chat/completions")
 async def chat_completions(request: Request, background_tasks: BackgroundTasks) -> Response:
     """Accept OpenAI chat completion requests, forward to upstream,
-    resolve session, and trigger async fact extraction."""
+    resolve session, assemble context, and trigger async fact extraction."""
     settings = get_settings()
 
     # Parse request body
@@ -63,6 +122,37 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             logger.debug("session_resolved", session_id=session_id, turn=turn_number, is_new=is_new)
         except Exception as e:
             logger.warning("session_resolution_failed", error=str(e))
+
+    # Context assembly — rewrite messages if graph has enough data
+    assembled = None
+    if session_id and neo4j_ready:
+        try:
+            input_tokens = _estimate_input_tokens(body.get("messages", []))
+            assembled = await assemble_context(
+                session_id=session_id,
+                turn_number=turn_number,
+                input_token_estimate=input_tokens,
+            )
+            if assembled:
+                original_count = len(body.get("messages", []))
+                body["messages"] = _rewrite_messages(
+                    body.get("messages", []),
+                    assembled,
+                    settings.coherence_tail_size,
+                )
+                rewritten_count = len(body["messages"])
+                logger.info(
+                    "messages_rewritten",
+                    session_id=session_id,
+                    turn=turn_number,
+                    original_messages=original_count,
+                    rewritten_messages=rewritten_count,
+                    facts_injected=assembled.facts_retrieved,
+                    token_estimate=assembled.token_estimate,
+                )
+        except Exception as e:
+            logger.warning("context_assembly_failed", session_id=session_id, error=str(e), exc_info=True)
+            # Fall through to passthrough — assembly failure must not block requests
 
     # Build upstream request
     upstream_url = f"{settings.upstream_api_url}/chat/completions"
