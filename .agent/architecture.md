@@ -11,7 +11,7 @@ base URL override (Reasonix, Claude Code, Aider, Cursor, etc.) works unchanged.
 | Layer | Technology |
 |-------|-----------|
 | Proxy server | Python, FastAPI, uvicorn |
-| Graph database | Neo4j (separate `context_sessions` database) |
+| Graph database | Neo4j (label-based isolation: `:ContextSession` label in default `neo4j` database) |
 | Graph framework | Graphiti (temporal knowledge graph) |
 | Fact extraction | gpt-4.1-mini (OpenAI API, cheap tier) |
 | Embeddings | text-embedding-3-small (OpenAI API) |
@@ -79,12 +79,13 @@ Harness → POST /v1/chat/completions → Proxy
 
 | | Long-term memory (cth.mcp.memory) | Session context (this project) |
 |--|-----------------------------------|-------------------------------|
-| Neo4j database | `neo4j` | `context_sessions` |
+| Neo4j database | `neo4j` (default) | `neo4j` (same, label-based isolation) |
+| Isolation | `:Memory` label on all nodes | `:ContextSession` label on all nodes |
 | Lifecycle | Persistent, decays over months | Ephemeral, TTL per session |
 | Write path | Agent stores explicitly | Proxy extracts automatically |
 | Read path | MCP tools (recall, build_context) | Proxy assembler (internal) |
 
-No shared indices, no cross-contamination. Session data is bulk-droppable.
+No shared indices, no cross-contamination. All queries are label-scoped (`MATCH (n:ContextSession ...)` vs `MATCH (n:Memory ...)`). Session data is bulk-droppable by label (`MATCH (n:ContextSession) DETACH DELETE n`).
 
 ## Configuration / Environment Variables
 
@@ -103,9 +104,9 @@ EMBEDDING_BASE_URL=https://api.openai.com/v1
 EMBEDDING_API_KEY=sk-...
 EMBEDDING_MODEL=text-embedding-3-small
 
-# Session graph (Neo4j — separate database)
+# Session graph (Neo4j — label-based isolation in default database)
 SESSION_NEO4J_URI=bolt://localhost:7687
-SESSION_NEO4J_DATABASE=context_sessions
+SESSION_NEO4J_DATABASE=neo4j
 SESSION_NEO4J_USER=neo4j
 SESSION_NEO4J_PASSWORD=...
 

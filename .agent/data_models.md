@@ -2,6 +2,8 @@
 
 ## Graph Nodes
 
+> **Isolation note:** All session graph nodes carry the `:ContextSession` label. Long-term memory nodes (cth.mcp.memory) carry the `:Memory` label. All queries are label-scoped to prevent cross-contamination.
+
 ### Session
 Represents a single coding agent conversation.
 
@@ -129,7 +131,7 @@ class ExtractionResult:
 
 | Store | Technology | Access Pattern |
 |-------|-----------|----------------|
-| Session graph | Neo4j (`context_sessions` DB) | Cypher queries via neo4j-driver |
+| Session graph | Neo4j (default `neo4j` database, `:ContextSession` label) | Cypher queries via neo4j-driver, label-scoped |
 | Embeddings | Stored as node properties in Neo4j | Vector index for similarity search |
-| Session metadata | Neo4j Session nodes | Direct lookup by session_id/fingerprint |
-| Cleanup | Neo4j TTL-based sweep | Background task deletes expired sessions |
+| Session metadata | Neo4j Session nodes (`:ContextSession`) | Direct lookup by session_id/fingerprint |
+| Cleanup | Neo4j TTL-based sweep | Background task deletes expired sessions by label |

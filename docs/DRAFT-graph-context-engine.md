@@ -2,7 +2,9 @@
 
 **Status:** Technical Draft  
 **Author:** Charles Harvey  
-**Date:** 2026-05-09
+**Date:** 2026-05-09  
+**Working title:** `cth.context-engine`  
+**Name candidates:** `liminal-engine` · `kadath`
 
 ---
 
@@ -87,22 +89,26 @@ OPENAI_BASE_URL=http://localhost:9800     # Aider/generic
 **Critical constraint:** session context must NOT contaminate long-term memory.
 
 The existing cth.mcp.memory system uses Neo4j + Graphiti for durable cross-session
-knowledge. The context engine operates on a **separate Neo4j database** (not just
-a namespace within the same DB):
+knowledge. The context engine operates in the **same Neo4j instance with label-based
+isolation** (`:ContextSession` label on all session nodes, `:Memory` label on all
+long-term memory nodes):
 
 | Concern | Long-term memory (cth.mcp.memory) | Session context (context engine) |
 |---------|-----------------------------------|----------------------------------|
-| Neo4j database | `neo4j` (default) | `context_sessions` (separate) |
+| Neo4j database | `neo4j` (default, `:Memory` label) | `neo4j` (same DB, `:ContextSession` label) |
+| Isolation | Label-scoped queries | Label-scoped queries + label-guard repository |
 | Lifecycle | Permanent, decays over months | Ephemeral, TTL per session |
 | Content | Decisions, corrections, structure | Tool results, file reads, errors |
 | Write path | Agent stores explicitly | Proxy extracts automatically |
 | Read path | `recall_memories`, `build_context` | Proxy assembles per-turn |
 
-Neo4j Community supports multiple databases. A separate database means:
-- No shared indices, no accidental cross-contamination
-- Session data can be bulk-dropped (`DROP DATABASE context_sessions; CREATE ...`)
+Neo4j Community Edition supports only one active user database. Label-based isolation
+provides logical separation without requiring Enterprise:
+- All queries are label-scoped — no accidental cross-contamination
+- A label-guard repository layer auto-injects `:ContextSession` into every query, raising `LabelGuardViolation` for unlabeled queries
+- Session data can be bulk-dropped by label (`MATCH (n:ContextSession) DETACH DELETE n`)
 - Different retention policies (sessions expire after 24–72h; memory persists)
-- Performance isolation (high-throughput session writes don't block memory reads)
+- **Migration path:** if Enterprise or a second Neo4j container is provisioned later, only the driver config changes — no query changes needed
 
 ### Optional promotion path
 
@@ -221,7 +227,7 @@ a session, but not worth polluting durable memory with.
 - A transparent proxy replaces stale history with graph-assembled context
 - Cheap auxiliary model (<$0.02/session) handles extraction — far cheaper than
   the frontier tokens saved
-- Session graph is physically isolated from long-term memory (separate Neo4j DB)
+- Session graph is isolated from long-term memory via label-based isolation (`:ContextSession` label in shared Neo4j)
 - Selective promotion provides a one-way valve from session → memory
 - Harness-agnostic: any tool that accepts a base URL override works unchanged
 - Existing infrastructure covers ~80% of the stack

@@ -1,5 +1,7 @@
 # cth.context-engine — Agent Docs
 
+**Name candidates:** `liminal-engine` · `kadath` (rename TBD)
+
 Read everything in this directory before starting work.
 
 ## Files

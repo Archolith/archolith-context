@@ -7,3 +7,4 @@
 - Filled in architecture.md with proxy design, component breakdown, env vars
 - Filled in data_models.md with graph nodes, edges, enums, DTOs
 - Established isolation model: separate Neo4j `context_sessions` database
+- Pinned name candidates: `liminal-engine`, `kadath`
