@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     cold_start_turns: int = 3
     cold_start_token_threshold: int = 20000
 
+    # Embedding-driven retrieval
+    embedding_enabled: bool = False
+
     # Retry / resilience
     upstream_max_retries: int = 3
     upstream_retry_backoff_base_s: float = 0.5

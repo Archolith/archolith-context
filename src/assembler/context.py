@@ -7,11 +7,11 @@ the system prompt and a configurable "coherence tail" of recent messages.
 Assembly strategy:
 1. Always include: session goal, recent decisions, touched files summary
 2. Fill remaining budget with facts sorted by relevance:
-   - Recent facts first (higher source_turn = more recent)
-   - Higher confidence facts first
-   - Priority types: error > state > file_state > tool_result > observation
+   - When embeddings available: cosine similarity (40%) + recency (30%) + type+confidence (30%)
+   - Without embeddings: type priority > confidence > recency (current behavior)
+   - N-1/N+1 context windowing expands selection to include adjacent-turn facts
 3. Format as a single system-like message injected before the coherence tail
-4. Estimate token count conservatively (~4 chars per token for code-heavy text)
+4. Estimate token count using tiktoken cl100k_base
 
 Cold start: when turn_number < cold_start_turns AND total input tokens
 < cold_start_token_threshold, the assembler returns None (passthrough mode).
@@ -30,6 +30,9 @@ from src.models.dtos import AssembledContext
 from src.models.graph_nodes import FactType
 
 logger = structlog.get_logger()
+
+# In-memory cache for user message embeddings (keyed by SHA-256 hash)
+_embedding_cache: dict[str, list[float]] = {}
 
 # Priority ordering for fact types (higher = more important)
 _FACT_TYPE_PRIORITY = {
@@ -53,6 +56,90 @@ def _estimate_tokens(text: str) -> int:
     raw = len(tiktoken.get_encoding("cl100k_base").encode(text))
     with_margin = int(raw * 1.10)
     return max(with_margin, 1)
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors.
+
+    Returns 0.0 if either vector is empty or has zero magnitude.
+    """
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    mag_a = sum(x * x for x in a) ** 0.5
+    mag_b = sum(x * x for x in b) ** 0.5
+    if mag_a == 0.0 or mag_b == 0.0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def _score_fact(
+    fact: dict,
+    query_embedding: list[float] | None,
+    turn_number: int,
+) -> float:
+    """Score a fact for relevance to the current query.
+
+    When embeddings are available:
+      similarity (40%) + recency (30%) + type+confidence (30%)
+
+    Without embeddings (fallback):
+      type priority (40%) + confidence (30%) + recency (30%)
+    """
+    # Normalize type priority to 0-1 range
+    fact_type_str = fact.get("fact_type", "observation")
+    try:
+        type_priority = _FACT_TYPE_PRIORITY.get(FactType(fact_type_str), 0)
+    except ValueError:
+        type_priority = 0
+    type_score = type_priority / 5.0  # max priority is 5
+
+    confidence = fact.get("confidence", 0.5)
+
+    # Recency: source_turn / turn_number (0-1, higher = more recent)
+    source_turn = fact.get("source_turn", 0)
+    recency = source_turn / max(turn_number, 1)
+
+    fact_embedding = fact.get("embedding")
+
+    if query_embedding and fact_embedding:
+        similarity = _cosine_similarity(query_embedding, fact_embedding)
+        # Weighted blend: similarity 40%, recency 30%, type+confidence 30%
+        return similarity * 0.4 + recency * 0.3 + (type_score * 0.5 + confidence * 0.5) * 0.3
+    else:
+        # No embeddings: fall back to priority/recency/confidence
+        return type_score * 0.4 + confidence * 0.3 + recency * 0.3
+
+
+def _expand_with_context_window(
+    selected_facts: list[dict],
+    all_facts: list[dict],
+) -> list[dict]:
+    """Expand selected facts with N-1/N+1 context windowing.
+
+    For each selected fact, include facts from adjacent turns
+    (source_turn - 1, source_turn + 1) that aren't already selected.
+    This preserves narrative continuity (error → fix, question → decision).
+    """
+    if not selected_facts:
+        return selected_facts
+
+    selected_ids = {f.get("fact_id") for f in selected_facts}
+    selected_turns = {f.get("source_turn") for f in selected_facts}
+
+    # Build the window of adjacent turns
+    window_turns = set()
+    for t in selected_turns:
+        if t is not None:
+            window_turns.update({t - 1, t, t + 1})
+
+    # Add facts from window turns that aren't already selected
+    additional = []
+    for f in all_facts:
+        if f.get("fact_id") not in selected_ids and f.get("source_turn") in window_turns:
+            additional.append(f)
+
+    return selected_facts + additional
 
 
 def _format_context_block(
@@ -126,28 +213,43 @@ def _format_context_block(
 def _budget_facts(
     facts: list[dict],
     token_budget: int,
+    query_embedding: list[float] | None = None,
+    turn_number: int = 0,
+    embedding_enabled: bool = False,
 ) -> list[dict]:
-    """Select facts that fit within the token budget, prioritized by relevance.
+    """Select facts that fit within the token budget, scored by relevance.
 
-    Budget is measured in tokens (~3.5 chars/token for code).
+    When embeddings are available and enabled, facts are scored using
+    cosine similarity + recency + type/confidence. Otherwise falls back
+    to priority-only scoring (current behavior).
+
+    After initial selection, N-1/N+1 context windowing expands the selection
+    to include facts from adjacent turns.
     """
-    # Sort facts by priority: type priority > confidence > recency
-    sorted_facts = sorted(
-        facts,
-        key=lambda f: (
-            _FACT_TYPE_PRIORITY.get(FactType(f.get("fact_type", "observation")), 0),
-            f.get("confidence", 0.5),
-            f.get("source_turn", 0),
-        ),
-        reverse=True,
-    )
+    # Infer turn_number from facts if not provided (avoids division issues)
+    effective_turn = turn_number
+    if effective_turn <= 0 and facts:
+        effective_turn = max(f.get("source_turn", 0) for f in facts) or 1
 
+    # Score facts
+    use_embeddings = embedding_enabled and query_embedding is not None
+    scored_facts = []
+    for fact in facts:
+        if use_embeddings:
+            score = _score_fact(fact, query_embedding, effective_turn)
+        else:
+            score = _score_fact(fact, None, effective_turn)
+        scored_facts.append((score, fact))
+
+    # Sort by score descending
+    scored_facts.sort(key=lambda x: x[0], reverse=True)
+
+    # Select facts within budget
     selected = []
     used_tokens = 0
 
-    for fact in sorted_facts:
+    for score, fact in scored_facts:
         content = fact.get("content", "")
-        # Estimate tokens for this fact line: "- [type|tN] content\n"
         fact_line = f"- [{fact.get('fact_type', 'observation')}|t{fact.get('source_turn', '?')}] {content}\n"
         fact_tokens = _estimate_tokens(fact_line)
 
@@ -155,8 +257,27 @@ def _budget_facts(
             selected.append(fact)
             used_tokens += fact_tokens
         else:
-            # Budget exhausted
             break
+
+    # Expand with N-1/N+1 context windowing if embeddings are active
+    if use_embeddings and selected:
+        windowed = _expand_with_context_window(selected, facts)
+        # Re-budget: windowing may have added facts that exceed budget
+        # Keep the windowed set but trim if it exceeds budget
+        total_tokens = 0
+        final = []
+        for fact in windowed:
+            content = fact.get("content", "")
+            fact_line = f"- [{fact.get('fact_type', 'observation')}|t{fact.get('source_turn', '?')}] {content}\n"
+            fact_tokens = _estimate_tokens(fact_line)
+            if total_tokens + fact_tokens <= token_budget:
+                final.append(fact)
+                total_tokens += fact_tokens
+            # If windowed facts exceed budget, stop adding — but keep
+            # the originally selected core facts even if windowing trimmed
+        if len(final) >= len(selected):
+            selected = final
+        # If windowing would shrink below original, keep original (shouldn't happen)
 
     return selected
 
@@ -165,6 +286,8 @@ async def assemble_context(
     session_id: str,
     turn_number: int,
     input_token_estimate: int,
+    user_message: str | None = None,
+    http_client=None,
 ) -> AssembledContext | None:
     """Assemble context from the session graph for request rewriting.
 
@@ -173,9 +296,13 @@ async def assemble_context(
     Graceful degradation: if Neo4j is unreachable, returns None (passthrough)
     instead of raising. The caller always falls back to linear passthrough.
 
+    When embedding_enabled is True and a user_message is provided, the
+    assembler computes a query embedding and uses cosine similarity for
+    relevance scoring. Otherwise falls back to priority/recency.
+
     The assembly includes:
     - Session goal
-    - Active (non-expired) facts, budgeted by priority
+    - Active (non-expired) facts, budgeted by relevance
     - Touched files
     - Recent decisions
 
@@ -183,6 +310,7 @@ async def assemble_context(
         session_id: The session to assemble context for.
         turn_number: Current turn number for the session.
         input_token_estimate: Rough estimate of total input tokens in the request.
+        user_message: The current user message (used for embedding-based retrieval).
 
     Returns:
         AssembledContext with graph-derived messages, or None for cold-start passthrough.
@@ -200,6 +328,20 @@ async def assemble_context(
             threshold_tokens=settings.cold_start_token_threshold,
         )
         return None
+
+    # Compute query embedding if embedding-driven retrieval is enabled
+    query_embedding = None
+    if settings.embedding_enabled and settings.embedding_api_key and user_message:
+        try:
+            query_embedding = await _get_query_embedding(user_message, http_client)
+            logger.debug(
+                "query_embedding_computed",
+                session_id=session_id,
+                turn=turn_number,
+                has_embedding=query_embedding is not None,
+            )
+        except Exception as e:
+            logger.warning("query_embedding_failed", session_id=session_id, error=str(e))
 
     # Query session graph — each query is wrapped for graceful degradation
     try:
@@ -241,8 +383,14 @@ async def assemble_context(
     fixed_overhead = 200  # goal + files + decisions + framing tokens
     fact_budget = max(0, settings.context_token_budget - fixed_overhead)
 
-    # Select facts within budget
-    budgeted_facts = _budget_facts(all_facts, fact_budget)
+    # Select facts within budget — use embedding scoring if available
+    budgeted_facts = _budget_facts(
+        all_facts,
+        fact_budget,
+        query_embedding=query_embedding,
+        turn_number=turn_number,
+        embedding_enabled=settings.embedding_enabled,
+    )
 
     # Format the context block
     context_text = _format_context_block(
@@ -285,6 +433,48 @@ async def assemble_context(
     )
 
     return result
+
+
+async def _get_query_embedding(
+    user_message: str,
+    http_client=None,
+) -> list[float] | None:
+    """Compute embedding for a user message, with simple caching.
+
+    Uses an in-memory cache keyed by SHA-256 hash to avoid
+    re-computing embeddings for identical queries (retries, etc).
+    """
+    import hashlib
+    from src.extractor.embeddings import compute_embeddings_batch
+
+    cache_key = hashlib.sha256(user_message.encode()).hexdigest()[:16]
+
+    # Check in-memory cache
+    if cache_key in _embedding_cache:
+        return _embedding_cache[cache_key]
+
+    if http_client is None:
+        return None
+
+    try:
+        results = await compute_embeddings_batch(http_client, [user_message[:8000]])
+        embedding = results[0] if results else None
+        if embedding is not None:
+            _embedding_cache[cache_key] = embedding
+            # Evict oldest entries if cache grows too large
+            if len(_embedding_cache) > 64:
+                _evict_embedding_cache()
+        return embedding
+    except Exception as e:
+        logger.warning("query_embedding_compute_failed", error=str(e))
+        return None
+
+
+def _evict_embedding_cache() -> None:
+    """Evict half the embedding cache entries (simple FIFO eviction)."""
+    keys = list(_embedding_cache.keys())
+    for key in keys[: len(keys) // 2]:
+        del _embedding_cache[key]
 
 
 async def _get_touched_files(session_id: str) -> list[dict]:

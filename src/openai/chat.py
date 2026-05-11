@@ -257,11 +257,25 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
 
     if session_id and neo4j_ready:
         try:
+            # Extract the current user message for embedding-based retrieval
+            user_message = None
+            for msg in reversed(body.get("messages", [])):
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        content = " ".join(
+                            p.get("text", "") for p in content if isinstance(p, dict)
+                        )
+                    user_message = content[:4000]
+                    break
+
             assembly_start = time.monotonic()
             assembled = await assemble_context(
                 session_id=session_id,
                 turn_number=turn_number,
                 input_token_estimate=input_tokens,
+                user_message=user_message,
+                http_client=request.app.state.http_client if settings.embedding_enabled else None,
             )
             assembly_latency_ms = (time.monotonic() - assembly_start) * 1000
 

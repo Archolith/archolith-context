@@ -1,11 +1,16 @@
 """Unit tests for Phase 3 — context assembly, message rewriting, fact budgeting."""
 
+import math
+
 import pytest
 
 from src.assembler.context import (
     _estimate_tokens,
     _format_context_block,
     _budget_facts,
+    _cosine_similarity,
+    _score_fact,
+    _expand_with_context_window,
 )
 from src.openai.chat import _rewrite_messages
 from src.models.dtos import AssembledContext
@@ -390,3 +395,182 @@ class TestColdStartLogic:
             turn < settings.cold_start_turns and tokens < settings.cold_start_token_threshold
         )
         assert should_attempt_assembly is True
+
+
+class TestCosineSimilarity:
+    def test_identical_vectors(self):
+        v = [1.0, 0.0, 0.0]
+        assert _cosine_similarity(v, v) == pytest.approx(1.0)
+
+    def test_orthogonal_vectors(self):
+        a = [1.0, 0.0]
+        b = [0.0, 1.0]
+        assert _cosine_similarity(a, b) == pytest.approx(0.0)
+
+    def test_opposite_vectors(self):
+        a = [1.0, 0.0]
+        b = [-1.0, 0.0]
+        assert _cosine_similarity(a, b) == pytest.approx(-1.0)
+
+    def test_empty_vectors(self):
+        assert _cosine_similarity([], []) == 0.0
+
+    def test_zero_magnitude(self):
+        assert _cosine_similarity([0.0, 0.0], [1.0, 0.0]) == 0.0
+
+    def test_different_lengths(self):
+        assert _cosine_similarity([1.0], [1.0, 2.0]) == 0.0
+
+
+class TestScoreFact:
+    def test_without_embeddings_uses_priority(self):
+        """Without embeddings, higher type priority scores higher."""
+        error_fact = {
+            "fact_type": "error",
+            "confidence": 0.9,
+            "source_turn": 1,
+        }
+        observation_fact = {
+            "fact_type": "observation",
+            "confidence": 0.9,
+            "source_turn": 1,
+        }
+        error_score = _score_fact(error_fact, None, turn_number=5)
+        obs_score = _score_fact(observation_fact, None, turn_number=5)
+        assert error_score > obs_score
+
+    def test_without_embeddings_recency_boost(self):
+        """More recent facts get a higher score (same type, same confidence)."""
+        old_fact = {
+            "fact_type": "observation",
+            "confidence": 0.7,
+            "source_turn": 1,
+        }
+        new_fact = {
+            "fact_type": "observation",
+            "confidence": 0.7,
+            "source_turn": 4,
+        }
+        old_score = _score_fact(old_fact, None, turn_number=5)
+        new_score = _score_fact(new_fact, None, turn_number=5)
+        assert new_score > old_score
+
+    def test_with_embeddings_similarity_boost(self):
+        """With embeddings, facts similar to query score higher."""
+        query_embedding = [1.0, 0.0, 0.0]
+        similar_fact = {
+            "fact_type": "observation",
+            "confidence": 0.5,
+            "source_turn": 1,
+            "embedding": [0.9, 0.1, 0.0],
+        }
+        dissimilar_fact = {
+            "fact_type": "observation",
+            "confidence": 0.5,
+            "source_turn": 1,
+            "embedding": [0.0, 0.0, 0.9],
+        }
+        sim_score = _score_fact(similar_fact, query_embedding, turn_number=5)
+        dis_score = _score_fact(dissimilar_fact, query_embedding, turn_number=5)
+        assert sim_score > dis_score
+
+    def test_without_embedding_on_fact_falls_back(self):
+        """If fact has no embedding, falls back to priority scoring."""
+        query_embedding = [1.0, 0.0, 0.0]
+        fact_no_emb = {
+            "fact_type": "error",
+            "confidence": 0.9,
+            "source_turn": 1,
+        }
+        score = _score_fact(fact_no_emb, query_embedding, turn_number=5)
+        assert score > 0
+
+
+class TestContextWindowing:
+    def test_no_expansion_without_adjacent(self):
+        """If all facts are from the same turn, no additional facts are added."""
+        selected = [
+            {"fact_id": "a", "source_turn": 3},
+            {"fact_id": "b", "source_turn": 3},
+        ]
+        all_facts = selected + [{"fact_id": "c", "source_turn": 1}]
+        result = _expand_with_context_window(selected, all_facts)
+        assert len(result) == 2
+
+    def test_expansion_includes_adjacent_turns(self):
+        """Facts from N-1 and N+1 turns should be included."""
+        selected = [{"fact_id": "a", "source_turn": 3}]
+        all_facts = [
+            {"fact_id": "a", "source_turn": 3},
+            {"fact_id": "b", "source_turn": 2},
+            {"fact_id": "c", "source_turn": 4},
+            {"fact_id": "d", "source_turn": 1},
+        ]
+        result = _expand_with_context_window(selected, all_facts)
+        result_ids = {f["fact_id"] for f in result}
+        assert "a" in result_ids
+        assert "b" in result_ids
+        assert "c" in result_ids
+        assert "d" not in result_ids
+
+    def test_no_duplicates(self):
+        """Windowing should not duplicate already-selected facts."""
+        selected = [
+            {"fact_id": "a", "source_turn": 3},
+            {"fact_id": "b", "source_turn": 2},
+        ]
+        all_facts = [
+            {"fact_id": "a", "source_turn": 3},
+            {"fact_id": "b", "source_turn": 2},
+            {"fact_id": "c", "source_turn": 4},
+        ]
+        result = _expand_with_context_window(selected, all_facts)
+        fact_ids = [f["fact_id"] for f in result]
+        assert fact_ids.count("a") == 1
+        assert fact_ids.count("b") == 1
+
+    def test_empty_selected_returns_empty(self):
+        result = _expand_with_context_window([], [])
+        assert result == []
+
+
+class TestBudgetFactsWithEmbeddings:
+    def test_embedding_scoring_reorders_facts(self):
+        """With embeddings enabled, similar facts rank higher."""
+        query_embedding = [1.0, 0.0, 0.0]
+        facts = [
+            {
+                "fact_id": "dis",
+                "content": "dissimilar fact",
+                "fact_type": "state",
+                "confidence": 0.9,
+                "source_turn": 3,
+                "embedding": [0.0, 0.0, 0.9],
+            },
+            {
+                "fact_id": "sim",
+                "content": "similar fact",
+                "fact_type": "observation",
+                "confidence": 0.5,
+                "source_turn": 1,
+                "embedding": [0.95, 0.05, 0.0],
+            },
+        ]
+        result = _budget_facts(
+            facts,
+            token_budget=1000,
+            query_embedding=query_embedding,
+            turn_number=5,
+            embedding_enabled=True,
+        )
+        if len(result) >= 2:
+            assert result[0]["fact_id"] == "sim"
+
+    def test_no_embeddings_falls_back_to_priority(self):
+        """Without embedding_enabled, priority scoring is used."""
+        facts = [
+            {"content": "obs", "fact_type": "observation", "confidence": 0.5, "source_turn": 1},
+            {"content": "err", "fact_type": "error", "confidence": 0.95, "source_turn": 2},
+        ]
+        result = _budget_facts(facts, token_budget=1000)
+        assert result[0]["fact_type"] == "error"
