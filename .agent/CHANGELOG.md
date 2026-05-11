@@ -1,5 +1,20 @@
 # Changelog — cth.context-engine
 
+## 2026-05-11 — Session Recall as Proxy-Intercepted Tool (Step 13)
+
+- **Session recall tool (`src/proxy/tool_injection.py`)**: New module that injects a synthetic `__context_engine_recall` tool into requests when a session is active. When the model calls this tool, the proxy intercepts the call, queries the session graph for relevant facts, and returns the results as a tool response — then re-sends to upstream for the model to continue with the recalled context.
+- **`inject_recall_tool()`**: Adds the recall tool definition to `body["tools"]` (idempotent, preserves tool_choice).
+- **`strip_recall_tool()`**: Removes the recall tool from request body (for fingerprinting and re-send cleanup).
+- **`find_recall_tool_call()`**: Detects a recall tool call in non-streaming responses.
+- **`strip_recall_from_response()`**: Removes recall tool calls from the final response so the harness never sees internal proxy tools.
+- **`handle_recall_tool_call()`**: Queries the session graph using the same retrieval pipeline as passive context assembly — embeds the question (with optional query rewriting), scores facts, budgets to 2K tokens, and formats results.
+- **`build_tool_result_message()`**: Constructs a tool result message with role="tool" for the recall call.
+- **Integration into `chat.py`**: Before forwarding to upstream, injects the recall tool if `session_recall_tool_enabled=true` and a session is active. After the non-streaming response, checks for recall tool calls — if found, handles the recall, builds a tool result, and re-sends to upstream with the recall results. Strips internal tool artifacts from the final response.
+- **Config**: `session_recall_tool_enabled: bool = False` added to Settings (disabled by default).
+- **Non-streaming only**: Streaming recall interception deferred to Phase 5b.
+- **26 new tests**: TestInjectRecallTool (7), TestStripRecallTool (4), TestFindRecallToolCall (6), TestStripRecallFromResponse (5), TestBuildToolResultMessage (2), TestRecallToolConstants (2).
+- **215 tests passing** (up from 189).
+
 ## 2026-05-11 — Query Rewriting for Ambiguous Messages (Step 9)
 
 - **Query rewriting (`src/assembler/query_rewrite.py`)**: New module with `needs_rewrite()` + `rewrite_query()` — detects ambiguous user messages containing pronouns, vague directives, or deictic references and rewrites them to be self-contained before embedding. Uses the extractor model (gpt-4.1-mini) with recent conversation context for reference resolution.

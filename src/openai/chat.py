@@ -388,6 +388,14 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         "Authorization": f"Bearer {settings.upstream_api_key}",
         "Content-Type": "application/json",
     }
+
+    # Inject session recall tool if enabled and session is active
+    recall_injected = False
+    if settings.session_recall_tool_enabled and session_id:
+        from src.proxy.tool_injection import inject_recall_tool
+        body = inject_recall_tool(body)
+        recall_injected = True
+
     request_body = json.dumps(body).encode("utf-8")
 
     if req.stream:
@@ -395,12 +403,14 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             request, background_tasks, upstream_url, upstream_headers, request_body,
             session_id=session_id, turn_number=turn_number,
             messages=body.get("messages", []),
+            recall_injected=recall_injected,
         )
     else:
         return await _handle_non_streaming(
             request, background_tasks, upstream_url, upstream_headers, request_body,
             session_id=session_id, turn_number=turn_number,
             messages=body.get("messages", []),
+            recall_injected=recall_injected,
         )
 
 
@@ -413,6 +423,7 @@ async def _handle_streaming(
     session_id: str | None = None,
     turn_number: int = 0,
     messages: list[dict] | None = None,
+    recall_injected: bool = False,
 ) -> StreamingResponse:
     """Stream SSE chunks from upstream with response capture and extraction.
 
@@ -603,8 +614,9 @@ async def _handle_non_streaming(
     session_id: str | None = None,
     turn_number: int = 0,
     messages: list[dict] | None = None,
+    recall_injected: bool = False,
 ) -> Response:
-    """Handle non-streaming request with retry and extraction."""
+    """Handle non-streaming request with retry, recall interception, and extraction."""
     from src.main import _metrics
     settings = get_settings()
 
@@ -625,7 +637,136 @@ async def _handle_non_streaming(
         _metrics["upstream_errors"] += 1
         return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
 
-    # Schedule extraction as background task
+    # Check for recall tool call interception (non-streaming only for now)
+    if recall_injected and session_id:
+        try:
+            from src.proxy.tool_injection import (
+                find_recall_tool_call,
+                handle_recall_tool_call,
+                build_tool_result_message,
+                strip_recall_from_response,
+                strip_recall_tool,
+                RECALL_TOOL_NAME,
+            )
+
+            data = resp.json()
+            tool_call = find_recall_tool_call(data)
+
+            if tool_call:
+                logger.info(
+                    "recall_tool_call_intercepted",
+                    session_id=session_id,
+                    turn=turn_number,
+                )
+                _metrics["recall_tool_calls"] = _metrics.get("recall_tool_calls", 0) + 1
+
+                # Parse the question from the tool call
+                func = tool_call.get("function", {})
+                try:
+                    args = json.loads(func.get("arguments", "{}"))
+                    question = args.get("question", "")
+                except json.JSONDecodeError:
+                    question = ""
+
+                if question:
+                    # Handle the recall: query session graph
+                    recall_result = await handle_recall_tool_call(
+                        http_client=request.app.state.http_client,
+                        session_id=session_id,
+                        question=question,
+                        turn_number=turn_number,
+                    )
+
+                    # Build the tool result message
+                    tool_call_id = tool_call.get("id", "recall_0")
+                    tool_result_msg = build_tool_result_message(tool_call_id, recall_result)
+
+                    # Reconstruct messages: original messages + model's recall call + tool result
+                    original_messages = messages or []
+                    model_message = data["choices"][0]["message"]
+
+                    # Strip the recall tool call from the model message
+                    remaining_calls = [
+                        tc for tc in model_message.get("tool_calls", [])
+                        if tc.get("function", {}).get("name") != RECALL_TOOL_NAME
+                    ]
+
+                    # Build the re-send message array
+                    resend_messages = list(original_messages)
+                    resend_model_msg = dict(model_message)
+                    if remaining_calls:
+                        resend_model_msg["tool_calls"] = remaining_calls
+                    else:
+                        resend_model_msg.pop("tool_calls", None)
+                    # If the model only had the recall tool call, keep the message
+                    # but make it clear the model chose to recall
+                    if not remaining_calls and not resend_model_msg.get("content"):
+                        resend_model_msg["content"] = None
+                    resend_messages.append(resend_model_msg)
+                    resend_messages.append(tool_result_msg)
+
+                    # Strip the recall tool from the tools array for the re-send
+                    body_dict = json.loads(body)
+                    strip_recall_tool(body_dict)
+
+                    # Re-send to upstream with the tool result
+                    resend_body = json.dumps({
+                        **body_dict,
+                        "messages": resend_messages,
+                    }).encode("utf-8")
+
+                    try:
+                        second_resp = await _upstream_request_with_retry(
+                            client=request.app.state.http_client,
+                            method="POST",
+                            url=url,
+                            headers=headers,
+                            content=resend_body,
+                            max_retries=settings.upstream_max_retries,
+                            backoff_base=settings.upstream_retry_backoff_base_s,
+                        )
+
+                        # Strip recall tool from the final response
+                        final_data = second_resp.json()
+                        strip_recall_from_response(final_data)
+
+                        # Schedule extraction for the second response
+                        final_response_text = ""
+                        final_choices = final_data.get("choices", [])
+                        if final_choices:
+                            final_msg = final_choices[0].get("message", {})
+                            final_response_text = final_msg.get("content", "") or ""
+
+                        if session_id and final_response_text:
+                            background_tasks.add_task(
+                                _run_extraction,
+                                client=request.app.state.extractor_client,
+                                session_id=session_id,
+                                turn_number=turn_number,
+                                messages=resend_messages,
+                                response_text=final_response_text,
+                            )
+
+                        return Response(
+                            content=json.dumps(final_data).encode(),
+                            status_code=second_resp.status_code,
+                            media_type="application/json",
+                            background=background_tasks,
+                        )
+                    except httpx.TimeoutException:
+                        _metrics["upstream_errors"] += 1
+                        return make_error_response(504, "Upstream request timed out during recall re-send", "upstream_timeout", code="timeout")
+                    except httpx.ConnectError as e:
+                        _metrics["upstream_errors"] += 1
+                        return make_error_response(502, f"Upstream connection failed during recall re-send: {e}", "upstream_error")
+                else:
+                    # Model called recall with empty question — return original response
+                    logger.warning("recall_tool_empty_question", session_id=session_id)
+        except Exception as e:
+            logger.warning("recall_interception_failed", session_id=session_id, error=str(e), exc_info=True)
+            # Fall through to return original response
+
+    # Schedule extraction as background task (original response, no recall)
     if session_id:
         try:
             data = resp.json()
@@ -646,6 +787,21 @@ async def _handle_non_streaming(
                 )
         except Exception as e:
             logger.warning("non_streaming_extraction_setup_failed", error=str(e))
+
+    # Strip recall tool from the final response if it was injected
+    if recall_injected:
+        try:
+            from src.proxy.tool_injection import strip_recall_from_response
+            data = resp.json()
+            strip_recall_from_response(data)
+            return Response(
+                content=json.dumps(data).encode(),
+                status_code=resp.status_code,
+                media_type="application/json",
+                background=background_tasks,
+            )
+        except Exception:
+            pass  # Fall back to original response
 
     return Response(
         content=resp.content,

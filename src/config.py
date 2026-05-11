@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # Query rewriting for ambiguous messages (resolves pronouns before embedding)
     query_rewrite_enabled: bool = False
 
+    # Session recall as proxy-intercepted tool (injects __context_engine_recall)
+    session_recall_tool_enabled: bool = False
+
     # Retry / resilience
     upstream_max_retries: int = 3
     upstream_retry_backoff_base_s: float = 0.5
