@@ -59,6 +59,56 @@ def test_sanitized_fingerprint_stable():
     assert fp1 == fp2
 
 
+def test_sanitize_strips_tool_definition_blocks():
+    """Tool definition blocks in system prompts are stripped before fingerprinting."""
+    prompt = (
+        "You are an assistant.\n"
+        "Available tools: [{\"name\": \"read_file\", \"description\": \"Read a file\"}]\n"
+        "Do good work."
+    )
+    cleaned = sanitize_system_prompt(prompt)
+    assert "read_file" not in cleaned
+    assert "You are an assistant." in cleaned
+    assert "Do good work." in cleaned
+
+
+def test_sanitize_strips_tool_definitions_heading():
+    """Tool definitions with 'Tool definitions:' prefix are stripped."""
+    prompt = (
+        "System prompt\n"
+        "Tool definitions: [{\"name\": \"bash\", \"description\": \"Run command\"}]\n"
+        "More instructions."
+    )
+    cleaned = sanitize_system_prompt(prompt)
+    assert "bash" not in cleaned
+    assert "System prompt" in cleaned
+    assert "More instructions." in cleaned
+
+
+def test_sanitize_strips_json_tool_schema_lines():
+    """Individual JSON tool schema lines (name/description/parameters) are stripped."""
+    prompt = (
+        "You are an assistant.\n"
+        '  "name": "edit_file",\n'
+        '  "description": "Edit a file",\n'
+        '  "parameters": {"type": "object"},\n'
+        "Do good work."
+    )
+    cleaned = sanitize_system_prompt(prompt)
+    assert "edit_file" not in cleaned
+    assert "You are an assistant." in cleaned
+    assert "Do good work." in cleaned
+
+
+def test_fingerprint_stable_across_tool_changes():
+    """Fingerprint is stable when tool definitions change between turns."""
+    p1 = "You are an assistant.\nAvailable tools: [{\"name\": \"read_file\"}]\nDo good work."
+    p2 = "You are an assistant.\nAvailable tools: [{\"name\": \"read_file\"}, {\"name\": \"write_file\"}]\nDo good work."
+    fp1 = compute_fingerprint(p1, "hello")
+    fp2 = compute_fingerprint(p2, "hello")
+    assert fp1 == fp2
+
+
 # --- Extraction parsing ---
 
 

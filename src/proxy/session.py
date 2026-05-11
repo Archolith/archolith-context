@@ -23,6 +23,14 @@ _SANITIZE_PATTERNS = [
     re.compile(r"(?m)^.*current\s+(date|time|timestamp)\s*[:=].*$", re.IGNORECASE),
     re.compile(r"(?m)^.*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}.*$", re.IGNORECASE),
     re.compile(r"(?m)^.*today'?s?\s+date\s*[:=].*$", re.IGNORECASE),
+    # Tool definition blocks embedded in system prompts (harnesses that inject
+    # tool descriptions cause fingerprint drift between turns)
+    re.compile(
+        r"(?ms)^(?:#\s*)?(?:available\s+tools?\s*[:=]|tool\s+definitions?\s*[:=]|tools?\s*[:=])\s*\[.*?\]",
+        re.IGNORECASE,
+    ),
+    # JSON tool schema lines (e.g., "\"name\": \"read_file\", ...")
+    re.compile(r'(?m)^\s*"(?:name|description|parameters)"\s*:\s*".*?(?:",|"\s*[,}])\s*$'),
 ]
 
 

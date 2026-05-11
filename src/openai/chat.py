@@ -257,6 +257,10 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
 
     if session_id and neo4j_ready:
         try:
+            # Wait for prior turn's extraction to commit before reading graph state
+            from src.proxy.locks import wait_for_prior_extraction
+            await wait_for_prior_extraction(session_id, timeout_s=5.0)
+
             # Extract the current user message for embedding-based retrieval
             user_message = None
             for msg in reversed(body.get("messages", [])):
@@ -612,11 +616,25 @@ async def _run_extraction(
 ) -> None:
     """Run fact extraction and store results in graph. Best-effort, non-blocking.
 
-    After extraction, computes batch embeddings for all facts and stores
-    them with their vectors. If embedding fails, facts are stored without
-    embeddings (assembler falls back to recency-only retrieval).
+    Holds a per-session lock during graph writes so that subsequent assembly
+    reads see committed state. After extraction, computes batch embeddings
+    for all facts and stores them with their vectors. If embedding fails,
+    facts are stored without embeddings (assembler falls back to recency-only
+    retrieval).
     """
     from src.main import _metrics
+    from src.proxy.locks import get_session_lock
+
+    lock = get_session_lock(session_id)
+    # Try to acquire with timeout — don't block forever if another extraction is stuck
+    acquired = False
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=10.0)
+        acquired = True
+    except asyncio.TimeoutError:
+        logger.warning("extraction_lock_acquire_timeout", session_id=session_id, turn=turn_number)
+        # Proceed without lock — stale data risk, but better than blocking forever
+
     try:
         # Extract user message (last user message in the request)
         user_message = ""
@@ -719,6 +737,10 @@ async def _run_extraction(
     except Exception as e:
         _metrics["extraction_failures"] += 1
         logger.warning("extraction_task_failed", session_id=session_id, turn=turn_number, error=str(e), exc_info=True)
+    finally:
+        if acquired:
+            lock.release()
+
 
 
 async def _compute_fact_embeddings(
