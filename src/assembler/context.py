@@ -44,12 +44,15 @@ _FACT_TYPE_PRIORITY = {
 
 
 def _estimate_tokens(text: str) -> int:
-    """Conservative token estimate for code-heavy text.
+    """Token estimate using cl100k_base with 10% margin.
 
-    GPT-style tokenizers average ~4 chars/token for code.
-    We use 3.5 to be conservative (overestimate token count).
+    Uses tiktoken for accurate counts, then adds a 10% safety margin.
+    Minimum of 1 token for empty strings.
     """
-    return max(1, len(text) // 3)
+    import tiktoken
+    raw = len(tiktoken.get_encoding("cl100k_base").encode(text))
+    with_margin = int(raw * 1.10)
+    return max(with_margin, 1)
 
 
 def _format_context_block(

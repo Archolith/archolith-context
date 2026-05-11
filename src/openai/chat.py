@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 
 import httpx
@@ -32,26 +33,46 @@ router = APIRouter()
 # Transient status codes eligible for retry
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
+# Pattern for stripping model reasoning/thinking blocks before extraction
+_REASONING_PATTERN = re.compile(
+    r'<(?:thinking|reasoning|inner_monologue)>.*?</(?:thinking|reasoning|inner_monologue)>',
+    re.DOTALL,
+)
+
+
+def _strip_reasoning(text: str) -> str:
+    """Strip model reasoning blocks before extraction.
+
+    Models that emit <thinking>/<reasoning> blocks include internal scaffolding
+    (tentative reasoning, abandoned approaches, self-corrections) that isn't useful
+    as facts. Stripping prevents noise in the extraction pipeline.
+    """
+    return _REASONING_PATTERN.sub('', text).strip()
+
 
 def _estimate_input_tokens(messages: list[dict]) -> int:
-    """Rough estimate of total input tokens in a messages array."""
-    total_chars = 0
+    """Estimate total input tokens using tiktoken cl100k_base with 10% margin + 500 floor."""
+    import tiktoken
+    enc = tiktoken.get_encoding("cl100k_base")
+    total_tokens = 0
     for msg in messages:
         content = msg.get("content", "")
         if isinstance(content, list):
             # Multi-part content
             for part in content:
                 if isinstance(part, dict):
-                    total_chars += len(part.get("text", ""))
+                    total_tokens += len(enc.encode(part.get("text", "")))
         elif isinstance(content, str):
-            total_chars += len(content)
-    return max(1, total_chars // 3)
+            total_tokens += len(enc.encode(content))
+    with_margin = int(total_tokens * 1.10)
+    return max(with_margin, 500)
 
 
 def _rewrite_messages(
     original_messages: list[dict],
     assembled_context: "AssembledContext",
     coherence_tail_size: int,
+    max_tail_messages: int = 20,
 ) -> list[dict]:
     """Rewrite the messages array: merge graph context into system prompt + coherence tail.
 
@@ -88,8 +109,9 @@ def _rewrite_messages(
         # No original system message — graph context becomes the system message
         result.append({"role": "system", "content": graph_content})
 
-    # 2. Keep the coherence tail (last N messages)
-    tail = rest[-coherence_tail_size:] if len(rest) > coherence_tail_size else rest
+    # 2. Keep the coherence tail — use smart_tail to preserve tool-call integrity
+    from src.assembler.tail import smart_tail
+    tail = smart_tail(rest, base_size=coherence_tail_size, max_size=max_tail_messages)
 
     # 3. Ensure role alternation: after system messages, the first non-system
     # message must be 'user'. Strip any leading assistant/tool messages.
@@ -249,6 +271,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     body.get("messages", []),
                     assembled,
                     settings.coherence_tail_size,
+                    max_tail_messages=settings.max_tail_messages,
                 )
                 rewritten_count = len(body["messages"])
                 assembly_mode = "graph"
@@ -270,12 +293,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     assembly_latency_ms=round(assembly_latency_ms, 1),
                 )
 
-                # P99 budget check
-                if assembly_latency_ms > 150:
+                # P99 budget check — log warning but use the assembled context
+                # (assembly already completed, discarding would waste the work)
+                if assembly_latency_ms > settings.assembly_latency_budget_ms:
                     logger.warning(
                         "assembly_latency_exceeded_budget",
                         latency_ms=round(assembly_latency_ms, 1),
-                        budget_ms=150,
+                        budget_ms=settings.assembly_latency_budget_ms,
                     )
             else:
                 # assemble_context returned None = cold start
@@ -593,13 +617,18 @@ async def _run_extraction(
         if not user_message and not response_text:
             return
 
-        # Extract tool results from messages
-        tool_results = ""
+        # Strip reasoning blocks from the response before extraction
+        response_text = _strip_reasoning(response_text)
+
+        # Extract tool results from messages — structured serialization with tool names
+        tool_results_parts = []
         for msg in messages:
             if msg.get("role") == "tool":
+                tool_name = msg.get("name", "unknown_tool")
                 content = msg.get("content", "")
                 if isinstance(content, str):
-                    tool_results += content[:2000] + "\n"
+                    tool_results_parts.append(f"Tool [{tool_name}]:\n{content[:2000]}")
+        tool_results = "\n\n".join(tool_results_parts) if tool_results_parts else None
 
         extraction_start = time.monotonic()
         result = await extract_facts(

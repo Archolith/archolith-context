@@ -13,19 +13,20 @@ from src.models.dtos import AssembledContext
 
 class TestEstimateTokens:
     def test_short_text(self):
-        # "Hello world" = 11 chars -> ~3 tokens
+        # "Hello world" ≈ 2 tokens with cl100k_base, ×1.10 ≈ 2
         assert _estimate_tokens("Hello world") >= 1
 
     def test_code_text(self):
-        # ~400 chars -> ~114 tokens
-        text = "def foo():\n    return bar\n" * 16
+        # ~400 chars → ~93 tokens with cl100k_base, ×1.10 ≈ 102
+        text = "def foo():\n return bar\n" * 16
         tokens = _estimate_tokens(text)
         assert tokens > 0
-        # Should be roughly in the right ballpark
-        assert 80 < tokens < 150
+        # Tiktoken-based estimate should be roughly in the right ballpark
+        assert 70 < tokens < 150
 
     def test_empty_text(self):
-        assert _estimate_tokens("") == 1  # min 1
+        # Empty string → 0 raw tokens → floor of 1
+        assert _estimate_tokens("") == 1
 
 
 class TestFormatContextBlock:

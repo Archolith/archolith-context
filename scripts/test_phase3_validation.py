@@ -77,10 +77,10 @@ async def check_neo4j_facts(session_id: str) -> int:
     try:
         await init_driver()
         cypher = f"""
-        MATCH (f:{CONTEXT_SESSION_LABEL}:Fact {{session_id: $sid}})
-        WHERE f.invalidated_at IS NULL
-        RETURN count(f) AS cnt
-        """
+MATCH (f:{CONTEXT_SESSION_LABEL}:Fact {{session_id: $sid}})
+WHERE f.valid_until IS NULL
+RETURN count(f) AS cnt
+"""
         results = await run_query(cypher, {"sid": session_id})
         return results[0]["cnt"] if results else 0
     except Exception as e:
