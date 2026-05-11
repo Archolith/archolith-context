@@ -1,5 +1,17 @@
 # Changelog — cth.context-engine
 
+## 2026-05-11 — Embedding-Driven Fact Retrieval (Steps 6b-d)
+
+- **Cosine similarity scoring**: `_cosine_similarity()` + `_score_fact()` — weighted blend: similarity(40%) + recency(30%) + type+confidence(30%) with embeddings; type(40%) + confidence(30%) + recency(30%) without
+- **Context windowing**: `_expand_with_context_window()` — N-1/N+1 adjacent-turn fact expansion for narrative continuity (error→fix, question→decision)
+- **Query embedding cache**: `_get_query_embedding()` with SHA-256-keyed in-memory cache (64-entry FIFO eviction)
+- **Config flag**: `embedding_enabled: bool = False` — off by default, no behavior change unless configured
+- **Chat handler integration**: extracts last user message from request body, passes to `assemble_context()` with `http_client` when embedding_enabled
+- **Bug fix**: `_budget_facts()` default `turn_number=0` caused recency inflation; now infers `effective_turn` from `max(source_turn)` of facts
+- **Bug fix**: `TestColdStartLogic` indentation — class-level asserts moved inside method body
+- **16 new unit tests**: TestCosineSimilarity (6), TestScoreFact (4), TestContextWindowing (4), TestBudgetFactsWithEmbeddings (2)
+- **128 tests passing** (up from 112)
+
 ## 2026-05-11 — Streaming Fix: True SSE Passthrough
 
 - **Streaming regression fix**: `_handle_streaming()` was using `client.post()` + `resp.text.split("\n")` which fully buffered the upstream response before relaying any chunks to the client. Restored true SSE passthrough using `client.stream()` + `aiter_lines()` — the client now sees tokens in real-time as they arrive from upstream
