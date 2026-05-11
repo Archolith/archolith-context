@@ -28,9 +28,12 @@ An extracted piece of session knowledge.
 | fact_type | FactType | Type classification |
 | valid_from | datetime | When fact became true |
 | valid_until | datetime? | When superseded (null = still active) |
+| invalidated_at | datetime? | When fact was explicitly invalidated (null = still active) |
 | confidence | float | Extraction confidence (0–1) |
 | source_turn | int | Which turn produced this fact |
 | embedding | list[float] | Vector embedding for similarity search |
+
+> **Indexes:** `invalidated_at` and `session_id` on Fact nodes (added Phase 4 for invalidation queries + session-scoped lookups).
 
 ### File
 A file referenced or modified during the session.
@@ -42,6 +45,8 @@ A file referenced or modified during the session.
 | last_read_turn | int? | Last turn where file was read |
 | last_modified_turn | int? | Last turn where file was edited |
 | status | FileStatus | read, modified, created, deleted |
+
+> **Index:** `session_id` on File nodes (added Phase 4 for session-scoped file lookups).
 
 ### Decision
 An explicit choice made during the session.
@@ -106,13 +111,52 @@ What the assembler produces for the proxy to forward.
 ```python
 @dataclass
 class AssembledContext:
-    system_message: dict          # original system prompt (pass-through)
-    graph_context: list[dict]     # synthesized messages from graph facts
-    coherence_tail: list[dict]    # last N raw messages (verbatim)
-    token_estimate: int           # estimated total tokens
-    facts_retrieved: int          # how many facts contributed
+    system_message: dict  # original system prompt (pass-through)
+    graph_context: list[dict]  # synthesized messages from graph facts
+    coherence_tail: list[dict]  # last N raw messages (verbatim)
+    token_estimate: int  # estimated total tokens
+    facts_retrieved: int  # how many facts contributed
     session_id: str
 ```
+
+### ExtractionResult
+What the extractor produces after parsing a response.
+
+```python
+@dataclass
+class ExtractionResult:
+    facts: list[Fact]
+    files_touched: list[str]
+    decisions: list[Decision]
+    invalidated_fact_ids: list[str]  # facts superseded by this turn
+    turn_number: int
+```
+
+### AssemblyMode
+How the chat handler resolved context for a request.
+
+| Mode | Meaning |
+|------|---------|
+| `cold_start` | Below turn/token threshold — full passthrough |
+| `graph` | Graph query succeeded — context assembled |
+| `fallback` | Graph query failed — passthrough after attempted assembly |
+| `passthrough` | Neo4j not configured — always passthrough |
+
+### Metrics (in-memory, process-level)
+`_metrics` dict in `src/main.py` — exposed via `GET /metrics`:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| total_requests | int | All HTTP requests processed |
+| assembly_modes | dict[str, int] | Count per assembly_mode |
+| extraction_successes | int | Successful fact extractions |
+| extraction_failures | int | Failed fact extractions |
+| upstream_errors | int | Upstream API errors (5xx, timeout, connection) |
+| neo4j_errors | int | Neo4j query failures |
+| active_sessions | int | Sessions currently in graph |
+| token_savings_estimated | int | Estimated tokens saved by context assembly |
+| total_input_tokens_seen | int | Total input tokens across all requests |
+| uptime_s | float | Seconds since process start |
 
 ### ExtractionResult
 What the extractor produces after parsing a response.

@@ -69,11 +69,14 @@ Harness → POST /v1/chat/completions → Proxy
 - Node types: File, Function, Decision, Error, Goal, ToolResult, State
 
 ### Config (`src/config/`)
-- Upstream API URL and credentials
+- Upstream API URL and credentials (validated: must be http/https)
 - Neo4j connection (separate from long-term memory)
 - Extraction model selection
 - Token budgets, TTL, coherence tail size
+- Cold start thresholds (turns + token count)
+- Retry settings: upstream and Neo4j (max retries, backoff base seconds)
 - Promotion settings (if wired to long-term memory)
+- Settings singleton caching (get_settings / reset_settings)
 
 ## Isolation from Long-term Memory
 
@@ -91,7 +94,7 @@ No shared indices, no cross-contamination. All queries are label-scoped (`MATCH 
 
 ```env
 # Upstream API (what the proxy forwards to)
-UPSTREAM_BASE_URL=https://api.deepseek.com
+UPSTREAM_BASE_URL=https://api.deepseek.com/v1
 UPSTREAM_API_KEY=sk-...
 
 # Extraction model
@@ -113,8 +116,17 @@ SESSION_NEO4J_PASSWORD=...
 # Proxy settings
 PROXY_PORT=9800
 COHERENCE_TAIL_SIZE=3
+MAX_TAIL_MESSAGES=20
 CONTEXT_TOKEN_BUDGET=15000
 SESSION_TTL_HOURS=24
+COLD_START_TURNS=3
+COLD_START_TOKEN_THRESHOLD=20000
+
+# Retry / resilience
+UPSTREAM_MAX_RETRIES=3
+UPSTREAM_RETRY_BACKOFF_BASE_S=0.5
+NEO4J_MAX_RETRIES=3
+NEO4J_RETRY_BACKOFF_BASE_S=1.0
 
 # Optional: promotion to long-term memory
 MEMORY_API_URL=http://localhost:8200
@@ -122,13 +134,56 @@ MEMORY_API_KEY=...
 PROMOTION_ENABLED=false
 ```
 
+## Observability (Phase 4)
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health` | Health check: Neo4j status, upstream status, version, uptime |
+| `GET /metrics` | Process-level counters: total_requests, assembly_modes (cold_start/graph/fallback/passthrough), extraction_successes/failures, upstream_errors, neo4j_errors, active_sessions, token_savings_estimated, total_input_tokens_seen, uptime |
+| `GET /sessions` | List active sessions (admin, 503 if Neo4j down) |
+| `GET /sessions/{id}` | Session stats (admin, 404 if not found, 503 if Neo4j down) |
+
+Metrics are in-memory (`_metrics` dict in `src/main.py`), reset on process restart. Prometheus-compatible OpenMetrics format is a future goal.
+
+## Resilience (Phase 4)
+
+### Upstream Retry
+`_upstream_request_with_retry()` in `src/openai/chat.py`:
+- Exponential backoff on 429, 500, 502, 503, 504 + `TimeoutException` + `ConnectError`
+- Configurable: `UPSTREAM_MAX_RETRIES` (default 3), `UPSTREAM_RETRY_BACKOFF_BASE_S` (default 0.5s)
+
+### Neo4j Startup Retry
+`_init_neo4j_with_retry()` in `src/main.py`:
+- Exponential backoff on connection failure at startup
+- Configurable: `NEO4J_MAX_RETRIES` (default 3), `NEO4J_RETRY_BACKOFF_BASE_S` (default 1.0s)
+- If all retries fail, proxy starts without graph features (passthrough mode)
+
+### Graceful Degradation
+- Assembler wraps each graph query in try/except → returns None on failure
+- Chat handler tracks `assembly_mode`: `cold_start` (below threshold), `graph` (success), `fallback` (graph failed, used passthrough), `passthrough` (Neo4j not configured)
+- Extraction failures logged + counted, never block the response
+- Proxy returns 503 if lifespan didn't initialize `http_client`
+
+### Config Validation
+- `field_validator` on `upstream_base_url` (must be http/https), `proxy_port` (1–65535)
+- Warning log on empty `upstream_api_key`
+- `check_required_for_graph()` → list of missing vars for graph features
+- `check_required_for_proxy()` → list of missing vars for basic proxy
+- Settings singleton via `get_settings()` + `reset_settings()` for tests
+
+## Docker Deployment (Phase 4)
+
+- `Dockerfile`: python:3.12-slim + uv, healthcheck on `/health`, uvicorn CMD
+- `docker-compose.yml`: proxy + neo4j:5-community with APOC plugin, healthchecks, volumes, dependency ordering
+- Override file: `docker-compose.override.yml` (gitignored)
+
 ## External Dependencies
 
 | Service | Purpose | Required |
 |---------|---------|----------|
-| Neo4j | Session graph storage | Yes |
-| OpenAI API (gpt-4.1-mini) | Fact extraction | Yes |
-| OpenAI API (embeddings) | Semantic similarity for retrieval | Yes |
+| Neo4j | Session graph storage | Yes (graceful fallback if down) |
+| OpenAI API (gpt-4.1-mini) | Fact extraction | Yes (extraction skipped on failure) |
+| OpenAI API (embeddings) | Semantic similarity for retrieval | Yes (future) |
 | Upstream LLM API | Target for proxied requests | Yes |
 | cth.mcp.memory API | Promotion target for durable facts | Optional |
 
@@ -137,4 +192,4 @@ PROMOTION_ENABLED=false
 | Service | Port |
 |---------|------|
 | Context Engine Proxy | 9800 |
-| Neo4j (shared instance, different DB) | 7687 |
+| Neo4j (shared instance, label-isolated) | 7687 |
