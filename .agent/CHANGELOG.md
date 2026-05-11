@@ -1,5 +1,15 @@
 # Changelog — cth.context-engine
 
+## 2026-05-11 — Streaming Fix: True SSE Passthrough
+
+- **Streaming regression fix**: `_handle_streaming()` was using `client.post()` + `resp.text.split("\n")` which fully buffered the upstream response before relaying any chunks to the client. Restored true SSE passthrough using `client.stream()` + `aiter_lines()` — the client now sees tokens in real-time as they arrive from upstream
+- **Two-phase streaming architecture**:
+  1. Phase 1: Connection-level retry — open `client.stream()`, check status code before committing. If 429/5xx or connection error, close and retry with backoff
+  2. Phase 2: True SSE passthrough — relay `aiter_lines()` directly to client; `ResponseCapture` runs in parallel for post-hoc extraction
+- **Resource cleanup**: Proper `__aexit__` calls on all code paths (retry, error, success) to prevent stream context leaks
+- **3 new integration tests**: SSE passthrough content, non-retryable error relay, all retries exhausted
+- **100 tests passing** (up from 97)
+
 ## 2026-05-10 — P2/P3 Fixes: Structlog, Streaming Retry, Embeddings, Metrics
 
 - **Structlog fix**: Replaced `PrintLoggerFactory()` with `stdlib.LoggerFactory()` — `filter_by_level` requires `.disabled` attribute only present on stdlib loggers. Moved `filter_by_level` to structlog processor chain (not ProcessorFormatter which receives LogRecords where logger may be None)
