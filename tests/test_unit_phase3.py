@@ -7,6 +7,8 @@ import pytest
 from src.assembler.context import (
     _estimate_tokens,
     _format_context_block,
+    _format_session_overview,
+    _format_relevant_facts,
     _budget_facts,
     _cosine_similarity,
     _score_fact,
@@ -43,7 +45,8 @@ class TestFormatContextBlock:
             decisions=[],
             turn_number=5,
         )
-        assert "Session Context" in result
+        assert "SESSION OVERVIEW" in result
+        assert "RELEVANT CONTEXT" in result
         assert "current turn: 5" in result
 
     def test_with_goal(self):
@@ -69,7 +72,7 @@ class TestFormatContextBlock:
             decisions=[],
             turn_number=4,
         )
-        assert "Relevant Facts" in result
+        assert "RELEVANT CONTEXT" in result
         assert "Build fails" in result
         assert "[error|t3]" in result
         assert "[file_state|t2]" in result
@@ -104,6 +107,73 @@ class TestFormatContextBlock:
         assert "Decisions Made" in result
         assert "Use FastAPI over Flask" in result
         assert "Better async support" in result
+
+    def test_two_tier_overview_before_facts(self):
+        """Overview section must come before facts for prompt caching benefit."""
+        facts = [
+            {"content": "test fact", "fact_type": "observation", "confidence": 0.5, "source_turn": 1},
+        ]
+        result = _format_context_block(
+            goal="Test goal",
+            facts=facts,
+            files=[{"path": "a.py", "status": "modified"}],
+            decisions=[],
+            turn_number=2,
+        )
+        overview_pos = result.index("SESSION OVERVIEW")
+        facts_pos = result.index("RELEVANT CONTEXT")
+        assert overview_pos < facts_pos
+
+    def test_overview_includes_fact_count(self):
+        """Overview should show total active fact count."""
+        facts = [
+            {"content": "fact 1", "fact_type": "observation", "confidence": 0.5, "source_turn": 1},
+            {"content": "fact 2", "fact_type": "error", "confidence": 0.9, "source_turn": 2},
+        ]
+        result = _format_context_block(
+            goal=None,
+            facts=facts,
+            files=[],
+            decisions=[],
+            turn_number=3,
+            active_fact_count=42,
+        )
+        assert "42 active facts" in result
+
+    def test_no_facts_shows_placeholder(self):
+        """When no facts are budgeted, show a placeholder."""
+        result = _format_context_block(
+            goal=None,
+            facts=[],
+            files=[],
+            decisions=[],
+            turn_number=1,
+        )
+        assert "no facts above relevance threshold" in result
+
+
+class TestSessionOverview:
+    def test_overview_has_delimiter(self):
+        result = _format_session_overview("goal", [], [], turn_number=5)
+        assert "=== SESSION OVERVIEW ===" in result
+
+    def test_overview_stable_format(self):
+        """Same input → same output (prompt caching requires stability)."""
+        args = ("Build API", [{"path": "x.py", "status": "modified"}], [], 3, 10)
+        result1 = _format_session_overview(*args)
+        result2 = _format_session_overview(*args)
+        assert result1 == result2
+
+
+class TestRelevantFacts:
+    def test_facts_has_delimiter(self):
+        facts = [{"content": "test", "fact_type": "observation", "source_turn": 1}]
+        result = _format_relevant_facts(facts, turn_number=2)
+        assert "=== RELEVANT CONTEXT ===" in result
+
+    def test_empty_facts_placeholder(self):
+        result = _format_relevant_facts([], turn_number=1)
+        assert "no facts above relevance threshold" in result
 
 
 class TestBudgetFacts:

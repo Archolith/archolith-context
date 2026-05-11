@@ -142,38 +142,37 @@ def _expand_with_context_window(
     return selected_facts + additional
 
 
-def _format_context_block(
+def _format_session_overview(
     goal: str | None,
-    facts: list[dict],
     files: list[dict],
     decisions: list[dict],
     turn_number: int,
+    active_fact_count: int = 0,
 ) -> str:
-    """Format graph data into a structured context block.
+    """Format the stable session overview section.
 
-    Returns a string suitable for injection as a system/context message.
+    This section is intended to remain stable across turns so that API
+    prompt caching can reuse it. It contains structural knowledge that
+    rarely changes: goal, files, decisions, and a fact count summary.
     """
-    parts = ["[Session Context — assembled from knowledge graph]"]
+    parts = ["=== SESSION OVERVIEW ==="]
     parts.append("")
 
-    # Session goal
     if goal:
         parts.append(f"## Session Goal\n{goal}")
         parts.append("")
 
-    # Touched files summary
     if files:
         parts.append("## Files Touched")
-        for f in files[:20]:  # Cap at 20 files
+        for f in files[:20]:
             path = f.get("path", f.get("s.path", "?"))
             status = f.get("status", f.get("s.status", "?"))
             parts.append(f"- {path} ({status})")
         parts.append("")
 
-    # Decisions
     if decisions:
         parts.append("## Decisions Made")
-        for d in decisions[:10]:  # Cap at 10 decisions
+        for d in decisions[:10]:
             summary = d.get("summary", d.get("d.summary", ""))
             rationale = d.get("rationale", d.get("d.rationale"))
             turn = d.get("turn", d.get("d.turn", "?"))
@@ -183,7 +182,24 @@ def _format_context_block(
             parts.append(line)
         parts.append("")
 
-    # Active facts (sorted by priority)
+    parts.append(f"Knowledge base: {active_fact_count} active facts | Current turn: {turn_number}")
+    parts.append("")
+
+    return "\n".join(parts)
+
+
+def _format_relevant_facts(
+    facts: list[dict],
+    turn_number: int,
+) -> str:
+    """Format the per-turn relevant facts section.
+
+    This section changes every turn as different facts are relevant.
+    Sorted by priority, then confidence, then recency.
+    """
+    parts = ["=== RELEVANT CONTEXT ==="]
+    parts.append("")
+
     sorted_facts = sorted(
         facts,
         key=lambda f: (
@@ -195,19 +211,41 @@ def _format_context_block(
     )
 
     if sorted_facts:
-        parts.append("## Relevant Facts")
         for f in sorted_facts:
             content = f.get("content", "")
             fact_type = f.get("fact_type", "observation")
-            confidence = f.get("confidence", 0.5)
             turn = f.get("source_turn", "?")
-            # Compact format: type, turn, content (skip confidence for brevity)
             parts.append(f"- [{fact_type}|t{turn}] {content}")
-        parts.append("")
+    else:
+        parts.append("(no facts above relevance threshold)")
 
-    parts.append(f"[End of session context — current turn: {turn_number}]")
-
+    parts.append("")
     return "\n".join(parts)
+
+
+def _format_context_block(
+    goal: str | None,
+    facts: list[dict],
+    files: list[dict],
+    decisions: list[dict],
+    turn_number: int,
+    active_fact_count: int = 0,
+) -> str:
+    """Format graph data into a structured context block with two tiers.
+
+    Tier 1 — Session Overview (stable, cacheable):
+    Session goal, files touched, decisions, fact count.
+
+    Tier 2 — Relevant Facts (per-turn, query-dependent):
+    Budgeted facts sorted by relevance.
+
+    The overview section comes first to benefit from prompt caching
+    (stable prefix across turns). The facts section follows.
+    """
+    overview = _format_session_overview(goal, files, decisions, turn_number, active_fact_count)
+    facts_section = _format_relevant_facts(facts, turn_number)
+
+    return overview + "\n" + facts_section + f"[End of session context — current turn: {turn_number}]"
 
 
 def _budget_facts(
@@ -392,13 +430,14 @@ async def assemble_context(
         embedding_enabled=settings.embedding_enabled,
     )
 
-    # Format the context block
+    # Format the context block with two tiers (overview + relevant facts)
     context_text = _format_context_block(
         goal=goal,
         facts=budgeted_facts,
         files=files,
         decisions=decisions,
         turn_number=turn_number,
+        active_fact_count=len(all_facts),
     )
 
     context_tokens = _estimate_tokens(context_text)
