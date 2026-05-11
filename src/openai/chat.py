@@ -218,6 +218,11 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             session_id, is_new = await resolve_session(headers, messages_raw)
             turn_number = await session_repo.get_turn_number(session_id)
             logger.debug("session_resolved", session_id=session_id, turn=turn_number, is_new=is_new)
+            # Bind session context for request-level logging middleware
+            structlog.contextvars.bind_contextvars(
+                session_id=session_id,
+                turn_number=turn_number,
+            )
         except Exception as e:
             logger.warning("session_resolution_failed", error=str(e))
             _metrics["neo4j_errors"] += 1
@@ -283,6 +288,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
 
     _record_assembly_mode(assembly_mode)
 
+    # Bind assembly_mode for request-level logging middleware
+    structlog.contextvars.bind_contextvars(assembly_mode=assembly_mode)
+
     # Build upstream request
     upstream_url = f"{settings.upstream_api_url}/chat/completions"
     upstream_headers = {
@@ -315,27 +323,111 @@ async def _handle_streaming(
     turn_number: int = 0,
     messages: list[dict] | None = None,
 ) -> StreamingResponse:
-    """Stream SSE chunks from upstream with response capture and extraction."""
+    """Stream SSE chunks from upstream with response capture and extraction.
+
+    Retry strategy: only the initial connection is retried on 429/5xx or
+    connection errors. Once we start yielding SSE chunks to the client,
+    we cannot retry (the client has already consumed partial output).
+    Connection-level retries happen before committing to the stream.
+    """
     from src.main import _metrics
+    settings = get_settings()
     capture_holder = {"capture": None}
 
     async def stream_generator():
-        try:
-            async with request.app.state.http_client.stream(
-                "POST", url, headers=headers, content=body
-            ) as resp:
-                if resp.status_code != 200:
-                    _metrics["upstream_errors"] += 1
-                    error_body = await resp.aread()
-                    yield f"data: {error_body.decode()}\n\n"
-                    return
+        # Connection-level retry before streaming begins
+        max_retries = settings.upstream_max_retries
+        backoff_base = settings.upstream_retry_backoff_base_s
+        last_exc = None
 
-                async for line, cap in stream_with_capture(resp):
-                    if cap is not None:
-                        capture_holder["capture"] = cap
+        for attempt in range(max_retries):
+            try:
+                # Make the connection but don't start reading yet
+                resp = await request.app.state.http_client.post(
+                    url, headers=headers, content=body
+                )
+
+                # If non-streaming error (429/5xx), retry
+                if resp.status_code in _RETRYABLE_STATUS_CODES:
+                    if attempt < max_retries - 1:
+                        delay = backoff_base * (2 ** attempt)
+                        logger.warning(
+                            "streaming_connection_retry",
+                            status=resp.status_code,
+                            attempt=attempt + 1,
+                            max_retries=max_retries,
+                            delay_s=delay,
+                        )
+                        await asyncio.sleep(delay)
                         continue
-                    if line:
-                        yield line + "\n\n"
+                    else:
+                        # Final attempt failed — yield error to client
+                        _metrics["upstream_errors"] += 1
+                        error = json.dumps(
+                            {"error": {"message": f"Upstream returned {resp.status_code} after {max_retries} retries", "type": "upstream_error"}}
+                        )
+                        yield f"data: {error}\n\n"
+                        return
+
+                # Good response (200) or non-retryable error — stream it
+                break
+
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                last_exc = e
+                if attempt < max_retries - 1:
+                    delay = backoff_base * (2 ** attempt)
+                    logger.warning(
+                        "streaming_connection_retry",
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                        delay_s=delay,
+                        error=str(e),
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    _metrics["upstream_errors"] += 1
+                    error = json.dumps(
+                        {"error": {"message": f"Upstream connection failed after {max_retries} retries: {e}", "type": "upstream_error"}}
+                    )
+                    yield f"data: {error}\n\n"
+                    return
+        else:
+            # Should not reach here, but safety
+            _metrics["upstream_errors"] += 1
+            error = json.dumps(
+                {"error": {"message": "All streaming connection attempts exhausted", "type": "upstream_error"}}
+            )
+            yield f"data: {error}\n\n"
+            return
+
+        # At this point we have a response — stream it to the client
+        # Note: if resp.status_code != 200, we relay the error body
+        try:
+            if resp.status_code != 200:
+                _metrics["upstream_errors"] += 1
+                yield f"data: {resp.text}\n\n"
+                return
+
+            # Parse the response as SSE lines from the buffered content
+            # (since we used .post() not .stream(), content is already buffered)
+            for line in resp.text.split("\n"):
+                if not line:
+                    continue
+
+                # Parse and capture for extraction
+                if line.startswith("data: ") and not line.endswith("[DONE]"):
+                    chunk_data = line[len("data: "):]
+                    if chunk_data.strip():
+                        capture = capture_holder.get("capture")
+                        if capture is None:
+                            from src.proxy.streaming import ResponseCapture
+                            capture = ResponseCapture()
+                            capture_holder["capture"] = capture
+                        capture.add_chunk(chunk_data)
+
+                if line:
+                    yield line + "\n\n"
 
         except Exception as e:
             _metrics["upstream_errors"] += 1
@@ -348,7 +440,7 @@ async def _handle_streaming(
         # Schedule extraction as a background task that runs after streaming completes
         if session_id:
             async def post_stream_extraction():
-                capture = capture_holder["capture"]
+                capture = capture_holder.get("capture")
                 if capture and capture.get_full_text():
                     await _run_extraction(
                         client=request.app.state.extractor_client,
@@ -442,7 +534,12 @@ async def _run_extraction(
     response_text: str,
     truncated: bool = False,
 ) -> None:
-    """Run fact extraction and store results in graph. Best-effort, non-blocking."""
+    """Run fact extraction and store results in graph. Best-effort, non-blocking.
+
+    After extraction, computes batch embeddings for all facts and stores
+    them with their vectors. If embedding fails, facts are stored without
+    embeddings (assembler falls back to recency-only retrieval).
+    """
     from src.main import _metrics
     try:
         # Extract user message (last user message in the request)
@@ -481,8 +578,12 @@ async def _run_extraction(
             _metrics["extraction_successes"] += 1
             return
 
-        # Store facts
-        for fact in result.facts:
+        # Batch compute embeddings for all extracted facts
+        fact_contents = [fact.get("content", "") for fact in result.facts]
+        embeddings = await _compute_fact_embeddings(client, fact_contents)
+
+        # Store facts with their embeddings
+        for i, fact in enumerate(result.facts):
             content = fact.get("content", "")
             fact_type_str = fact.get("fact_type", "observation")
             try:
@@ -496,6 +597,7 @@ async def _run_extraction(
                 fact_type=fact_type,
                 source_turn=turn_number,
                 confidence=fact.get("confidence", 0.5),
+                embedding=embeddings[i] if i < len(embeddings) else None,
             )
 
         # Store file touches
@@ -520,12 +622,14 @@ async def _run_extraction(
 
         # Log active fact count for monitoring
         active_count = await facts_repo.get_active_fact_count(session_id)
+        embedding_count = sum(1 for e in embeddings if e is not None)
         _metrics["extraction_successes"] += 1
         logger.info(
             "extraction_stored",
             session_id=session_id,
             turn=turn_number,
             facts_stored=len(result.facts),
+            embeddings_computed=embedding_count,
             active_fact_count=active_count,
             extraction_latency_ms=round(extraction_latency_ms, 1),
             warning="high_active_count" if active_count > 200 else None,
@@ -534,3 +638,19 @@ async def _run_extraction(
     except Exception as e:
         _metrics["extraction_failures"] += 1
         logger.warning("extraction_task_failed", session_id=session_id, turn=turn_number, error=str(e), exc_info=True)
+
+
+async def _compute_fact_embeddings(
+    client: httpx.AsyncClient,
+    texts: list[str],
+) -> list[list[float] | None]:
+    """Compute batch embeddings for extracted fact texts.
+
+    Falls back to [None, ...] if the embedding API is unavailable.
+    """
+    try:
+        from src.extractor.embeddings import compute_embeddings_batch
+        return await compute_embeddings_batch(client, texts)
+    except Exception as e:
+        logger.warning("embedding_computation_failed", error=str(e))
+        return [None] * len(texts)

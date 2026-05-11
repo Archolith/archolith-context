@@ -14,7 +14,11 @@ from fastapi.responses import JSONResponse
 
 from src.config import get_settings
 from src.graph.driver import close_driver, init_driver, ensure_indexes
+from src.logging_config import configure_logging
 from src.openai.router import router as openai_router
+
+# Configure structured JSON logging before first use
+configure_logging()
 
 logger = structlog.get_logger()
 
@@ -142,17 +146,25 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Request-level logging middleware
+    # Request-level logging middleware (includes session context via structlog context vars)
     @app.middleware("http")
     async def request_logging_middleware(request: Request, call_next):
         start = time.monotonic()
         _metrics["total_requests"] += 1
-        response = await call_next(request)
-        latency_ms = (time.monotonic() - start) * 1000
-        logger.info(
-            "request",
+
+        # Bind request-level context that the handler may enrich
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
             method=request.method,
             path=request.url.path,
+        )
+
+        response = await call_next(request)
+        latency_ms = (time.monotonic() - start) * 1000
+
+        # Log with whatever context the handler bound (session_id, turn, assembly_mode)
+        logger.info(
+            "request",
             status=response.status_code,
             latency_ms=round(latency_ms, 1),
         )
@@ -208,6 +220,23 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
 
+        # Derived rates
+        total_extractions = _metrics["extraction_successes"] + _metrics["extraction_failures"]
+        extraction_success_rate = (
+            round(_metrics["extraction_successes"] / total_extractions, 4)
+            if total_extractions > 0 else 0.0
+        )
+        avg_token_savings = (
+            round(_metrics["token_savings_estimated"] / _metrics["total_requests"])
+            if _metrics["total_requests"] > 0 else 0
+        )
+        total_input = _metrics["total_input_tokens_seen"]
+        total_savings = _metrics["token_savings_estimated"]
+        token_savings_rate = (
+            round(total_savings / total_input, 4)
+            if total_input > 0 else 0.0
+        )
+
         return {
             "proxy": "cth.context-engine",
             "version": "0.1.0",
@@ -216,10 +245,13 @@ def create_app() -> FastAPI:
             "assembly_modes": dict(_metrics["assembly_modes"]),
             "extraction_successes": _metrics["extraction_successes"],
             "extraction_failures": _metrics["extraction_failures"],
+            "extraction_success_rate": extraction_success_rate,
             "upstream_errors": _metrics["upstream_errors"],
             "neo4j_errors": _metrics["neo4j_errors"],
             "active_sessions": active_sessions,
             "token_savings_estimated": _metrics["token_savings_estimated"],
+            "avg_token_savings_per_request": avg_token_savings,
+            "token_savings_rate": token_savings_rate,
             "total_input_tokens_seen": _metrics["total_input_tokens_seen"],
             "uptime_s": round(time.time() - _metrics["start_time"], 0) if _metrics["start_time"] else 0,
         }
