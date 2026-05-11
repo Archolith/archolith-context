@@ -1,5 +1,15 @@
 # Changelog — cth.context-engine
 
+## 2026-05-10 — P2/P3 Fixes: Structlog, Streaming Retry, Embeddings, Metrics
+
+- **Structlog fix**: Replaced `PrintLoggerFactory()` with `stdlib.LoggerFactory()` — `filter_by_level` requires `.disabled` attribute only present on stdlib loggers. Moved `filter_by_level` to structlog processor chain (not ProcessorFormatter which receives LogRecords where logger may be None)
+- **Streaming retry**: Connection-level retry on 429/5xx/timeout/connect errors before committing to SSE stream. Once chunks flow to client, retry is impossible (documented limitation)
+- **Batch embeddings**: New `src/extractor/embeddings.py` with `compute_embeddings_batch()` calling text-embedding-3-small. Facts stored with embeddings; graceful fallback to None if API unavailable
+- **Metrics derived rates**: `/metrics` now includes `extraction_success_rate`, `avg_token_savings_per_request`, `token_savings_rate`
+- **Request logging middleware**: Binds session context (session_id, turn_number, assembly_mode) via `structlog.contextvars` so request logs include handler-enriched context
+- **Integration tests**: 18 new tests in `test_integration_phase4.py` — Neo4j chaos, extraction chaos, session isolation, structlog config, streaming retry, metrics rates, batch embeddings, request logging middleware
+- **97 tests passing** (up from 79)
+
 ## 2026-05-10 — Phase 4: Hardening + Operational Readiness
 
 - Config validation: field validators on upstream_base_url (http/https), proxy_port (1–65535); check_required_for_graph()/check_required_for_proxy() methods; settings singleton caching (get_settings/reset_settings); retry config fields
