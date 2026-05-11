@@ -280,6 +280,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 input_token_estimate=input_tokens,
                 user_message=user_message,
                 http_client=request.app.state.http_client if settings.embedding_enabled else None,
+                messages=body.get("messages", []),
             )
             assembly_latency_ms = (time.monotonic() - assembly_start) * 1000
 

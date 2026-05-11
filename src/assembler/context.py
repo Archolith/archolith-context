@@ -326,6 +326,7 @@ async def assemble_context(
     input_token_estimate: int,
     user_message: str | None = None,
     http_client=None,
+    messages: list[dict] | None = None,
 ) -> AssembledContext | None:
     """Assemble context from the session graph for request rewriting.
 
@@ -367,16 +368,43 @@ async def assemble_context(
         )
         return None
 
+    # Query rewriting: resolve ambiguous references before embedding
+    effective_query = user_message
+    if (
+        settings.query_rewrite_enabled
+        and settings.embedding_enabled
+        and user_message
+        and http_client
+    ):
+        try:
+                from src.assembler.query_rewrite import needs_rewrite, rewrite_query, extract_recent_exchanges
+                if needs_rewrite(user_message):
+                    # Extract recent user/assistant exchanges for reference resolution
+                    recent = extract_recent_exchanges(messages or [], max_exchanges=3)
+                    rewritten = await rewrite_query(http_client, user_message, recent)
+                if rewritten:
+                    effective_query = rewritten
+                    logger.debug(
+                        "query_rewritten_for_embedding",
+                        session_id=session_id,
+                        turn=turn_number,
+                        original=user_message[:60],
+                        rewritten=rewritten[:60],
+                    )
+        except Exception as e:
+            logger.warning("query_rewrite_error", session_id=session_id, error=str(e))
+
     # Compute query embedding if embedding-driven retrieval is enabled
     query_embedding = None
-    if settings.embedding_enabled and settings.embedding_api_key and user_message:
+    if settings.embedding_enabled and settings.embedding_api_key and effective_query:
         try:
-            query_embedding = await _get_query_embedding(user_message, http_client)
+            query_embedding = await _get_query_embedding(effective_query, http_client)
             logger.debug(
                 "query_embedding_computed",
                 session_id=session_id,
                 turn=turn_number,
                 has_embedding=query_embedding is not None,
+                query_rewritten=effective_query != user_message,
             )
         except Exception as e:
             logger.warning("query_embedding_failed", session_id=session_id, error=str(e))

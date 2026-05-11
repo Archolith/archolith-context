@@ -1,5 +1,28 @@
 # Changelog — cth.context-engine
 
+## 2026-05-11 — Query Rewriting for Ambiguous Messages (Step 9)
+
+- **Query rewriting (`src/assembler/query_rewrite.py`)**: New module with `needs_rewrite()` + `rewrite_query()` — detects ambiguous user messages containing pronouns, vague directives, or deictic references and rewrites them to be self-contained before embedding. Uses the extractor model (gpt-4.1-mini) with recent conversation context for reference resolution.
+- **`needs_rewrite()`**: Pattern-based detection — pronouns (`it`, `this`, `that`) and deictic references (`the previous function`, `the above code`) ALWAYS need rewriting (inherently ambiguous). Vague directives (`do it`, `continue`) and short queries only trigger when they lack specific technical keywords.
+- **`rewrite_query()`**: Calls extractor model with last 3 user/assistant exchanges as context. Returns rewritten query or None on failure (graceful fallback).
+- **`extract_recent_exchanges()`**: Extracts last N user/assistant message pairs from the message array, skipping system/tool messages.
+- **Integration**: `assemble_context()` now accepts optional `messages` parameter; when `query_rewrite_enabled=true` and `embedding_enabled=true`, rewrites ambiguous user messages before computing the query embedding. The rewritten query is embedded instead of the raw text, improving cosine similarity matching.
+- **Config**: `query_rewrite_enabled: bool = False` added to Settings (disabled by default).
+- **Cost**: ~$0.0003/turn when triggered (only fires for ambiguous queries, uses cheap gpt-4.1-mini).
+- **35 new tests**: TestNeedsRewrite (20), TestExtractRecentExchanges (6), TestRewriteQuery (6), TestQueryRewriteIntegration (3).
+- **189 tests passing** (up from 154).
+
+## 2026-05-11 — Phase 3 Remediation Batch: Steps 7a, 7b, 11, 12
+
+- **Fingerprint tool normalization (Step 7a)**: New regex patterns in `_SANITIZE_PATTERNS` strip tool definition blocks (`Available tools: [...]`, `Tool definitions: [...]`) and JSON tool schema lines (`"name"`/`"description"`/`"parameters"` key-value lines) from system prompts before fingerprinting. Prevents session resets when harnesses dynamically register tools.
+- **Turn-locking for extraction race condition (Step 7b)**: New `src/proxy/locks.py` with per-session `asyncio.Lock` registry. `wait_for_prior_extraction()` called before assembly (5s timeout). `_run_extraction()` holds session lock during graph writes (10s acquire timeout) with guaranteed release in `finally` block. Prevents stale graph reads when turn N+1 arrives before turn N's extraction commits.
+- **Two-tier context read (Step 11)**: Split `_format_context_block()` into two sections: `=== SESSION OVERVIEW ===` (goal, files, decisions, fact count — stable across turns for prompt caching) and `=== RELEVANT CONTEXT ===` (budgeted facts — changes per-turn based on query). Overview comes first (stable prefix benefits API prompt caching).
+- **Context-overflow compaction (Step 12)**: New `src/assembler/compaction.py` with `compact_context()` using the extractor model to summarize oversized context blocks. Triggered when rewritten payload exceeds `context_token_budget`. Gated behind `COMPACTION_ENABLED=true` (default false). Cost: ~$0.001/turn when triggered (rare). Falls back to oversized assembled context on failure.
+- **Config**: `compaction_enabled: bool = False` added to Settings
+- **Metrics**: `compaction_applied` counter added to `/metrics`
+- **26 new tests**: 10 locks, 7 two-tier formatting, 5 compaction, 4 tool normalization
+- **154 tests passing** (up from 128)
+
 ## 2026-05-11 — Embedding-Driven Fact Retrieval (Steps 6b-d)
 
 - **Cosine similarity scoring**: `_cosine_similarity()` + `_score_fact()` — weighted blend: similarity(40%) + recency(30%) + type+confidence(30%) with embeddings; type(40%) + confidence(30%) + recency(30%) without

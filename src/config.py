@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     # Context compaction (overflow fallback)
     compaction_enabled: bool = False
 
+    # Query rewriting for ambiguous messages (resolves pronouns before embedding)
+    query_rewrite_enabled: bool = False
+
     # Retry / resilience
     upstream_max_retries: int = 3
     upstream_retry_backoff_base_s: float = 0.5
