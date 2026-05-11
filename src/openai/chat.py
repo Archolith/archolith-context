@@ -325,30 +325,60 @@ async def _handle_streaming(
 ) -> StreamingResponse:
     """Stream SSE chunks from upstream with response capture and extraction.
 
-    Retry strategy: only the initial connection is retried on 429/5xx or
-    connection errors. Once we start yielding SSE chunks to the client,
-    we cannot retry (the client has already consumed partial output).
-    Connection-level retries happen before committing to the stream.
+    Two-phase architecture:
+      1. Connection-level retry: open client.stream(), check status code.
+         If 429/5xx or connection error, close and retry with backoff.
+         This happens BEFORE any chunks reach the client.
+      2. True SSE passthrough: once status is 200, relay aiter_lines()
+         directly to the client in real-time. No buffering — the client
+         sees tokens as they arrive from upstream. ResponseCapture runs
+         in parallel to accumulate chunks for post-hoc extraction.
+
+    Limitation: once SSE chunks start flowing to the client (phase 2),
+    retry is impossible — the client has already consumed partial output.
+    Mid-stream errors result in a broken stream.
     """
     from src.main import _metrics
     settings = get_settings()
     capture_holder = {"capture": None}
 
     async def stream_generator():
-        # Connection-level retry before streaming begins
+        # --- Phase 1: Connection-level retry ---
+        # Open the stream, check status code, retry if transient error.
+        # The stream context manager gives us headers (status code) before
+        # we start reading the body, so we can decide to retry without
+        # buffering any content.
         max_retries = settings.upstream_max_retries
         backoff_base = settings.upstream_retry_backoff_base_s
-        last_exc = None
+        upstream_resp = None
+        stream_ctx = None  # Track the open stream context for cleanup
 
         for attempt in range(max_retries):
-            try:
-                # Make the connection but don't start reading yet
-                resp = await request.app.state.http_client.post(
-                    url, headers=headers, content=body
-                )
+            # Close previous attempt's context if it exists
+            if stream_ctx is not None:
+                try:
+                    await stream_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+                stream_ctx = None
 
-                # If non-streaming error (429/5xx), retry
+            try:
+                stream_ctx = request.app.state.http_client.stream(
+                    "POST", url, headers=headers, content=body,
+                )
+                resp = await stream_ctx.__aenter__()
+
+                # Check status before committing to stream
                 if resp.status_code in _RETRYABLE_STATUS_CODES:
+                    # Read the small error body so we can close cleanly
+                    await resp.aread()
+                    # Close this attempt — context will be re-opened on next iteration
+                    try:
+                        await stream_ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                    stream_ctx = None
+
                     if attempt < max_retries - 1:
                         delay = backoff_base * (2 ** attempt)
                         logger.warning(
@@ -361,7 +391,7 @@ async def _handle_streaming(
                         await asyncio.sleep(delay)
                         continue
                     else:
-                        # Final attempt failed — yield error to client
+                        # Final attempt failed — yield error SSE event to client
                         _metrics["upstream_errors"] += 1
                         error = json.dumps(
                             {"error": {"message": f"Upstream returned {resp.status_code} after {max_retries} retries", "type": "upstream_error"}}
@@ -369,11 +399,26 @@ async def _handle_streaming(
                         yield f"data: {error}\n\n"
                         return
 
-                # Good response (200) or non-retryable error — stream it
+                # Non-retryable error (e.g. 400, 401) — relay and stop
+                if resp.status_code >= 400:
+                    _metrics["upstream_errors"] += 1
+                    error_body = await resp.aread()
+                    try:
+                        await stream_ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                    stream_ctx = None
+                    yield f"data: {error_body.decode()}\n\n"
+                    return
+
+                # Good response (2xx) — keep the stream open for phase 2
+                upstream_resp = resp
                 break
 
             except (httpx.TimeoutException, httpx.ConnectError) as e:
-                last_exc = e
+                # Context was never entered or already cleaned up
+                stream_ctx = None
+
                 if attempt < max_retries - 1:
                     delay = backoff_base * (2 ** attempt)
                     logger.warning(
@@ -393,7 +438,6 @@ async def _handle_streaming(
                     yield f"data: {error}\n\n"
                     return
         else:
-            # Should not reach here, but safety
             _metrics["upstream_errors"] += 1
             error = json.dumps(
                 {"error": {"message": "All streaming connection attempts exhausted", "type": "upstream_error"}}
@@ -401,31 +445,16 @@ async def _handle_streaming(
             yield f"data: {error}\n\n"
             return
 
-        # At this point we have a response — stream it to the client
-        # Note: if resp.status_code != 200, we relay the error body
+        # --- Phase 2: True SSE passthrough ---
+        # Relay upstream chunks to the client in real-time via aiter_lines().
+        # ResponseCapture accumulates chunks in parallel for post-hoc extraction.
+        capture = None
         try:
-            if resp.status_code != 200:
-                _metrics["upstream_errors"] += 1
-                yield f"data: {resp.text}\n\n"
-                return
-
-            # Parse the response as SSE lines from the buffered content
-            # (since we used .post() not .stream(), content is already buffered)
-            for line in resp.text.split("\n"):
-                if not line:
+            async for line, cap in stream_with_capture(upstream_resp):
+                if cap is not None:
+                    # Final yield from stream_with_capture — capture is complete
+                    capture = cap
                     continue
-
-                # Parse and capture for extraction
-                if line.startswith("data: ") and not line.endswith("[DONE]"):
-                    chunk_data = line[len("data: "):]
-                    if chunk_data.strip():
-                        capture = capture_holder.get("capture")
-                        if capture is None:
-                            from src.proxy.streaming import ResponseCapture
-                            capture = ResponseCapture()
-                            capture_holder["capture"] = capture
-                        capture.add_chunk(chunk_data)
-
                 if line:
                     yield line + "\n\n"
 
@@ -436,19 +465,28 @@ async def _handle_streaming(
                 {"error": {"message": f"Internal proxy error: {e}", "type": "server_error"}}
             )
             yield f"data: {error}\n\n"
+        finally:
+            # Always close the stream context
+            if stream_ctx is not None:
+                try:
+                    await stream_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+
+        capture_holder["capture"] = capture
 
         # Schedule extraction as a background task that runs after streaming completes
         if session_id:
             async def post_stream_extraction():
-                capture = capture_holder.get("capture")
-                if capture and capture.get_full_text():
+                cap = capture_holder.get("capture")
+                if cap and cap.get_full_text():
                     await _run_extraction(
                         client=request.app.state.extractor_client,
                         session_id=session_id,
                         turn_number=turn_number,
                         messages=messages or [],
-                        response_text=capture.get_full_text(),
-                        truncated=capture.truncated,
+                        response_text=cap.get_full_text(),
+                        truncated=cap.truncated,
                     )
 
             background_tasks.add_task(post_stream_extraction)

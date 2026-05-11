@@ -321,6 +321,114 @@ class TestStreamingRetry:
                 # Should have retried
                 assert call_count["n"] >= 2
 
+    @pytest.mark.asyncio
+    async def test_streaming_sse_passthrough_content(self):
+        """Streaming response relays SSE content correctly via true aiter_lines passthrough."""
+        app = create_app()
+        sse_content = _build_sse_chunks("Hello world from upstream")
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            return httpx.Response(200, content=sse_content.encode(), headers={"Content-Type": "text/event-stream"})
+
+        mock_transport = httpx.MockTransport(mock_handler)
+
+        async with app.router.lifespan_context(app):
+            app.state.http_client = httpx.AsyncClient(transport=mock_transport)
+            app.state.neo4j_ready = False
+            transport = ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                resp = await ac.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "test-model",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "stream": True,
+                    },
+                )
+                assert resp.status_code == 200
+                body = resp.text
+                # Should contain SSE data lines
+                assert "data: " in body
+                # Should contain the streamed content words
+                assert "Hello" in body
+                # Should contain [DONE] sentinel
+                assert "[DONE]" in body
+
+    @pytest.mark.asyncio
+    async def test_streaming_non_retryable_error_relayed(self):
+        """Streaming path relays non-retryable errors (e.g. 400) to client."""
+        app = create_app()
+        error_body = {"error": {"message": "Invalid model", "type": "invalid_request_error"}}
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            return httpx.Response(400, json=error_body)
+
+        mock_transport = httpx.MockTransport(mock_handler)
+
+        async with app.router.lifespan_context(app):
+            app.state.http_client = httpx.AsyncClient(transport=mock_transport)
+            app.state.neo4j_ready = False
+            transport = ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                resp = await ac.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "bad-model",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "stream": True,
+                    },
+                )
+                # SSE wrapper is always 200; error content is in the body
+                assert resp.status_code == 200
+                body = resp.text
+                assert "Invalid model" in body
+
+    @pytest.mark.asyncio
+    async def test_streaming_all_retries_exhausted(self):
+        """When all streaming retries are exhausted, error is relayed to client."""
+        app = create_app()
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            return httpx.Response(503, json={"error": {"message": "Service unavailable"}})
+
+        mock_transport = httpx.MockTransport(mock_handler)
+
+        # Patch only the retry settings on the real settings object
+        from src.config import get_settings
+        real_settings = get_settings()
+        original_retries = real_settings.upstream_max_retries
+        original_backoff = real_settings.upstream_retry_backoff_base_s
+        real_settings.upstream_max_retries = 2
+        real_settings.upstream_retry_backoff_base_s = 0.01
+
+        try:
+            async with app.router.lifespan_context(app):
+                app.state.http_client = httpx.AsyncClient(transport=mock_transport)
+                app.state.neo4j_ready = False
+                transport = ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                    resp = await ac.post(
+                        "/v1/chat/completions",
+                        json={
+                            "model": "test-model",
+                            "messages": [{"role": "user", "content": "Hello"}],
+                            "stream": True,
+                        },
+                    )
+                    # SSE wrapper always 200; error content in body
+                    assert resp.status_code == 200
+                    body = resp.text
+                    assert "upstream_error" in body
+        finally:
+            real_settings.upstream_max_retries = original_retries
+            real_settings.upstream_retry_backoff_base_s = original_backoff
+
 
 def _build_sse_chunks(text: str, model: str = "test-model") -> str:
     """Build SSE stream from text content."""
