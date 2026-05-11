@@ -285,6 +285,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
 
             if assembled:
                 original_count = len(body.get("messages", []))
+                original_messages = body["messages"][:]  # Save for compaction re-rewrite
                 body["messages"] = _rewrite_messages(
                     body.get("messages", []),
                     assembled,
@@ -298,6 +299,53 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 rewritten_tokens = _estimate_input_tokens(body["messages"])
                 savings = max(0, input_tokens - rewritten_tokens)
                 _metrics["token_savings_estimated"] += savings
+
+                # Context-overflow compaction: if rewritten payload still exceeds
+                # budget, try LLM compaction of the graph context block
+                if (
+                    settings.compaction_enabled
+                    and rewritten_tokens > settings.context_token_budget
+                    and assembled
+                ):
+                    try:
+                        from src.assembler.compaction import compact_context
+
+                        graph_content = assembled.system_message.get("content", "")
+                        target_tokens = settings.context_token_budget // 2
+                        compacted = await compact_context(
+                            request.app.state.http_client,
+                            context_block=graph_content,
+                            target_tokens=target_tokens,
+                        )
+                        if compacted:
+                            # Replace graph context with compacted version
+                            assembled.system_message["content"] = compacted
+                            # Re-rewrite with compacted context
+                            body["messages"] = _rewrite_messages(
+                                original_messages,
+                                assembled,
+                                settings.coherence_tail_size,
+                                max_tail_messages=settings.max_tail_messages,
+                            )
+                            rewritten_tokens = _estimate_input_tokens(body["messages"])
+                            savings = max(0, input_tokens - rewritten_tokens)
+                            logger.info(
+                                "context_compaction_applied",
+                                session_id=session_id,
+                                turn=turn_number,
+                                rewritten_tokens=rewritten_tokens,
+                                budget=settings.context_token_budget,
+                            )
+                            _metrics["compaction_applied"] += 1
+                    except Exception as e:
+                        logger.warning(
+                            "context_compaction_failed",
+                            session_id=session_id,
+                            turn=turn_number,
+                            error=str(e),
+                        )
+                        # Compaction failed — keep the oversized assembled context
+                        # (better than passthrough, which would send full history)
 
                 logger.info(
                     "messages_rewritten",

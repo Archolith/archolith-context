@@ -33,6 +33,7 @@ _metrics: dict = {
     "neo4j_errors": 0,
     "token_savings_estimated": 0,
     "total_input_tokens_seen": 0,
+    "compaction_applied": 0,
 }
 
 
@@ -252,8 +253,9 @@ def create_app() -> FastAPI:
             "token_savings_estimated": _metrics["token_savings_estimated"],
             "avg_token_savings_per_request": avg_token_savings,
             "token_savings_rate": token_savings_rate,
-            "total_input_tokens_seen": _metrics["total_input_tokens_seen"],
-            "uptime_s": round(time.time() - _metrics["start_time"], 0) if _metrics["start_time"] else 0,
+        "total_input_tokens_seen": _metrics["total_input_tokens_seen"],
+        "compaction_applied": _metrics["compaction_applied"],
+        "uptime_s": round(time.time() - _metrics["start_time"], 0) if _metrics["start_time"] else 0,
         }
 
     # --- Sessions admin endpoints ---
