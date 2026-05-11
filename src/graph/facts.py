@@ -39,19 +39,20 @@ async def store_fact(
         params["embedding"] = embedding
 
     cypher = f"""
-    CREATE (f:{CONTEXT_SESSION_LABEL}:Fact {{
+        CREATE (f:{CONTEXT_SESSION_LABEL}:Fact {{
         fact_id: $fact_id,
         session_id: $session_id,
         content: $content,
         fact_type: $fact_type,
         valid_from: datetime($valid_from),
         valid_until: null,
+        invalidated_at: null,
         confidence: $confidence,
         source_turn: $source_turn,
         embedding: {embedding_prop}
-    }})
-    RETURN f.fact_id
-    """
+        }})
+        RETURN f.fact_id
+        """
     results = await run_write(cypher, params)
     return results[0]["f.fact_id"] if results else fact_id
 
@@ -82,11 +83,11 @@ async def invalidate_facts(fact_ids: list[str]) -> int:
         return 0
     now = datetime.now(timezone.utc).isoformat()
     cypher = f"""
-    MATCH (f:{CONTEXT_SESSION_LABEL}:Fact)
-    WHERE f.fact_id IN $fact_ids AND f.valid_until IS NULL
-    SET f.valid_until = datetime($now)
-    RETURN count(f) AS invalidated
-    """
+        MATCH (f:{CONTEXT_SESSION_LABEL}:Fact)
+        WHERE f.fact_id IN $fact_ids AND f.valid_until IS NULL
+        SET f.valid_until = datetime($now), f.invalidated_at = datetime($now)
+        RETURN count(f) AS invalidated
+        """
     results = await run_write(cypher, {"fact_ids": fact_ids, "now": now})
     return results[0]["invalidated"] if results else 0
 

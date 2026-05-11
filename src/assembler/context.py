@@ -167,6 +167,9 @@ async def assemble_context(
 
     Returns None if the session should use linear passthrough (cold start).
 
+    Graceful degradation: if Neo4j is unreachable, returns None (passthrough)
+    instead of raising. The caller always falls back to linear passthrough.
+
     The assembly includes:
     - Session goal
     - Active (non-expired) facts, budgeted by priority
@@ -195,22 +198,40 @@ async def assemble_context(
         )
         return None
 
-    # Query session graph
-    session_data = await session_repo.find_by_session_id(session_id)
+    # Query session graph — each query is wrapped for graceful degradation
+    try:
+        session_data = await session_repo.find_by_session_id(session_id)
+    except Exception as e:
+        logger.warning("graph_query_failed_session", session_id=session_id, error=str(e))
+        return None
+
     goal = session_data.get("goal") if session_data else None
 
     # Get all active facts
-    all_facts = await facts_repo.get_active_facts(session_id, limit=200)
+    try:
+        all_facts = await facts_repo.get_active_facts(session_id, limit=200)
+    except Exception as e:
+        logger.warning("graph_query_failed_facts", session_id=session_id, error=str(e))
+        all_facts = []
+
     if not all_facts and not goal:
         # No graph data at all — passthrough
         logger.debug("no_graph_data", session_id=session_id)
         return None
 
     # Get touched files
-    files = await _get_touched_files(session_id)
+    try:
+        files = await _get_touched_files(session_id)
+    except Exception as e:
+        logger.warning("graph_query_failed_files", session_id=session_id, error=str(e))
+        files = []
 
     # Get decisions
-    decisions = await _get_decisions(session_id)
+    try:
+        decisions = await _get_decisions(session_id)
+    except Exception as e:
+        logger.warning("graph_query_failed_decisions", session_id=session_id, error=str(e))
+        decisions = []
 
     # Budget: reserve tokens for goal, files, decisions, framing
     # The fact budget is what remains after fixed overhead

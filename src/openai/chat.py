@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 
+import httpx
 import structlog
 from fastapi import APIRouter, Request
 from starlette.background import BackgroundTasks
@@ -25,6 +28,9 @@ from src.proxy.streaming import stream_with_capture
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+# Transient status codes eligible for retry
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def _estimate_input_tokens(messages: list[dict]) -> int:
@@ -86,7 +92,7 @@ def _rewrite_messages(
     tail = rest[-coherence_tail_size:] if len(rest) > coherence_tail_size else rest
 
     # 3. Ensure role alternation: after system messages, the first non-system
-    #    message must be 'user'. Strip any leading assistant/tool messages.
+    # message must be 'user'. Strip any leading assistant/tool messages.
     while tail and tail[0].get("role") not in ("user",):
         tail = tail[1:]
 
@@ -115,10 +121,68 @@ def _rewrite_messages(
     return result
 
 
+def _record_assembly_mode(mode: str) -> None:
+    """Record assembly mode in process-level metrics."""
+    from src.main import _metrics
+    if mode in _metrics["assembly_modes"]:
+        _metrics["assembly_modes"][mode] += 1
+
+
+async def _upstream_request_with_retry(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    headers: dict,
+    content: bytes,
+    max_retries: int = 3,
+    backoff_base: float = 0.5,
+) -> httpx.Response:
+    """Send request to upstream with exponential backoff on transient errors."""
+    from src.main import _metrics
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            resp = await client.post(url, headers=headers, content=content)
+            if resp.status_code not in _RETRYABLE_STATUS_CODES:
+                return resp
+            # Retryable status code
+            if attempt < max_retries - 1:
+                delay = backoff_base * (2 ** attempt)
+                logger.warning(
+                    "upstream_retryable_error",
+                    status=resp.status_code,
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    delay_s=delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                return resp  # Last attempt, return whatever we got
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            last_exc = e
+            if attempt < max_retries - 1:
+                delay = backoff_base * (2 ** attempt)
+                logger.warning(
+                    "upstream_connection_retry",
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    delay_s=delay,
+                    error=str(e),
+                )
+                await asyncio.sleep(delay)
+            else:
+                _metrics["upstream_errors"] += 1
+                raise
+    # Should not reach here, but just in case
+    _metrics["upstream_errors"] += 1
+    raise last_exc or httpx.ConnectError("All retry attempts exhausted")
+
+
 @router.post("/chat/completions")
 async def chat_completions(request: Request, background_tasks: BackgroundTasks) -> Response:
     """Accept OpenAI chat completion requests, forward to upstream,
     resolve session, assemble context, and trigger async fact extraction."""
+    from src.main import _metrics
     settings = get_settings()
 
     # Parse request body
@@ -143,6 +207,10 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     turn_number = 0
     neo4j_ready = getattr(request.app.state, "neo4j_ready", False)
 
+    # Guard: if lifespan didn't initialize http_client, return 503
+    if not hasattr(request.app.state, "http_client"):
+        return make_error_response(503, "Proxy not initialized — lifespan did not complete", "server_error")
+
     if neo4j_ready:
         try:
             headers = {k: v for k, v in request.headers.items()}
@@ -152,17 +220,24 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             logger.debug("session_resolved", session_id=session_id, turn=turn_number, is_new=is_new)
         except Exception as e:
             logger.warning("session_resolution_failed", error=str(e))
+            _metrics["neo4j_errors"] += 1
 
     # Context assembly — rewrite messages if graph has enough data
     assembled = None
+    assembly_mode = "passthrough"
+    input_tokens = _estimate_input_tokens(body.get("messages", []))
+    _metrics["total_input_tokens_seen"] += input_tokens
+
     if session_id and neo4j_ready:
         try:
-            input_tokens = _estimate_input_tokens(body.get("messages", []))
+            assembly_start = time.monotonic()
             assembled = await assemble_context(
                 session_id=session_id,
                 turn_number=turn_number,
                 input_token_estimate=input_tokens,
             )
+            assembly_latency_ms = (time.monotonic() - assembly_start) * 1000
+
             if assembled:
                 original_count = len(body.get("messages", []))
                 body["messages"] = _rewrite_messages(
@@ -171,6 +246,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     settings.coherence_tail_size,
                 )
                 rewritten_count = len(body["messages"])
+                assembly_mode = "graph"
+
+                # Estimate token savings
+                rewritten_tokens = _estimate_input_tokens(body["messages"])
+                savings = max(0, input_tokens - rewritten_tokens)
+                _metrics["token_savings_estimated"] += savings
+
                 logger.info(
                     "messages_rewritten",
                     session_id=session_id,
@@ -179,10 +261,27 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     rewritten_messages=rewritten_count,
                     facts_injected=assembled.facts_retrieved,
                     token_estimate=assembled.token_estimate,
+                    savings_tokens=savings,
+                    assembly_latency_ms=round(assembly_latency_ms, 1),
                 )
+
+                # P99 budget check
+                if assembly_latency_ms > 150:
+                    logger.warning(
+                        "assembly_latency_exceeded_budget",
+                        latency_ms=round(assembly_latency_ms, 1),
+                        budget_ms=150,
+                    )
+            else:
+                # assemble_context returned None = cold start
+                assembly_mode = "cold_start"
         except Exception as e:
             logger.warning("context_assembly_failed", session_id=session_id, error=str(e), exc_info=True)
+            assembly_mode = "fallback"
+            _metrics["neo4j_errors"] += 1
             # Fall through to passthrough — assembly failure must not block requests
+
+    _record_assembly_mode(assembly_mode)
 
     # Build upstream request
     upstream_url = f"{settings.upstream_api_url}/chat/completions"
@@ -217,6 +316,7 @@ async def _handle_streaming(
     messages: list[dict] | None = None,
 ) -> StreamingResponse:
     """Stream SSE chunks from upstream with response capture and extraction."""
+    from src.main import _metrics
     capture_holder = {"capture": None}
 
     async def stream_generator():
@@ -225,6 +325,7 @@ async def _handle_streaming(
                 "POST", url, headers=headers, content=body
             ) as resp:
                 if resp.status_code != 200:
+                    _metrics["upstream_errors"] += 1
                     error_body = await resp.aread()
                     yield f"data: {error_body.decode()}\n\n"
                     return
@@ -237,27 +338,28 @@ async def _handle_streaming(
                         yield line + "\n\n"
 
         except Exception as e:
+            _metrics["upstream_errors"] += 1
             logger.error("streaming_error", error=str(e), exc_info=True)
             error = json.dumps(
                 {"error": {"message": f"Internal proxy error: {e}", "type": "server_error"}}
             )
             yield f"data: {error}\n\n"
 
-    # Schedule extraction as a background task that runs after streaming completes
-    if session_id:
-        async def post_stream_extraction():
-            capture = capture_holder["capture"]
-            if capture and capture.get_full_text():
-                await _run_extraction(
-                    client=request.app.state.extractor_client,
-                    session_id=session_id,
-                    turn_number=turn_number,
-                    messages=messages or [],
-                    response_text=capture.get_full_text(),
-                    truncated=capture.truncated,
-                )
+        # Schedule extraction as a background task that runs after streaming completes
+        if session_id:
+            async def post_stream_extraction():
+                capture = capture_holder["capture"]
+                if capture and capture.get_full_text():
+                    await _run_extraction(
+                        client=request.app.state.extractor_client,
+                        session_id=session_id,
+                        turn_number=turn_number,
+                        messages=messages or [],
+                        response_text=capture.get_full_text(),
+                        truncated=capture.truncated,
+                    )
 
-        background_tasks.add_task(post_stream_extraction)
+            background_tasks.add_task(post_stream_extraction)
 
     return StreamingResponse(
         stream_generator(),
@@ -281,14 +383,25 @@ async def _handle_non_streaming(
     turn_number: int = 0,
     messages: list[dict] | None = None,
 ) -> Response:
-    """Handle non-streaming request with extraction."""
-    import httpx
+    """Handle non-streaming request with retry and extraction."""
+    from src.main import _metrics
+    settings = get_settings()
 
     try:
-        resp = await request.app.state.http_client.post(url, headers=headers, content=body)
+        resp = await _upstream_request_with_retry(
+            client=request.app.state.http_client,
+            method="POST",
+            url=url,
+            headers=headers,
+            content=body,
+            max_retries=settings.upstream_max_retries,
+            backoff_base=settings.upstream_retry_backoff_base_s,
+        )
     except httpx.TimeoutException:
+        _metrics["upstream_errors"] += 1
         return make_error_response(504, "Upstream request timed out", "upstream_timeout", code="timeout")
     except httpx.ConnectError as e:
+        _metrics["upstream_errors"] += 1
         return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
 
     # Schedule extraction as background task
@@ -330,6 +443,7 @@ async def _run_extraction(
     truncated: bool = False,
 ) -> None:
     """Run fact extraction and store results in graph. Best-effort, non-blocking."""
+    from src.main import _metrics
     try:
         # Extract user message (last user message in the request)
         user_message = ""
@@ -352,6 +466,7 @@ async def _run_extraction(
                 if isinstance(content, str):
                     tool_results += content[:2000] + "\n"
 
+        extraction_start = time.monotonic()
         result = await extract_facts(
             http_client=client,
             turn_number=turn_number,
@@ -359,9 +474,11 @@ async def _run_extraction(
             assistant_response=response_text[:8000],
             tool_results=tool_results[:4000] if tool_results else None,
         )
+        extraction_latency_ms = (time.monotonic() - extraction_start) * 1000
 
         if not result or not result.facts:
             logger.info("extraction_empty", session_id=session_id, turn=turn_number)
+            _metrics["extraction_successes"] += 1
             return
 
         # Store facts
@@ -403,14 +520,17 @@ async def _run_extraction(
 
         # Log active fact count for monitoring
         active_count = await facts_repo.get_active_fact_count(session_id)
+        _metrics["extraction_successes"] += 1
         logger.info(
             "extraction_stored",
             session_id=session_id,
             turn=turn_number,
             facts_stored=len(result.facts),
             active_fact_count=active_count,
+            extraction_latency_ms=round(extraction_latency_ms, 1),
             warning="high_active_count" if active_count > 200 else None,
         )
 
     except Exception as e:
+        _metrics["extraction_failures"] += 1
         logger.warning("extraction_task_failed", session_id=session_id, turn=turn_number, error=str(e), exc_info=True)

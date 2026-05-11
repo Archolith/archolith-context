@@ -68,11 +68,20 @@ FOR (n:Fact) ON (n.fact_type);
 CREATE INDEX fact_valid_until_idx IF NOT EXISTS
 FOR (n:Fact) ON (n.valid_until);
 
+CREATE INDEX fact_session_id_idx IF NOT EXISTS
+FOR (n:Fact) ON (n.session_id);
+
+CREATE INDEX file_session_id_idx IF NOT EXISTS
+FOR (n:File) ON (n.session_id);
+
 CREATE INDEX session_last_active_idx IF NOT EXISTS
 FOR (n:Session) ON (n.last_active);
 
 CREATE INDEX session_status_idx IF NOT EXISTS
 FOR (n:Session) ON (n.status);
+
+CREATE INDEX fact_invalidated_at_idx IF NOT EXISTS
+FOR (n:Fact) ON (n.invalidated_at);
 """
 
 

@@ -1,0 +1,53 @@
+version: "3.8"
+
+services:
+  context-engine:
+    build: .
+    ports:
+      - "9800:9800"
+    environment:
+      # Required — override these in .env or at runtime
+      - UPSTREAM_API_KEY=${UPSTREAM_API_KEY:-}
+      - EXTRACTOR_API_KEY=${EXTRACTOR_API_KEY:-}
+      - SESSION_NEO4J_PASSWORD=password
+      # Upstream and extraction endpoints
+      - UPSTREAM_BASE_URL=${UPSTREAM_BASE_URL:-https://api.deepseek.com/v1}
+      - EXTRACTOR_BASE_URL=${EXTRACTOR_BASE_URL:-https://api.openai.com/v1}
+      - EXTRACTOR_MODEL=${EXTRACTOR_MODEL:-gpt-4.1-mini}
+      # Neo4j connection (uses the neo4j service below)
+      - SESSION_NEO4J_URI=bolt://neo4j:7687
+      - SESSION_NEO4J_DATABASE=neo4j
+      - SESSION_NEO4J_USER=neo4j
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:9800/health'); assert r.status_code == 200"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "7474:7474"  # HTTP browser
+      - "7687:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password", "RETURN 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:
+  neo4j_logs:

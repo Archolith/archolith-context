@@ -38,5 +38,8 @@ coverage.xml
 Thumbs.db
 .DS_Store
 
+# Docker
+docker-compose.override.yml
+
 # Adversarial review scratch
 adversarial-review-output.md
