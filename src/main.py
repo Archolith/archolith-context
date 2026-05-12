@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -104,6 +104,10 @@ async def lifespan(app: FastAPI):
         )
     else:
         logger.info("neo4j_not_configured", note="set SESSION_NEO4J_PASSWORD to enable graph features")
+
+    # Live stream broadcaster (WebSocket pub/sub)
+    from src.proxy.live import get_live_stream
+    app.state.live_stream = get_live_stream()
 
     # Optional: check upstream connectivity (warn-only, not fatal)
     try:
@@ -286,6 +290,40 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.warning("session_stats_failed", session_id=session_id, error=str(e))
             return JSONResponse(status_code=503, content={"error": f"Neo4j error: {e}"})
+
+    # --- WebSocket live stream endpoint ---
+    @app.websocket("/ws/stream")
+    async def ws_live_stream(websocket: WebSocket) -> None:
+        """WebSocket endpoint for real-time proxy event streaming.
+
+        Clients connect and receive JSON events for every request, assembly,
+        response, extraction, and recall event that flows through the proxy.
+        Slow clients are disconnected after 256 queued events.
+        """
+        await websocket.accept()
+        live_stream = getattr(app.state, "live_stream", None)
+        if not live_stream:
+            await websocket.close(code=1011, reason="Live stream not initialized")
+            return
+
+        q = await live_stream.subscribe()
+        logger.info("live_stream_client_connected", subscribers=live_stream.subscriber_count)
+
+        try:
+            while True:
+                event = await q.get()
+                if event.get("type") == "dropped":
+                    await websocket.send_json(event)
+                    await websocket.close(code=1008, reason="Queue overflow - too slow")
+                    break
+                await websocket.send_json(event)
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug("live_stream_client_error", error=str(e))
+        finally:
+            await live_stream.unsubscribe(q)
+            logger.info("live_stream_client_disconnected", subscribers=live_stream.subscriber_count)
 
     return app
 

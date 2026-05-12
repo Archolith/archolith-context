@@ -24,6 +24,10 @@ from src.models.graph_nodes import FactType, FileStatus
 from src.openai.errors import make_error_response
 from src.openai.schemas import ChatCompletionRequest
 from src.proxy.session import resolve_session
+from src.proxy.live import (
+    broadcast_request, broadcast_assembly, broadcast_response,
+    broadcast_extraction, broadcast_session_event, broadcast_recall,
+)
 from src.proxy.streaming import ResponseCapture, stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _non_streaming_to_sse
 
 logger = structlog.get_logger()
@@ -286,6 +290,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     input_tokens = _estimate_input_tokens(body.get("messages", []))
     _metrics["total_input_tokens_seen"] += input_tokens
 
+    # Live stream: broadcast incoming request
+    await broadcast_request(
+        session_id=session_id, turn_number=turn_number,
+        model=req.model, message_count=len(body.get("messages", [])),
+        stream=req.stream, input_tokens=input_tokens,
+    )
+
     if session_id and neo4j_ready:
         try:
             # Wait for prior turn's extraction to commit before reading graph state
@@ -409,6 +420,15 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             # Fall through to passthrough — assembly failure must not block requests
 
     _record_assembly_mode(assembly_mode)
+
+    # Live stream: broadcast assembly result
+    await broadcast_assembly(
+        session_id=session_id, turn_number=turn_number,
+        mode=assembly_mode,
+        facts_injected=assembled.facts_retrieved if assembled else 0,
+        token_savings=savings if assembled else 0,
+        latency_ms=assembly_latency_ms if assembled else 0.0,
+    )
 
     # Bind assembly_mode for request-level logging middleware
     structlog.contextvars.bind_contextvars(assembly_mode=assembly_mode)
@@ -848,6 +868,12 @@ async def _handle_streaming(
                 )
             background_tasks.add_task(post_recall_stream_extraction)
 
+    # Live stream: broadcast response event (streaming)
+    await broadcast_response(
+        session_id=session_id, turn_number=turn_number,
+        status=200, latency_ms=0.0, output_tokens=None,
+    )
+
     return StreamingResponse(
         stream_generator(),
         media_type="text/event-stream",
@@ -894,6 +920,12 @@ async def _handle_non_streaming(
         _metrics["upstream_errors"] += 1
         return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
 
+    # Live stream: broadcast response event
+    await broadcast_response(
+        session_id=session_id, turn_number=turn_number,
+        status=resp.status_code, latency_ms=0.0, output_tokens=None,
+    )
+
     # Check for recall tool call interception (non-streaming only for now)
     if recall_injected and session_id:
         try:
@@ -932,6 +964,12 @@ async def _handle_non_streaming(
                         session_id=session_id,
                         question=question,
                         turn_number=turn_number,
+                    )
+
+                    # Live stream: broadcast recall event
+                    await broadcast_recall(
+                        session_id=session_id, turn_number=turn_number,
+                        question=question, facts_returned=0,
                     )
 
                     # Build the tool result message
@@ -1143,6 +1181,7 @@ async def _run_extraction(
             try:
                 await session_repo.update_goal(session_id, result.session_goal)
                 logger.info("session_goal_updated", session_id=session_id, goal=result.session_goal[:80])
+                await broadcast_session_event(session_id, "goal_updated", goal=result.session_goal)
             except Exception as e:
                 logger.warning("session_goal_update_failed", session_id=session_id, error=str(e))
 
@@ -1206,6 +1245,14 @@ async def _run_extraction(
             active_fact_count=active_count,
             extraction_latency_ms=round(extraction_latency_ms, 1),
             warning="high_active_count" if active_count > 200 else None,
+        )
+
+        # Live stream: broadcast extraction result
+        await broadcast_extraction(
+            session_id=session_id, turn_number=turn_number,
+            facts_stored=len(result.facts),
+            session_goal=result.session_goal,
+            latency_ms=extraction_latency_ms,
         )
 
     except Exception as e:

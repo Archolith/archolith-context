@@ -1,5 +1,29 @@
 # Changelog — cth.context-engine
 
+## 2026-05-12 — Live Stream WebSocket (Phase 6)
+
+- **LiveStream module (`src/proxy/live.py`)**: Process-level pub/sub hub using `asyncio.Queue` per subscriber. Supports `broadcast()`, `subscribe()`, `unsubscribe()`. Slow consumers (queue overflow) are auto-dropped with a `dropped` sentinel. Module singleton via `get_live_stream()`/`reset_live_stream()`.
+- **Convenience broadcast functions**: `broadcast_request()`, `broadcast_assembly()`, `broadcast_response()`, `broadcast_extraction()`, `broadcast_session_event()`, `broadcast_recall()` — all skip serialization work when `subscriber_count == 0` for zero-overhead when no one is watching.
+- **chat.py integration**: All 7 broadcast call sites wired in — request (after token estimation), assembly (after `_record_assembly_mode`), session events (initial goal set + goal updated), response (streaming + non-streaming), extraction (after `_run_extraction` success), recall (streaming + non-streaming recall interception).
+- **WebSocket endpoint (`/ws/stream`)**: Added to `main.py` inside `create_app()`. Clients connect, receive JSON events in real-time. Disconnected on overflow or client disconnect.
+- **LiveStream initialization**: Added to lifespan in `create_app()`, stored on `app.state.live_stream`.
+- **Terminal monitor (`scripts/live_monitor.py`)**: Color-coded terminal client that connects to the WebSocket, filters event types, and displays real-time proxy activity. Supports `--filter`, `--verbose`, `--reconnect`.
+- **21 new tests**: `TestLiveStreamCore` (8), `TestSingleton` (3), `TestConvenienceBroadcasts` (10) in `tests/test_proxy/test_live_stream.py`.
+- **258 tests passing** (up from 237).
+
+## 2026-05-12 — Session Goal Extraction
+
+- **ExtractionResult.session_goal**: New field on the DTO to carry the extracted session goal from the extraction model.
+- **Extraction prompt**: Updated `SYSTEM_PROMPT` with `session_goal` in the output schema, "Session Goal" extraction rules, and example output. Rule 9 added: "ALWAYS extract a session_goal, even if you can only make a rough inference."
+- **client.py**: `_parse_extraction_response()` now extracts `session_goal` from the model's JSON response and passes it to `ExtractionResult`.
+- **build_extraction_prompt()**: Accepts `session_goal` parameter; if provided, includes "Session goal: X" in the prompt so the extraction model can refine it.
+- **chat.py — initial goal**: On new sessions, the first user message is truncated to a single-sentence goal and set via `session_repo.update_goal()` immediately. This ensures `assemble_context()` never returns `None` due to empty goal on cold start.
+- **chat.py — goal fetch**: After session resolution, the current session goal is fetched from Neo4j for extraction context.
+- **chat.py — goal pass-through**: `session_goal` parameter added to `_handle_streaming`, `_handle_non_streaming`, and `_run_extraction`. All three `_run_extraction` call sites (streaming, recall stream, non-streaming, recall non-streaming) pass `session_goal`.
+- **_run_extraction**: Calls `extract_facts()` with `session_goal`, then calls `session_repo.update_goal()` if the extractor returns a refined goal.
+- **Bootstrap loop fix**: Root cause was `goal: null` on new sessions — assemble_context returned None, so no graph context was assembled, and the agent looped MCP memory bootstrap. With initial goal from turn 1, assembly always has a goal anchor.
+- **237 tests passing**.
+
 ## 2026-05-12 — Streaming Recall Interception (Phase 5b)
 
 - **StreamingToolCallAccumulator (`src/proxy/streaming.py`)**: Reassembles streaming `delta.tool_calls` fragments into complete tool_call objects matching the non-streaming format. Tracks first_tool_name for early decision-making.
