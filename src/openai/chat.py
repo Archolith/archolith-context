@@ -849,12 +849,6 @@ async def _handle_streaming(
                 except Exception:
                     pass
 
-        # Live stream: broadcast response event (streaming - after stream completes)
-        await broadcast_response(
-            session_id=session_id, turn_number=turn_number,
-            status=200, latency_ms=0.0, output_tokens=None,
-        )
-
         capture_holder["capture"] = capture
 
         # Schedule extraction as a background task that runs after streaming completes
@@ -886,6 +880,14 @@ async def _handle_streaming(
                     session_goal=session_goal,
                 )
             background_tasks.add_task(post_recall_stream_extraction)
+
+    # Live stream: broadcast response event (streaming — runs after stream completes)
+    async def _broadcast_streaming_response():
+        await broadcast_response(
+            session_id=session_id, turn_number=turn_number,
+            status=200, latency_ms=0.0, output_tokens=None,
+        )
+    background_tasks.add_task(_broadcast_streaming_response)
 
     return StreamingResponse(
         stream_generator(),
