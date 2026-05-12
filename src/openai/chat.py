@@ -344,73 +344,105 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 savings = max(0, input_tokens - rewritten_tokens)
                 _metrics["token_savings_estimated"] += savings
 
-                # Context-overflow compaction: if rewritten payload still exceeds
-                # budget, try LLM compaction of the graph context block
-                if (
-                    settings.compaction_enabled
-                    and rewritten_tokens > settings.context_token_budget
-                    and assembled
-                ):
-                    try:
-                        from src.assembler.compaction import compact_context
+                # Savings-ratio gate: revert to passthrough if rewriting
+                # doesn't save meaningful tokens. Short/moderate conversations
+                # lose more continuity than they gain in compression.
+                savings_ratio = savings / max(input_tokens, 1)
+                if input_tokens < settings.assembly_min_input_tokens:
+                    # Conversation is small enough to fit entirely — passthrough
+                    logger.info(
+                        "assembly_skipped_low_tokens",
+                        session_id=session_id,
+                        turn=turn_number,
+                        input_tokens=input_tokens,
+                        min_tokens=settings.assembly_min_input_tokens,
+                        savings_ratio=round(savings_ratio, 3),
+                    )
+                    body["messages"] = original_messages
+                    assembly_mode = "skipped_low_tokens"
+                elif savings_ratio < settings.assembly_min_savings_ratio:
+                    # Rewriting barely saves anything — keep full history
+                    logger.info(
+                        "assembly_skipped_low_savings",
+                        session_id=session_id,
+                        turn=turn_number,
+                        savings_ratio=round(savings_ratio, 3),
+                        min_ratio=settings.assembly_min_savings_ratio,
+                        savings_tokens=savings,
+                        input_tokens=input_tokens,
+                    )
+                    body["messages"] = original_messages
+                    assembly_mode = "skipped_low_savings"
+                else:
+                    # Savings justify rewriting — proceed with compaction check
 
-                        graph_content = assembled.system_message.get("content", "")
-                        target_tokens = settings.context_token_budget // 2
-                        compacted = await compact_context(
-                            request.app.state.http_client,
-                            context_block=graph_content,
-                            target_tokens=target_tokens,
-                        )
-                        if compacted:
-                            # Replace graph context with compacted version
-                            assembled.system_message["content"] = compacted
-                            # Re-rewrite with compacted context
-                            body["messages"] = _rewrite_messages(
-                                original_messages,
-                                assembled,
-                                settings.coherence_tail_size,
-                                max_tail_messages=settings.max_tail_messages,
+                    # Context-overflow compaction: if rewritten payload still exceeds
+                    # budget, try LLM compaction of the graph context block
+                    if (
+                        settings.compaction_enabled
+                        and rewritten_tokens > settings.context_token_budget
+                        and assembled
+                    ):
+                        try:
+                            from src.assembler.compaction import compact_context
+
+                            graph_content = assembled.system_message.get("content", "")
+                            target_tokens = settings.context_token_budget // 2
+                            compacted = await compact_context(
+                                request.app.state.http_client,
+                                context_block=graph_content,
+                                target_tokens=target_tokens,
                             )
-                            rewritten_tokens = _estimate_input_tokens(body["messages"])
-                            savings = max(0, input_tokens - rewritten_tokens)
-                            logger.info(
-                                "context_compaction_applied",
+                            if compacted:
+                                # Replace graph context with compacted version
+                                assembled.system_message["content"] = compacted
+                                # Re-rewrite with compacted context
+                                body["messages"] = _rewrite_messages(
+                                    original_messages,
+                                    assembled,
+                                    settings.coherence_tail_size,
+                                    max_tail_messages=settings.max_tail_messages,
+                                )
+                                rewritten_tokens = _estimate_input_tokens(body["messages"])
+                                savings = max(0, input_tokens - rewritten_tokens)
+                                logger.info(
+                                    "context_compaction_applied",
+                                    session_id=session_id,
+                                    turn=turn_number,
+                                    rewritten_tokens=rewritten_tokens,
+                                    budget=settings.context_token_budget,
+                                )
+                                _metrics["compaction_applied"] += 1
+                        except Exception as e:
+                            logger.warning(
+                                "context_compaction_failed",
                                 session_id=session_id,
                                 turn=turn_number,
-                                rewritten_tokens=rewritten_tokens,
-                                budget=settings.context_token_budget,
+                                error=str(e),
                             )
-                            _metrics["compaction_applied"] += 1
-                    except Exception as e:
-                        logger.warning(
-                            "context_compaction_failed",
-                            session_id=session_id,
-                            turn=turn_number,
-                            error=str(e),
-                        )
-                        # Compaction failed — keep the oversized assembled context
-                        # (better than passthrough, which would send full history)
+                            # Compaction failed — keep the oversized assembled context
+                            # (better than passthrough, which would send full history)
 
-                logger.info(
-                    "messages_rewritten",
-                    session_id=session_id,
-                    turn=turn_number,
-                    original_messages=original_count,
-                    rewritten_messages=rewritten_count,
-                    facts_injected=assembled.facts_retrieved,
-                    token_estimate=assembled.token_estimate,
-                    savings_tokens=savings,
-                    assembly_latency_ms=round(assembly_latency_ms, 1),
-                )
-
-                # P99 budget check — log warning but use the assembled context
-                # (assembly already completed, discarding would waste the work)
-                if assembly_latency_ms > settings.assembly_latency_budget_ms:
-                    logger.warning(
-                        "assembly_latency_exceeded_budget",
-                        latency_ms=round(assembly_latency_ms, 1),
-                        budget_ms=settings.assembly_latency_budget_ms,
+                    logger.info(
+                        "messages_rewritten",
+                        session_id=session_id,
+                        turn=turn_number,
+                        original_messages=original_count,
+                        rewritten_messages=rewritten_count,
+                        facts_injected=assembled.facts_retrieved,
+                        token_estimate=assembled.token_estimate,
+                        savings_tokens=savings,
+                        assembly_latency_ms=round(assembly_latency_ms, 1),
                     )
+
+                    # P99 budget check — log warning but use the assembled context
+                    # (assembly already completed, discarding would waste the work)
+                    if assembly_latency_ms > settings.assembly_latency_budget_ms:
+                        logger.warning(
+                            "assembly_latency_exceeded_budget",
+                            latency_ms=round(assembly_latency_ms, 1),
+                            budget_ms=settings.assembly_latency_budget_ms,
+                        )
             else:
                 # assemble_context returned None = cold start
                 assembly_mode = "cold_start"

@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     cold_start_turns: int = 3
     cold_start_token_threshold: int = 20000
 
+    # Savings-ratio gate: only rewrite when it actually saves meaningful tokens
+    assembly_min_savings_ratio: float = 0.20  # Skip rewriting if savings < 20%
+    assembly_min_input_tokens: int = 50000    # Don't rewrite below 50K input tokens
+
     # Embedding-driven retrieval
     embedding_enabled: bool = False
 

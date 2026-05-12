@@ -1,5 +1,14 @@
 # Changelog — cth.context-engine
 
+## 2026-05-12 — Savings-Ratio Gate for Context Assembly
+
+- **Problem**: The context engine was too aggressive for short/moderate conversations (5-20 messages). With `coherence_tail_size=3` and 4.3% token savings, it destroyed agent continuity (tool call history, prior decisions) while barely saving any tokens.
+- **`assembly_min_input_tokens` (default: 50000)**: Don't rewrite conversations below 50K input tokens. Short conversations fit entirely in the model's context window — passthrough is strictly better.
+- **`assembly_min_savings_ratio` (default: 0.20)**: Even for larger conversations, skip rewriting if savings < 20%. A 4% savings rate doesn't justify destroying the middle of the conversation.
+- **Two new assembly modes**: `skipped_low_tokens` (input under floor) and `skipped_low_savings` (savings ratio under threshold). Both revert to passthrough, preserving the full conversation history.
+- **Metrics**: New modes tracked in `_metrics["assembly_modes"]`.
+- **258 tests passing**.
+
 ## 2026-05-12 — Live Stream WebSocket (Phase 6)
 
 - **LiveStream module (`src/proxy/live.py`)**: Process-level pub/sub hub using `asyncio.Queue` per subscriber. Supports `broadcast()`, `subscribe()`, `unsubscribe()`. Slow consumers (queue overflow) are auto-dropped with a `dropped` sentinel. Module singleton via `get_live_stream()`/`reset_live_stream()`.
