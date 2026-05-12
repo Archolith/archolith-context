@@ -657,6 +657,7 @@ async def _handle_streaming(
                             # Re-send as non-streaming for reliable interception
                             resend_body = json.dumps({
                                 **body_dict,
+                                "stream": False,
                                 "messages": resend_messages,
                             }).encode("utf-8")
 
@@ -726,6 +727,7 @@ async def _handle_streaming(
 
                                     third_body = json.dumps({
                                         **body_dict,
+                                        "stream": False,
                                         "messages": third_messages,
                                     }).encode("utf-8")
 
@@ -753,14 +755,10 @@ async def _handle_streaming(
                                 yield sse_line + "\n\n"
 
                             # Set up capture from the final response for extraction
+                            # The re-send was non-streaming, so use set_non_streaming_response
+                            # which handles message.content (not delta.content) correctly.
                             capture = ResponseCapture()
-                            final_text = ""
-                            final_choices = second_data.get("choices", [])
-                            if final_choices:
-                                final_msg = final_choices[0].get("message", {})
-                                final_text = final_msg.get("content", "") or ""
-                            if final_text:
-                                capture.add_chunk(json.dumps(second_data))
+                            capture.set_non_streaming_response(second_data)
 
             else:
                 # Standard passthrough — no recall detection needed

@@ -47,6 +47,7 @@ class ResponseCapture:
         self._truncated = False
         self._model = ""
         self._finish_reason: str | None = None
+        self._direct_text: str | None = None  # For non-streaming responses
 
     def add_chunk(self, chunk_data: str) -> None:
         """Add a parsed SSE chunk to the buffer."""
@@ -80,20 +81,53 @@ class ResponseCapture:
             pass
 
     def get_full_text(self) -> str:
-        """Reassemble the full assistant response text from captured chunks."""
+        """Reassemble the full assistant response text from captured chunks.
+
+        Handles both streaming chunks (delta.content) and non-streaming
+        responses (message.content) stored via add_chunk or set_non_streaming_response.
+        """
+        # If a non-streaming response was stored directly, return its text
+        if self._direct_text is not None:
+            return self._direct_text
+
         texts: list[str] = []
         for chunk_data in self._chunks:
             try:
                 data = json.loads(chunk_data)
                 choices = data.get("choices", [])
                 if choices:
+                    # Streaming format: delta.content
                     delta = choices[0].get("delta", {})
                     content = delta.get("content")
                     if content:
                         texts.append(content)
+                    # Non-streaming format: message.content
+                    if not delta:
+                        message = choices[0].get("message", {})
+                        content = message.get("content")
+                        if content:
+                            texts.append(content)
             except (json.JSONDecodeError, IndexError, KeyError):
                 continue
         return "".join(texts)
+
+    def set_non_streaming_response(self, response_data: dict) -> None:
+        """Store a non-streaming response dict for extraction.
+
+        This is used when the proxy intercepts a recall tool call during
+        streaming and re-sends as non-streaming. The response is in
+        non-streaming format (message.content, not delta.content), so
+        get_full_text() needs to handle it differently.
+        """
+        choices = response_data.get("choices", [])
+        if choices:
+            message = choices[0].get("message", {})
+            self._direct_text = message.get("content") or ""
+            fr = choices[0].get("finish_reason")
+            if fr:
+                self._finish_reason = fr
+        if response_data.get("model"):
+            self._model = response_data["model"]
 
     @property
     def model(self) -> str:
@@ -472,19 +506,22 @@ async def stream_with_recall_detection(
                 decision_made = True
                 is_recall = False
 
+            # Handle the decision on the same iteration it was made
             if decision_made:
                 if is_recall:
-                    # Continue buffering the rest of the stream for recall processing
+                    # Copy buffered lines into recall buffer (current line
+                    # is already in buffered_lines). Continue to next line
+                    # to avoid duplicating it in recall_buffered_lines below.
                     recall_buffered_lines = list(buffered_lines)
-                    # The current line is already in buffered_lines, so it's
-                    # captured in recall_buffered_lines. Continue to next line.
+                    continue
                 else:
                     # Flush buffered lines and switch to passthrough
                     for bl in buffered_lines:
                         yield (bl, None, None)
                     buffered_lines = []
-                    # The current line was already yielded above (it's in buffered_lines).
-                    # Skip the passthrough yield for this iteration.
+                    # The current line was already yielded above (it's in
+                    # buffered_lines). Skip the passthrough yield for this
+                    # iteration.
                     continue
 
         if decision_made and is_recall:
