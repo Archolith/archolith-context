@@ -1,5 +1,18 @@
 # Changelog — cth.context-engine
 
+## 2026-05-12 — Bug Fixes: Fact Invalidation, Metrics Modes
+
+- **P1 — Fact invalidation was a no-op**: The extractor returns description strings like "The build error on line 42 was fixed" in the `invalidated` list, but `invalidate_facts()` tried to match them against hex `fact_id` values — which never matched. Stale facts accumulated instead of being retired. Fix: added `find_matching_fact_ids()` in `facts.py` that uses Jaccard similarity (threshold 0.60) to match description strings to active fact IDs, then invalidates those. The chat.py write path now calls `find_matching_fact_ids()` before `invalidate_facts()`.
+- **P2 — /metrics dropped two assembly modes**: `skipped_low_tokens` and `skipped_low_savings` weren't in the `_metrics["assembly_modes"]` initialization dict, so `_record_assembly_mode()` silently dropped them. Both modes now tracked in metrics.
+- **P2 (query-rewrite) — false positive**: Reviewed the alleged `UnboundLocalError` risk in `context.py`. The `rewritten` variable is only assigned and read inside `if needs_rewrite()`, so no error occurs when the condition is false. No code change needed.
+- **10 new invalidation tests** in `tests/test_graph/test_fact_invalidation.py`. **301 tests passing**.
+
+## 2026-05-12 — Docs: Product Description + Technical Thesis
+
+- **Architecture framing updated**: Added a concise project description and a technical thesis to `.agent/architecture.md`, clarifying that the project is a continual context curation proxy rather than just a graph-memory experiment.
+- **Technical draft sharpened**: Added `Executive Summary` and `Design Thesis` sections to `docs/DRAFT-graph-context-engine.md` so the design doc now states the project goal in plain language: lower token spend, less destructive compaction, and better continuity by replacing append-only replay with a curated working set.
+- **Novelty language tightened**: Reframed novelty as an architectural integration pattern — harness-agnostic proxy + session-local curated memory + off-path extraction — rather than overclaiming algorithmic novelty.
+
 ## 2026-05-12 — Extraction Quality Remediation
 
 - **Extraction prompt rewrite**: `SYSTEM_PROMPT` rewritten with tool_result as first-listed fact type, two explicit rules requiring RESULTS-not-INTENT extraction (Rules 1-2), bad/good examples with concrete output, and a BAD Example section showing what NOT to extract (e.g., "User wants to explore yawn.frontend" → BAD, "Frontend has 14 .tsx files, uses React 18" → GOOD).
