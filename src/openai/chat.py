@@ -1237,12 +1237,26 @@ async def _run_extraction(
             _metrics["extraction_successes"] += 1
             return
 
-        # Batch compute embeddings for all extracted facts
-        fact_contents = [fact.get("content", "") for fact in result.facts]
+        # Deduplicate: fetch existing active facts and filter duplicates
+        from src.extractor.dedup import deduplicate_facts as _deduplicate_facts
+        existing_facts = await facts_repo.get_active_facts(session_id, limit=200)
+        unique_facts = _deduplicate_facts(result.facts, existing_facts)
+        if len(unique_facts) < len(result.facts):
+            logger.info(
+                "extraction_dedup_applied",
+                session_id=session_id,
+                turn=turn_number,
+                original=len(result.facts),
+                after_dedup=len(unique_facts),
+                duplicates_removed=len(result.facts) - len(unique_facts),
+            )
+
+        # Batch compute embeddings for deduplicated facts only
+        fact_contents = [fact.get("content", "") for fact in unique_facts]
         embeddings = await _compute_fact_embeddings(client, fact_contents)
 
-        # Store facts with their embeddings
-        for i, fact in enumerate(result.facts):
+        # Store deduplicated facts with their embeddings
+        for i, fact in enumerate(unique_facts):
             content = fact.get("content", "")
             fact_type_str = fact.get("fact_type", "observation")
             try:
@@ -1287,7 +1301,7 @@ async def _run_extraction(
             "extraction_stored",
             session_id=session_id,
             turn=turn_number,
-            facts_stored=len(result.facts),
+            facts_stored=len(unique_facts),
             embeddings_computed=embedding_count,
             active_fact_count=active_count,
             extraction_latency_ms=round(extraction_latency_ms, 1),
@@ -1297,7 +1311,7 @@ async def _run_extraction(
         # Live stream: broadcast extraction result
         await broadcast_extraction(
             session_id=session_id, turn_number=turn_number,
-            facts_stored=len(result.facts),
+            facts_stored=len(unique_facts),
             session_goal=result.session_goal,
             latency_ms=extraction_latency_ms,
         )

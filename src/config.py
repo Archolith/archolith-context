@@ -42,7 +42,7 @@ class Settings(BaseSettings):
 
     # Proxy settings
     proxy_port: int = 9800
-    coherence_tail_size: int = 3
+    coherence_tail_size: int = 10
     max_tail_messages: int = 20
     context_token_budget: int = 15000
     session_ttl_hours: int = 24
