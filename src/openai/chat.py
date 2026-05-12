@@ -263,6 +263,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     try:
                         await session_repo.update_goal(session_id, goal)
                         logger.info("session_goal_set_initial", session_id=session_id, goal=goal[:80])
+                        await broadcast_session_event(session_id, "session_created", goal=goal)
                     except Exception as e:
                         logger.warning("session_goal_set_failed", session_id=session_id, error=str(e))
 
@@ -675,6 +676,12 @@ async def _handle_streaming(
                                 turn_number=turn_number,
                             )
 
+                            # Live stream: broadcast recall event
+                            await broadcast_recall(
+                                session_id=session_id, turn_number=turn_number,
+                                question=question, facts_returned=0,
+                            )
+
                             # Assemble the model message from the buffered stream
                             first_response = _assemble_streaming_response(
                                 recall_result_obj.capture._chunks,
@@ -759,6 +766,12 @@ async def _handle_streaming(
                                         turn_number=turn_number,
                                     )
 
+                                    # Live stream: broadcast second recall event
+                                    await broadcast_recall(
+                                        session_id=session_id, turn_number=turn_number,
+                                        question=second_question, facts_returned=0,
+                                    )
+
                                     second_model_msg = second_data["choices"][0]["message"]
                                     second_remaining_calls = [
                                         tc for tc in second_model_msg.get("tool_calls", [])
@@ -836,6 +849,12 @@ async def _handle_streaming(
                 except Exception:
                     pass
 
+        # Live stream: broadcast response event (streaming - after stream completes)
+        await broadcast_response(
+            session_id=session_id, turn_number=turn_number,
+            status=200, latency_ms=0.0, output_tokens=None,
+        )
+
         capture_holder["capture"] = capture
 
         # Schedule extraction as a background task that runs after streaming completes
@@ -867,12 +886,6 @@ async def _handle_streaming(
                     session_goal=session_goal,
                 )
             background_tasks.add_task(post_recall_stream_extraction)
-
-    # Live stream: broadcast response event (streaming)
-    await broadcast_response(
-        session_id=session_id, turn_number=turn_number,
-        status=200, latency_ms=0.0, output_tokens=None,
-    )
 
     return StreamingResponse(
         stream_generator(),
@@ -919,12 +932,6 @@ async def _handle_non_streaming(
     except httpx.ConnectError as e:
         _metrics["upstream_errors"] += 1
         return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
-
-    # Live stream: broadcast response event
-    await broadcast_response(
-        session_id=session_id, turn_number=turn_number,
-        status=resp.status_code, latency_ms=0.0, output_tokens=None,
-    )
 
     # Check for recall tool call interception (non-streaming only for now)
     if recall_injected and session_id:
@@ -1061,6 +1068,12 @@ async def _handle_non_streaming(
         except Exception as e:
             logger.warning("recall_interception_failed", session_id=session_id, error=str(e), exc_info=True)
             # Fall through to return original response
+
+    # Live stream: broadcast response event (non-streaming)
+    await broadcast_response(
+        session_id=session_id, turn_number=turn_number,
+        status=resp.status_code, latency_ms=0.0, output_tokens=None,
+    )
 
     # Schedule extraction as background task (original response, no recall)
     if session_id:
