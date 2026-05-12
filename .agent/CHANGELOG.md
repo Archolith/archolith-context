@@ -1,5 +1,17 @@
 # Changelog — cth.context-engine
 
+## 2026-05-12 — Streaming Recall Interception (Phase 5b)
+
+- **StreamingToolCallAccumulator (`src/proxy/streaming.py`)**: Reassembles streaming `delta.tool_calls` fragments into complete tool_call objects matching the non-streaming format. Tracks first_tool_name for early decision-making.
+- **`stream_with_recall_detection()`**: Buffer-and-decide async generator that buffers SSE chunks until the model's intent is known (content vs tool call vs recall tool call), then either flushes buffer for passthrough or yields a StreamingRecallResult for recall processing. 5s decision timeout.
+- **`_assemble_streaming_response()`**: Converts buffered streaming chunks + accumulator into a non-streaming-style response dict for recall re-send.
+- **`_non_streaming_to_sse()`**: Converts a non-streaming response dict back to SSE-format lines for relaying to the client after the recall re-send.
+- **Integration into `_handle_streaming()` in `chat.py`**: When `recall_injected` and `session_id`, uses `stream_with_recall_detection()` instead of `stream_with_capture()`. On recall detection: extracts question from tool call, executes recall, builds tool result, re-sends as non-streaming, handles up to 2 recall calls per turn, then converts final response to SSE format. Falls back to normal passthrough if no recall detected.
+- **Double-yield bug fix**: In `stream_with_recall_detection()`, the first content line that triggers the passthrough decision was being yielded twice (once in the buffer flush, once in the passthrough section). Fixed by adding `continue` after flushing the buffer.
+- **Test lifecycle fix**: Integration tests now use `httpx.MockTransport()` for upstream mock and `client.stream()` context manager to ensure the response body is consumed before the lifespan context closes the http_client.
+- **21 new tests**: TestStreamingToolCallAccumulator (6), TestParseSSELine (5), TestAssembleStreamingResponse (2), TestNonStreamingToSSE (2), TestStreamWithRecallDetection (4), TestStreamingRecallInterception (2).
+- **236 tests passing** (up from 215).
+
 ## 2026-05-11 — Session Recall as Proxy-Intercepted Tool (Step 13)
 
 - **Session recall tool (`src/proxy/tool_injection.py`)**: New module that injects a synthetic `__context_engine_recall` tool into requests when a session is active. When the model calls this tool, the proxy intercepts the call, queries the session graph for relevant facts, and returns the results as a tool response — then re-sends to upstream for the model to continue with the recalled context.
