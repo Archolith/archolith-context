@@ -12,18 +12,19 @@ You MUST respond with a single JSON object matching this exact schema:
 
 ```json
 {
-  "facts": [
-    {"content": "<atomic fact as a single sentence>", "fact_type": "<type>", "confidence": <0.0-1.0>}
-  ],
-  "files_touched": [
-    {"path": "<file path>", "status": "read|modified|created|deleted"}
-  ],
-  "decisions": [
-    {"summary": "<what was decided>", "rationale": "<why, if stated, or null>"}
-  ],
-  "invalidated": [
-    "<description of a previously-extracted fact that is now superseded>"
-  ]
+ "facts": [
+  {"content": "<atomic fact as a single sentence>", "fact_type": "<type>", "confidence": <0.0-1.0>}
+ ],
+ "files_touched": [
+  {"path": "<file path>", "status": "read|modified|created|deleted"}
+ ],
+ "decisions": [
+  {"summary": "<what was decided>", "rationale": "<why, if stated, or null>"}
+ ],
+ "invalidated": [
+  "<description of a previously-extracted fact that is now superseded>"
+ ],
+ "session_goal": "<one-sentence description of what the user is trying to accomplish, or null>"
 }
 ```
 
@@ -34,6 +35,14 @@ You MUST respond with a single JSON object matching this exact schema:
 - **tool_result**: Condensed key information from tool output
 - **state**: A project state change ("tests passing", "migration applied", "dependencies installed")
 - **observation**: General findings about the code or project
+
+## Session Goal
+
+Extract a `session_goal` on EVERY turn — this is critical for context assembly.
+- If this is the first turn (or no prior goal was provided), infer the goal from the user's request.
+- If a prior goal was provided, update it ONLY if the user's intent has clearly changed.
+- The goal should be a single sentence summarizing what the session is about.
+- Examples: "Fix the login bug in the auth module", "Add dark mode to the dashboard", "Refactor the payment service"
 
 ## Rules
 
@@ -52,6 +61,7 @@ You MUST respond with a single JSON object matching this exact schema:
    - 0.7-0.89: Strongly implied
    - 0.5-0.69: Inferred
 8. Be conservative: over-extract rather than under-extract, but keep each fact atomic.
+9. ALWAYS extract a session_goal, even if you can only make a rough inference.
 
 You MUST respond with valid JSON only, no other text."""
 
@@ -63,16 +73,17 @@ Assistant: I read the file. The error is a missing import for `json`. I've added
 
 ## Example Output:
 {
-  "facts": [
-    {"content": "src/main.py was missing import json", "fact_type": "error", "confidence": 0.95},
-    {"content": "Added import json to src/main.py", "fact_type": "state", "confidence": 0.9},
-    {"content": "src/main.py is a FastAPI application entry point", "fact_type": "observation", "confidence": 0.7}
-  ],
-  "files_touched": [
-    {"path": "src/main.py", "status": "modified"}
-  ],
-  "decisions": [],
-  "invalidated": []
+ "facts": [
+  {"content": "src/main.py was missing import json", "fact_type": "error", "confidence": 0.95},
+  {"content": "Added import json to src/main.py", "fact_type": "state", "confidence": 0.9},
+  {"content": "src/main.py is a FastAPI application entry point", "fact_type": "observation", "confidence": 0.7}
+ ],
+ "files_touched": [
+  {"path": "src/main.py", "status": "modified"}
+ ],
+ "decisions": [],
+ "invalidated": [],
+ "session_goal": "Fix the missing json import error in src/main.py"
 }
 """
 

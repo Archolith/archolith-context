@@ -240,6 +240,28 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             session_id, is_new = await resolve_session(headers, messages_raw)
             turn_number = await session_repo.get_turn_number(session_id)
             logger.debug("session_resolved", session_id=session_id, turn=turn_number, is_new=is_new)
+
+            # Set initial session goal from first user message on new sessions
+            if is_new:
+                first_user_msg = ""
+                for msg in messages_raw:
+                    if msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        if isinstance(content, list):
+                            content = " ".join(
+                                p.get("text", "") for p in content if isinstance(p, dict)
+                            )
+                        first_user_msg = content[:200]
+                        break
+                if first_user_msg:
+                    # Truncate to a single-sentence goal
+                    goal = first_user_msg.split("\n")[0].strip()[:120]
+                    try:
+                        await session_repo.update_goal(session_id, goal)
+                        logger.info("session_goal_set_initial", session_id=session_id, goal=goal[:80])
+                    except Exception as e:
+                        logger.warning("session_goal_set_failed", session_id=session_id, error=str(e))
+
             # Bind session context for request-level logging middleware
             structlog.contextvars.bind_contextvars(
                 session_id=session_id,
@@ -248,6 +270,15 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         except Exception as e:
             logger.warning("session_resolution_failed", error=str(e))
             _metrics["neo4j_errors"] += 1
+
+    # Fetch current session goal for extraction context
+    session_goal = None
+    if session_id and neo4j_ready:
+        try:
+            session_data = await session_repo.find_by_session_id(session_id)
+            session_goal = session_data.get("goal") if session_data else None
+        except Exception:
+            pass  # Non-critical — extraction will proceed without goal context
 
     # Context assembly — rewrite messages if graph has enough data
     assembled = None
@@ -402,15 +433,15 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         return await _handle_streaming(
             request, background_tasks, upstream_url, upstream_headers, request_body,
             session_id=session_id, turn_number=turn_number,
-            messages=body.get("messages", []),
-            recall_injected=recall_injected,
+            messages=body.get("messages", []), recall_injected=recall_injected,
+            session_goal=session_goal,
         )
     else:
         return await _handle_non_streaming(
             request, background_tasks, upstream_url, upstream_headers, request_body,
             session_id=session_id, turn_number=turn_number,
-            messages=body.get("messages", []),
-            recall_injected=recall_injected,
+            messages=body.get("messages", []), recall_injected=recall_injected,
+            session_goal=session_goal,
         )
 
 
@@ -424,6 +455,7 @@ async def _handle_streaming(
     turn_number: int = 0,
     messages: list[dict] | None = None,
     recall_injected: bool = False,
+    session_goal: str | None = None,
 ) -> StreamingResponse:
     """Stream SSE chunks from upstream with response capture and extraction.
 
@@ -798,6 +830,7 @@ async def _handle_streaming(
                         messages=messages or [],
                         response_text=cap.get_full_text(),
                         truncated=cap.truncated,
+                        session_goal=session_goal,
                     )
 
             background_tasks.add_task(post_stream_extraction)
@@ -811,6 +844,7 @@ async def _handle_streaming(
                     messages=messages or [],
                     response_text=capture.get_full_text(),
                     truncated=capture.truncated,
+                    session_goal=session_goal,
                 )
             background_tasks.add_task(post_recall_stream_extraction)
 
@@ -837,6 +871,7 @@ async def _handle_non_streaming(
     turn_number: int = 0,
     messages: list[dict] | None = None,
     recall_injected: bool = False,
+    session_goal: str | None = None,
 ) -> Response:
     """Handle non-streaming request with retry, recall interception, and extraction."""
     from src.main import _metrics
@@ -957,7 +992,7 @@ async def _handle_non_streaming(
                         final_choices = final_data.get("choices", [])
                         if final_choices:
                             final_msg = final_choices[0].get("message", {})
-                            final_response_text = final_msg.get("content", "") or ""
+                        final_response_text = final_msg.get("content", "") or ""
 
                         if session_id and final_response_text:
                             background_tasks.add_task(
@@ -967,6 +1002,7 @@ async def _handle_non_streaming(
                                 turn_number=turn_number,
                                 messages=resend_messages,
                                 response_text=final_response_text,
+                                session_goal=session_goal,
                             )
 
                         return Response(
@@ -1006,6 +1042,7 @@ async def _handle_non_streaming(
                     turn_number=turn_number,
                     messages=messages or [],
                     response_text=response_text,
+                    session_goal=session_goal,
                 )
         except Exception as e:
             logger.warning("non_streaming_extraction_setup_failed", error=str(e))
@@ -1040,6 +1077,7 @@ async def _run_extraction(
     messages: list[dict],
     response_text: str,
     truncated: bool = False,
+    session_goal: str | None = None,
 ) -> None:
     """Run fact extraction and store results in graph. Best-effort, non-blocking.
 
@@ -1096,8 +1134,17 @@ async def _run_extraction(
             user_message=user_message[:4000],
             assistant_response=response_text[:8000],
             tool_results=tool_results[:4000] if tool_results else None,
+            session_goal=session_goal,
         )
         extraction_latency_ms = (time.monotonic() - extraction_start) * 1000
+
+        # Update session goal if extractor provided one
+        if result and result.session_goal:
+            try:
+                await session_repo.update_goal(session_id, result.session_goal)
+                logger.info("session_goal_updated", session_id=session_id, goal=result.session_goal[:80])
+            except Exception as e:
+                logger.warning("session_goal_update_failed", session_id=session_id, error=str(e))
 
         if not result or not result.facts:
             logger.info("extraction_empty", session_id=session_id, turn=turn_number)

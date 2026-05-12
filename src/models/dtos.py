@@ -24,3 +24,4 @@ class ExtractionResult(BaseModel):
     decisions: list[dict]
     invalidated_fact_ids: list[str]
     turn_number: int
+    session_goal: str | None = None

@@ -134,10 +134,16 @@ def _parse_extraction_response(content: str, turn_number: int) -> ExtractionResu
             if isinstance(inv, str):
                 invalidated_ids.append(inv)
 
+    # Extract session goal
+    session_goal = data.get("session_goal")
+    if not isinstance(session_goal, str):
+        session_goal = None
+
     return ExtractionResult(
         facts=facts,
         files_touched=files_touched,
         decisions=decisions,
         invalidated_fact_ids=invalidated_ids,
         turn_number=turn_number,
+        session_goal=session_goal,
     )
