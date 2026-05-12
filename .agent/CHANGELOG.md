@@ -1,5 +1,14 @@
 # Changelog — cth.context-engine
 
+## 2026-05-12 — Extraction Quality Remediation
+
+- **Extraction prompt rewrite**: `SYSTEM_PROMPT` rewritten with tool_result as first-listed fact type, two explicit rules requiring RESULTS-not-INTENT extraction (Rules 1-2), bad/good examples with concrete output, and a BAD Example section showing what NOT to extract (e.g., "User wants to explore yawn.frontend" → BAD, "Frontend has 14 .tsx files, uses React 18" → GOOD).
+- **EXAMPLE_PROMPT expanded**: Added second example demonstrating tool-result extraction from Glob output, plus a BAD Example section with correct/incorrect contrast.
+- **Fact deduplication module (`src/extractor/dedup.py`)**: Jaccard token-overlap similarity check (threshold 0.85) to prevent storing duplicate or near-duplicate facts across turns. Functions: `jaccard_similarity()`, `is_duplicate()`, `deduplicate_facts()`, `_normalize()`, `_tokenize()`.
+- **Dedup wired into `_run_extraction`**: Before storing extracted facts, fetches existing active facts from the session graph, runs `deduplicate_facts()`, and stores only unique facts. Logs dedup stats when duplicates are removed.
+- **coherence_tail_size raised from 3 to 10**: The previous value of 3 was too aggressive for agent conversations, destroying tool-call continuity and losing important recent context.
+- **33 new dedup tests** in `tests/test_extractor/test_dedup.py`. **291 tests passing**.
+
 ## 2026-05-12 — Savings-Ratio Gate for Context Assembly
 
 - **Problem**: The context engine was too aggressive for short/moderate conversations (5-20 messages). With `coherence_tail_size=3` and 4.3% token savings, it destroyed agent continuity (tool call history, prior decisions) while barely saving any tokens.
