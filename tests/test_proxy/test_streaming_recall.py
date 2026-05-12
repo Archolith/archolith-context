@@ -507,3 +507,199 @@ class TestStreamingRecallInterception:
 
         # Model produced content, should be relayed
         assert "I'll help with that" in full_text
+
+    @pytest.mark.asyncio
+    async def test_streaming_recall_interception_full_flow(self):
+        """E2E: model calls __context_engine_recall in stream → proxy intercepts →
+        executes recall → re-sends non-streaming → converts response to SSE →
+        client receives final content.
+
+        This tests the actual recall interception path that had two critical bugs
+        (P2-1: stream:true retained in re-send body; P2-2: extraction never fires
+        because get_full_text() returns empty for non-streaming format).
+        """
+        import os
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        # Enable session recall tool via env override
+        env_patch = patch.dict(os.environ, {"SESSION_RECALL_TOOL_ENABLED": "true"})
+        env_patch.start()
+
+        try:
+            from src.config import reset_settings
+            reset_settings()
+
+            app = create_app()
+
+            # First streaming response: model calls __context_engine_recall
+            recall_sse_lines = self._make_sse_lines({
+                "id": "chatcmpl-1",
+                "model": "test",
+                "created": 1000,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "call_recall_1",
+                            "type": "function",
+                            "function": {
+                                "name": "__context_engine_recall",
+                                "arguments": '{"question":"api key setup"}',
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+            })
+
+            # Second (non-streaming) response: model answers with content
+            second_response = {
+                "id": "chatcmpl-2",
+                "model": "test",
+                "created": 1000,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Based on your session history, the API key is stored in .env.",
+                    },
+                    "finish_reason": "stop",
+                }],
+            }
+
+            request_count = [0]
+
+            async def mock_handler(request: httpx.Request) -> httpx.Response:
+                request_count[0] += 1
+                url_str = str(request.url)
+                if "/chat/completions" in url_str:
+                    body = json.loads(request.content)
+                    if body.get("stream"):
+                        # First request: streaming with recall tool call
+                        async def content():
+                            for line in recall_sse_lines:
+                                yield (line + "\n\n").encode()
+                        return httpx.Response(
+                            200,
+                            content=content(),
+                            headers={"content-type": "text/event-stream"},
+                        )
+                    else:
+                        # Re-send from proxy (non-streaming): return content
+                        # Verify P2-1 fix: the re-send must have stream=false
+                        assert body.get("stream") is False, (
+                            f"P2-1 regression: re-send body still has stream={body.get('stream')}"
+                        )
+                        # Verify recall tool was stripped from tools
+                        tools = body.get("tools", [])
+                        tool_names = [t.get("function", {}).get("name") for t in tools]
+                        assert "__context_engine_recall" not in tool_names, (
+                            "Recall tool should be stripped from re-send tools"
+                        )
+                        # Verify tool result message is appended
+                        messages = body.get("messages", [])
+                        tool_results = [m for m in messages if m.get("role") == "tool"]
+                        assert len(tool_results) >= 1, "Tool result message should be appended"
+                        return httpx.Response(200, json=second_response)
+                # Other requests (e.g., extraction, embeddings) — return dummy OK
+                return httpx.Response(200, json={"id": "dummy", "choices": []})
+
+            mock_transport = httpx.MockTransport(mock_handler)
+
+            # Separate transport for extractor — always returns valid extraction response
+            async def extractor_handler(request: httpx.Request) -> httpx.Response:
+                return httpx.Response(200, json={
+                    "id": "ext-1",
+                    "model": "gpt-4.1-mini",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"facts":[],"files_touched":[],"decisions":[],"invalidated":[]}'},
+                        "finish_reason": "stop",
+                    }],
+                })
+
+            extractor_transport = httpx.MockTransport(extractor_handler)
+
+            async with app.router.lifespan_context(app):
+                app.state.http_client = httpx.AsyncClient(transport=mock_transport)
+                app.state.extractor_client = httpx.AsyncClient(transport=extractor_transport)
+                app.state.neo4j_ready = True  # Enable session resolution
+
+                with patch("src.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+                     patch("src.openai.chat.session_repo") as mock_session_repo, \
+                     patch("src.proxy.tool_injection.handle_recall_tool_call", new_callable=AsyncMock) as mock_recall, \
+                     patch("src.proxy.locks.wait_for_prior_extraction", new_callable=AsyncMock), \
+                     patch("src.openai.chat.assemble_context", new_callable=AsyncMock, return_value=None):
+
+                    mock_resolve.return_value = ("test-session-123", True)
+                    mock_session_repo.get_turn_number = AsyncMock(return_value=1)
+                    mock_recall.return_value = "Recalled: API key is in .env file at project root."
+
+                    asgi_client = httpx.AsyncClient(
+                        transport=ASGITransport(app=app),
+                        base_url="http://test",
+                    )
+
+                    # Send streaming request with recall tool in tools array
+                    # (the proxy should also inject it, but having it already
+                    # makes the test more explicit about what triggers interception)
+                    async with asgi_client.stream(
+                        "POST",
+                        "/v1/chat/completions",
+                        json={
+                            "model": "test",
+                            "messages": [
+                                {"role": "user", "content": "Where is my API key?"},
+                            ],
+                            "stream": True,
+                        },
+                    ) as resp:
+                        assert resp.status_code == 200
+
+                        # Collect SSE lines from the final response
+                        full_text = ""
+                        sse_data_lines = []
+                        async for line in resp.aiter_lines():
+                            if line.startswith("data: ") and not line.endswith("[DONE]"):
+                                sse_data_lines.append(line)
+                                try:
+                                    data = json.loads(line[6:])
+                                    choices = data.get("choices", [])
+                                    if choices:
+                                        # Streaming format: delta.content
+                                        delta = choices[0].get("delta", {})
+                                        content = delta.get("content")
+                                        if content:
+                                            full_text += content
+                                        # Non-streaming converted: message.content
+                                        message = choices[0].get("message", {})
+                                        if message.get("content"):
+                                            full_text += message["content"]
+                                except (json.JSONDecodeError, IndexError):
+                                    pass
+
+                    await asgi_client.aclose()
+
+            # --- Assertions ---
+
+            # The recall tool was actually intercepted
+            mock_recall.assert_awaited_once()
+            call_args = mock_recall.call_args
+            assert call_args.kwargs.get("question") == "api key setup" or \
+                   (len(call_args.args) >= 3 and call_args.args[2] == "api key setup"), \
+                   f"Expected question 'api key setup', got {call_args}"
+
+            # Two upstream requests: first streaming, second non-streaming re-send
+            assert request_count[0] == 2, f"Expected 2 upstream requests, got {request_count[0]}"
+
+            # Client received the final response content (converted to SSE)
+            assert "API key" in full_text, f"Expected final content about API key, got: {full_text}"
+
+            # SSE lines were produced (the non-streaming response was converted to SSE)
+            assert len(sse_data_lines) > 0, "Should have SSE data lines in final response"
+
+        finally:
+            env_patch.stop()
+            reset_settings()

@@ -24,7 +24,7 @@ from src.models.graph_nodes import FactType, FileStatus
 from src.openai.errors import make_error_response
 from src.openai.schemas import ChatCompletionRequest
 from src.proxy.session import resolve_session
-from src.proxy.streaming import stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _non_streaming_to_sse
+from src.proxy.streaming import ResponseCapture, stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _non_streaming_to_sse
 
 logger = structlog.get_logger()
 
