@@ -26,7 +26,7 @@ logger = structlog.get_logger()
 _metrics: dict = {
     "start_time": 0.0,
     "total_requests": 0,
-    "assembly_modes": {"cold_start": 0, "graph": 0, "fallback": 0, "passthrough": 0},
+    "assembly_modes": {"cold_start": 0, "graph": 0, "fallback": 0, "passthrough": 0, "skipped_low_tokens": 0, "skipped_low_savings": 0},
     "extraction_successes": 0,
     "extraction_failures": 0,
     "upstream_errors": 0,

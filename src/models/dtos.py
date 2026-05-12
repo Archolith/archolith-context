@@ -22,6 +22,6 @@ class ExtractionResult(BaseModel):
     facts: list[dict]
     files_touched: list[str]
     decisions: list[dict]
-    invalidated_fact_ids: list[str]
+    invalidated_fact_ids: list[str]  # Description strings, not actual IDs — matched via find_matching_fact_ids()
     turn_number: int
     session_goal: str | None = None

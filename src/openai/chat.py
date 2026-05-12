@@ -1287,11 +1287,22 @@ async def _run_extraction(
                 turn=turn_number,
             )
 
-        # Invalidate superseded facts
+        # Invalidate superseded facts — match description strings to actual fact IDs
         if result.invalidated_fact_ids:
-            count = await facts_repo.invalidate_facts(result.invalidated_fact_ids)
-            if count:
-                logger.info("facts_invalidated", count=count, session_id=session_id, turn=turn_number)
+            matched_ids = await facts_repo.find_matching_fact_ids(
+                session_id, result.invalidated_fact_ids
+            )
+            if matched_ids:
+                count = await facts_repo.invalidate_facts(matched_ids)
+                if count:
+                    logger.info(
+                        "facts_invalidated",
+                        count=count,
+                        session_id=session_id,
+                        turn=turn_number,
+                        descriptions=len(result.invalidated_fact_ids),
+                        matched_ids=len(matched_ids),
+                    )
 
         # Log active fact count for monitoring
         active_count = await facts_repo.get_active_fact_count(session_id)

@@ -122,11 +122,16 @@ class TestMetricsTracking:
         _record_assembly_mode("graph")
         _record_assembly_mode("graph")
         _record_assembly_mode("passthrough")
+        _record_assembly_mode("skipped_low_tokens")
+        _record_assembly_mode("skipped_low_savings")
+        _record_assembly_mode("skipped_low_savings")
 
         assert _metrics["assembly_modes"]["graph"] == 2
         assert _metrics["assembly_modes"]["passthrough"] == 1
         assert _metrics["assembly_modes"]["cold_start"] == 0
         assert _metrics["assembly_modes"]["fallback"] == 0
+        assert _metrics["assembly_modes"]["skipped_low_tokens"] == 1
+        assert _metrics["assembly_modes"]["skipped_low_savings"] == 2
 
 
 class TestRetryableStatusCodes:

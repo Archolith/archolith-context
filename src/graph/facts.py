@@ -7,10 +7,14 @@ from uuid import uuid4
 
 import structlog
 
+from src.extractor.dedup import jaccard_similarity, _normalize
 from src.graph.repository import CONTEXT_SESSION_LABEL, run_query, run_write
 from src.models.graph_nodes import FactType
 
 logger = structlog.get_logger()
+
+# Similarity threshold for matching invalidated descriptions to existing facts
+_INVALIDATION_MATCH_THRESHOLD = 0.60
 
 
 async def store_fact(
@@ -83,13 +87,74 @@ async def invalidate_facts(fact_ids: list[str]) -> int:
         return 0
     now = datetime.now(timezone.utc).isoformat()
     cypher = f"""
-        MATCH (f:{CONTEXT_SESSION_LABEL}:Fact)
-        WHERE f.fact_id IN $fact_ids AND f.valid_until IS NULL
-        SET f.valid_until = datetime($now), f.invalidated_at = datetime($now)
-        RETURN count(f) AS invalidated
-        """
+MATCH (f:{CONTEXT_SESSION_LABEL}:Fact)
+WHERE f.fact_id IN $fact_ids AND f.valid_until IS NULL
+SET f.valid_until = datetime($now), f.invalidated_at = datetime($now)
+RETURN count(f) AS invalidated
+"""
     results = await run_write(cypher, {"fact_ids": fact_ids, "now": now})
     return results[0]["invalidated"] if results else 0
+
+
+async def find_matching_fact_ids(
+    session_id: str,
+    descriptions: list[str],
+    threshold: float = _INVALIDATION_MATCH_THRESHOLD,
+) -> list[str]:
+    """Match invalidated-fact description strings to actual fact IDs.
+
+    The extraction model returns description strings like "The build error
+    on line 42 was fixed", not hex fact IDs. This function fetches active
+    facts for the session and uses Jaccard similarity to find the best
+    match for each description.
+
+    Args:
+        session_id: The session whose facts to search.
+        descriptions: Description strings from the extractor's "invalidated" list.
+        threshold: Minimum Jaccard similarity to consider a match (default 0.60).
+
+    Returns:
+        List of fact_ids that match the descriptions (deduplicated).
+    """
+    if not descriptions:
+        return []
+
+    active_facts = await get_active_facts(session_id, limit=200)
+    if not active_facts:
+        return []
+
+    matched_ids: set[str] = set()
+    for desc in descriptions:
+        best_id: str | None = None
+        best_sim: float = 0.0
+        for fact in active_facts:
+            content = fact.get("content", "")
+            if not content:
+                continue
+            sim = jaccard_similarity(desc, content)
+            if sim > best_sim and sim >= threshold:
+                best_sim = sim
+                best_id = fact.get("fact_id")
+
+        if best_id:
+            matched_ids.add(best_id)
+            logger.debug(
+                "invalidation_matched",
+                session_id=session_id,
+                description=desc[:60],
+                matched_fact_id=best_id,
+                similarity=round(best_sim, 3),
+            )
+
+    if matched_ids:
+        logger.info(
+            "invalidation_matches_found",
+            session_id=session_id,
+            descriptions=len(descriptions),
+            matched=len(matched_ids),
+        )
+
+    return list(matched_ids)
 
 
 async def get_active_facts(session_id: str, limit: int = 50) -> list[dict]:
