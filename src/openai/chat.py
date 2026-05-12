@@ -24,7 +24,7 @@ from src.models.graph_nodes import FactType, FileStatus
 from src.openai.errors import make_error_response
 from src.openai.schemas import ChatCompletionRequest
 from src.proxy.session import resolve_session
-from src.proxy.streaming import stream_with_capture
+from src.proxy.streaming import stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _non_streaming_to_sse
 
 logger = structlog.get_logger()
 
@@ -427,14 +427,18 @@ async def _handle_streaming(
 ) -> StreamingResponse:
     """Stream SSE chunks from upstream with response capture and extraction.
 
-    Two-phase architecture:
-      1. Connection-level retry: open client.stream(), check status code.
-         If 429/5xx or connection error, close and retry with backoff.
-         This happens BEFORE any chunks reach the client.
-      2. True SSE passthrough: once status is 200, relay aiter_lines()
-         directly to the client in real-time. No buffering — the client
-         sees tokens as they arrive from upstream. ResponseCapture runs
-         in parallel to accumulate chunks for post-hoc extraction.
+    Three-phase architecture:
+    1. Connection-level retry: open client.stream(), check status code.
+       If 429/5xx or connection error, close and retry with backoff.
+       This happens BEFORE any chunks reach the client.
+    2. True SSE passthrough: once status is 200, relay aiter_lines()
+       directly to the client in real-time. No buffering — the client
+       sees tokens as they arrive from upstream. ResponseCapture runs
+       in parallel to accumulate chunks for post-hoc extraction.
+    2b. If recall tool is injected: buffer-and-decide — detect if the
+       model calls __context_engine_recall in the stream, intercept,
+       execute recall, re-send non-streaming, then convert the second
+       response to SSE format and relay to client.
 
     Limitation: once SSE chunks start flowing to the client (phase 2),
     retry is impossible — the client has already consumed partial output.
@@ -547,18 +551,225 @@ async def _handle_streaming(
             yield f"data: {error}\n\n"
             return
 
-        # --- Phase 2: True SSE passthrough ---
-        # Relay upstream chunks to the client in real-time via aiter_lines().
-        # ResponseCapture accumulates chunks in parallel for post-hoc extraction.
+        # --- Phase 2: SSE passthrough with optional recall detection ---
         capture = None
+        recall_intercepted = False
         try:
-            async for line, cap in stream_with_capture(upstream_resp):
-                if cap is not None:
-                    # Final yield from stream_with_capture — capture is complete
-                    capture = cap
-                    continue
-                if line:
-                    yield line + "\n\n"
+            if recall_injected and session_id:
+                # Buffer-and-decide mode: detect recall tool calls in stream
+                from src.proxy.tool_injection import (
+                    RECALL_TOOL_NAME,
+                    find_recall_tool_call,
+                    handle_recall_tool_call,
+                    build_tool_result_message,
+                    strip_recall_from_response,
+                    strip_recall_tool,
+                )
+
+                recall_result_obj = None
+                async for line, result, cap in stream_with_recall_detection(upstream_resp, RECALL_TOOL_NAME):
+                    if result is not None and result.is_recall:
+                        recall_result_obj = result
+                        break
+                    if cap is not None:
+                        # Stream ended without recall — passthrough completed
+                        capture = cap
+                        continue
+                    if line:
+                        yield line + "\n\n"
+
+                if recall_result_obj is not None:
+                    # --- Recall interception in streaming ---
+                    recall_intercepted = True
+                    logger.info(
+                        "streaming_recall_tool_call_intercepted",
+                        session_id=session_id, turn=turn_number,
+                    )
+                    _metrics["recall_tool_calls"] = _metrics.get("recall_tool_calls", 0) + 1
+
+                    # Extract the complete tool call from the accumulator
+                    tool_calls = recall_result_obj.accumulator.tool_calls
+                    recall_tc = None
+                    for tc in tool_calls:
+                        if tc.get("function", {}).get("name") == RECALL_TOOL_NAME:
+                            recall_tc = tc
+                            break
+
+                    if not recall_tc:
+                        logger.warning("streaming_recall_tool_call_not_found", session_id=session_id)
+                        for bl in recall_result_obj.buffered_lines:
+                            yield bl + "\n\n"
+                        capture = recall_result_obj.capture
+                    else:
+                        # Parse the question from the tool call
+                        func = recall_tc.get("function", {})
+                        try:
+                            args = json.loads(func.get("arguments", "{}"))
+                            question = args.get("question", "")
+                        except json.JSONDecodeError:
+                            question = ""
+
+                        if not question:
+                            logger.warning("streaming_recall_empty_question", session_id=session_id)
+                            for bl in recall_result_obj.buffered_lines:
+                                yield bl + "\n\n"
+                            capture = recall_result_obj.capture
+                        else:
+                            # Execute the recall query
+                            recall_text = await handle_recall_tool_call(
+                                http_client=request.app.state.http_client,
+                                session_id=session_id,
+                                question=question,
+                                turn_number=turn_number,
+                            )
+
+                            # Assemble the model message from the buffered stream
+                            first_response = _assemble_streaming_response(
+                                recall_result_obj.capture._chunks,
+                                recall_result_obj.accumulator,
+                            )
+                            model_message = first_response.get("choices", [{}])[0].get("message", {})
+
+                            # Strip the recall tool call from the model message
+                            remaining_calls = [
+                                tc for tc in model_message.get("tool_calls", [])
+                                if tc.get("function", {}).get("name") != RECALL_TOOL_NAME
+                            ]
+
+                            # Build the re-send message array
+                            resend_messages = list(messages or [])
+                            resend_model_msg = dict(model_message)
+                            if remaining_calls:
+                                resend_model_msg["tool_calls"] = remaining_calls
+                            else:
+                                resend_model_msg.pop("tool_calls", None)
+                            if not remaining_calls and not resend_model_msg.get("content"):
+                                resend_model_msg["content"] = None
+                            resend_messages.append(resend_model_msg)
+                            resend_messages.append(
+                                build_tool_result_message(recall_tc.get("id", "recall_0"), recall_text)
+                            )
+
+                            # Strip the recall tool from the tools array for the re-send
+                            body_dict = json.loads(body)
+                            strip_recall_tool(body_dict)
+
+                            # Re-send as non-streaming for reliable interception
+                            resend_body = json.dumps({
+                                **body_dict,
+                                "messages": resend_messages,
+                            }).encode("utf-8")
+
+                            try:
+                                second_resp = await _upstream_request_with_retry(
+                                    client=request.app.state.http_client,
+                                    method="POST",
+                                    url=url,
+                                    headers=headers,
+                                    content=resend_body,
+                                )
+                            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                                _metrics["upstream_errors"] += 1
+                                error = json.dumps(
+                                    {"error": {"message": f"Upstream error during streaming recall re-send: {e}", "type": "upstream_error"}}
+                                )
+                                yield f"data: {error}\n\n"
+                                return
+
+                            if second_resp.status_code >= 400:
+                                _metrics["upstream_errors"] += 1
+                                error_body = second_resp.text
+                                yield f"data: {error_body}\n\n"
+                                return
+
+                            # Check if the second response ALSO calls recall
+                            second_data = second_resp.json()
+                            second_recall_tc = find_recall_tool_call(second_data)
+
+                            if second_recall_tc:
+                                # Handle one more recall (max 2 per turn to prevent loops)
+                                logger.info("streaming_recall_second_call", session_id=session_id, turn=turn_number)
+                                _metrics["recall_tool_calls"] = _metrics.get("recall_tool_calls", 0) + 1
+
+                                second_func = second_recall_tc.get("function", {})
+                                try:
+                                    second_args = json.loads(second_func.get("arguments", "{}"))
+                                    second_question = second_args.get("question", "")
+                                except json.JSONDecodeError:
+                                    second_question = ""
+
+                                if second_question:
+                                    second_recall_text = await handle_recall_tool_call(
+                                        http_client=request.app.state.http_client,
+                                        session_id=session_id,
+                                        question=second_question,
+                                        turn_number=turn_number,
+                                    )
+
+                                    second_model_msg = second_data["choices"][0]["message"]
+                                    second_remaining_calls = [
+                                        tc for tc in second_model_msg.get("tool_calls", [])
+                                        if tc.get("function", {}).get("name") != RECALL_TOOL_NAME
+                                    ]
+                                    third_messages = list(resend_messages)
+                                    third_model_msg = dict(second_model_msg)
+                                    if second_remaining_calls:
+                                        third_model_msg["tool_calls"] = second_remaining_calls
+                                    else:
+                                        third_model_msg.pop("tool_calls", None)
+                                    if not second_remaining_calls and not third_model_msg.get("content"):
+                                        third_model_msg["content"] = None
+                                    third_messages.append(third_model_msg)
+                                    third_messages.append(build_tool_result_message(
+                                        second_recall_tc.get("id", "recall_1"), second_recall_text,
+                                    ))
+
+                                    third_body = json.dumps({
+                                        **body_dict,
+                                        "messages": third_messages,
+                                    }).encode("utf-8")
+
+                                    try:
+                                        third_resp = await _upstream_request_with_retry(
+                                            client=request.app.state.http_client,
+                                            method="POST",
+                                            url=url,
+                                            headers=headers,
+                                            content=third_body,
+                                        )
+                                        if third_resp.status_code < 400:
+                                            second_data = third_resp.json()
+                                        else:
+                                            _metrics["upstream_errors"] += 1
+                                    except (httpx.TimeoutException, httpx.ConnectError):
+                                        _metrics["upstream_errors"] += 1
+
+                            # Strip recall tool from the final response
+                            strip_recall_from_response(second_data)
+
+                            # Convert the non-streaming response to SSE format and yield
+                            sse_lines = _non_streaming_to_sse(second_data)
+                            for sse_line in sse_lines:
+                                yield sse_line + "\n\n"
+
+                            # Set up capture from the final response for extraction
+                            capture = ResponseCapture()
+                            final_text = ""
+                            final_choices = second_data.get("choices", [])
+                            if final_choices:
+                                final_msg = final_choices[0].get("message", {})
+                                final_text = final_msg.get("content", "") or ""
+                            if final_text:
+                                capture.add_chunk(json.dumps(second_data))
+
+            else:
+                # Standard passthrough — no recall detection needed
+                async for line, cap in stream_with_capture(upstream_resp):
+                    if cap is not None:
+                        capture = cap
+                        continue
+                    if line:
+                        yield line + "\n\n"
 
         except Exception as e:
             _metrics["upstream_errors"] += 1
@@ -578,7 +789,7 @@ async def _handle_streaming(
         capture_holder["capture"] = capture
 
         # Schedule extraction as a background task that runs after streaming completes
-        if session_id:
+        if session_id and not recall_intercepted:
             async def post_stream_extraction():
                 cap = capture_holder.get("capture")
                 if cap and cap.get_full_text():
@@ -592,6 +803,18 @@ async def _handle_streaming(
                     )
 
             background_tasks.add_task(post_stream_extraction)
+        elif session_id and recall_intercepted and capture and capture.get_full_text():
+            # For recall interception, schedule extraction for the final response
+            async def post_recall_stream_extraction():
+                await _run_extraction(
+                    client=request.app.state.extractor_client,
+                    session_id=session_id,
+                    turn_number=turn_number,
+                    messages=messages or [],
+                    response_text=capture.get_full_text(),
+                    truncated=capture.truncated,
+                )
+            background_tasks.add_task(post_recall_stream_extraction)
 
     return StreamingResponse(
         stream_generator(),
@@ -603,6 +826,7 @@ async def _handle_streaming(
         },
         background=background_tasks,
     )
+
 
 
 async def _handle_non_streaming(
