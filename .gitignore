@@ -43,3 +43,6 @@ docker-compose.override.yml
 
 # Adversarial review scratch
 adversarial-review-output.md
+
+# Debug scripts
+_debug_*.py

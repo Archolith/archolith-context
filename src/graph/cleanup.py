@@ -48,16 +48,27 @@ async def delete_expired_sessions() -> int:
 async def list_active_sessions() -> list[dict]:
     """List all active sessions (for admin/metrics endpoint)."""
     cypher = f"""
-MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{status: 'active'}})
+    MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{status: 'active'}})
     RETURN s.session_id AS session_id,
-           s.fingerprint AS fingerprint,
-           s.turn_number AS turn_number,
-           s.created_at AS created_at,
-           s.last_active AS last_active,
-           s.goal AS goal
+    s.fingerprint AS fingerprint,
+    s.turn_number AS turn_number,
+    s.created_at AS created_at,
+    s.last_active AS last_active,
+    s.goal AS goal
     ORDER BY s.last_active DESC
     """
-    return await run_query(cypher, {})
+    results = await run_query(cypher, {})
+
+    # Convert Neo4j datetime objects to ISO strings for JSON serialization
+    for row in results:
+        for key in ("created_at", "last_active"):
+            val = row.get(key)
+            if val and hasattr(val, "iso_format"):
+                row[key] = val.iso_format()
+            elif val and hasattr(val, "isoformat"):
+                row[key] = val.isoformat()
+
+    return results
 
 
 async def get_session_stats(session_id: str) -> dict:
@@ -70,7 +81,7 @@ async def get_session_stats(session_id: str) -> dict:
     session_cypher = f"""
     MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
     RETURN s.turn_number AS turn_number, s.goal AS goal, s.status AS status,
-           s.created_at AS created_at, s.last_active AS last_active
+    s.created_at AS created_at, s.last_active AS last_active
     """
     facts = await run_query(facts_cypher, {"session_id": session_id})
     session = await run_query(session_cypher, {"session_id": session_id})
@@ -78,7 +89,14 @@ async def get_session_stats(session_id: str) -> dict:
     if not session:
         return {}
 
-    return {
-        **session[0],
-        "active_facts": facts[0]["active_facts"] if facts else 0,
-    }
+    result = {**session[0], "active_facts": facts[0]["active_facts"] if facts else 0}
+
+    # Convert Neo4j datetime objects to ISO strings for JSON serialization
+    for key in ("created_at", "last_active"):
+        val = result.get(key)
+        if val and hasattr(val, "iso_format"):
+            result[key] = val.iso_format()
+        elif val and hasattr(val, "isoformat"):
+            result[key] = val.isoformat()
+
+    return result
