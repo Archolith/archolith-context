@@ -166,9 +166,20 @@ PROMOTION_ENABLED=false
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /health` | Health check: Neo4j status, upstream status, version, uptime |
-| `GET /metrics` | Process-level counters: total_requests, assembly_modes (cold_start/graph/fallback/passthrough), extraction_successes/failures, upstream_errors, neo4j_errors, active_sessions, token_savings_estimated, total_input_tokens_seen, uptime |
+| `GET /metrics` | Process-level counters: total_requests, assembly_modes, extraction_successes/failures, upstream_errors, neo4j_errors, active_sessions, token_savings_estimated, total_input_tokens_seen, trace_records, trace_sessions, uptime |
 | `GET /sessions` | List active sessions (admin, 503 if Neo4j down) |
 | `GET /sessions/{id}` | Session stats (admin, 404 if not found, 503 if Neo4j down) |
+| `GET /trace/sessions` | List all sessions with trace records |
+| `GET /trace/sessions/{id}` | Session trace summary + turns (limit/offset pagination) |
+| `GET /trace/turns/{turn_id}` | Single turn trace by turn_id |
+| `GET /trace/graph/{sid}/facts` | Session facts with filters: fact_type, min_confidence, from_turn, to_turn, include_invalidated |
+| `GET /trace/graph/{sid}/invalidations` | Supersession/invalidation chains for a session |
+| `GET /trace/graph/{sid}/files` | Files touched by a session (via TOUCHES edges) |
+| `GET /trace/graph/{sid}/decisions` | Decisions recorded for a session |
+| `GET /trace/graph/{sid}/recall` | Recall events from trace records |
+| `POST /trace/qa/extract` | Extraction QA workbench — run extraction without full proxy replay |
+| `GET /dashboard/` | Web dashboard (single-page HTML, zero build step) |
+| `GET /ws/stream` | WebSocket live event stream |
 
 Metrics are in-memory (`_metrics` dict in `src/main.py`), reset on process restart. Prometheus-compatible OpenMetrics format is a future goal.
 

@@ -1,5 +1,22 @@
 # Changelog — cth.context-engine
 
+## 2026-05-12 — Observability Dashboard and Operator Tooling
+
+- **Trace contract (Phase 1)**: `TurnTrace` and `SessionTraceSummary` DTOs in `src/models/dtos.py` — canonical trace record per turn with request/assembly/response/extraction/recall fields, token economics, prompt payloads, and fallback reasons
+- **Trace builder (`src/trace/builder.py`)**: `TraceBuilder` class that progressively populates a `TurnTrace` as the proxy processes a request — `with_request()`, `with_assembly()`, `with_response()`, `with_extraction()`, `with_recall()`
+- **Trace store (`src/trace/store.py`)**: In-memory `TraceStore` with per-session indexing, turn_id lookup, session summary aggregation, bounded eviction (100 turns/session), and optional disk persistence (per-session JSONL files)
+- **Trace API (`src/trace/router.py`)**: `GET /trace/sessions`, `GET /trace/sessions/{id}`, `GET /trace/turns/{turn_id}` — read-only inspection of turn-level proxy flow
+- **Proxy wiring**: 18 wiring points in `src/openai/chat.py` capturing request, assembly, response, extraction, and recall events into `TurnTrace` records
+- **Extraction capture**: All extraction fields now populated in TurnTrace (facts_stored, duplicates_skipped, invalidations_matched, extracted_facts) instead of placeholders
+- **Disk persistence**: `TraceStore(trace_dir=...)` writes per-session JSONL files under `trace_dir/<session_id>.jsonl` with safe filename sanitization
+- **TUI improvements (`scripts/live_monitor.py`)**: `--session` filter by session_id prefix, `--fold` event collapsing, inline latency/token deltas (per-session tracking), assembly mode detail sub-lines, trace artifact links (`/trace/sessions/{sid}/turns?turn={turn}`)
+- **Web dashboard (`src/static/dashboard.html`)**: Single-page HTML dashboard at `/dashboard/` with overview metrics, session list, session detail with turn timeline, prompt diff (original vs rewritten), fact inspector, token economics, and latency bars. Zero build step — vanilla HTML/CSS/JS calling `/trace/*` and `/metrics` endpoints
+- **Static file serving**: `main.py` mounts `/dashboard/` to `src/static/` and redirects `/` to `/dashboard/dashboard.html`
+- **Fact graph explorer API**: 5 new endpoints in `src/trace/router.py` — `GET /trace/graph/{sid}/facts` (with fact_type/confidence/turn filters), `GET /trace/graph/{sid}/invalidations`, `GET /trace/graph/{sid}/files`, `GET /trace/graph/{sid}/decisions`, `GET /trace/graph/{sid}/recall`
+- **Extraction QA workbench**: `POST /trace/qa/extract` — run extraction against sample input without full proxy replay; returns raw result, dedup check, invalidation candidates, and estimated graph write set
+- **6 new tests**: disk persistence (4) + extraction builder (2) in `tests/test_trace/test_unit.py`
+- **336 tests passing** (up from 330)
+
 ## 2026-05-12 — Bug Fixes: Fact Invalidation, Metrics Modes
 
 - **P1 — Fact invalidation was a no-op**: The extractor returns description strings like "The build error on line 42 was fixed" in the `invalidated` list, but `invalidate_facts()` tried to match them against hex `fact_id` values — which never matched. Stale facts accumulated instead of being retired. Fix: added `find_matching_fact_ids()` in `facts.py` that uses Jaccard similarity (threshold 0.60) to match description strings to active fact IDs, then invalidates those. The chat.py write path now calls `find_matching_fact_ids()` before `invalidate_facts()`.
