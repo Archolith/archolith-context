@@ -6,6 +6,33 @@ An OpenAI-compatible proxy that transparently replaces linear conversation repla
 with graph-assembled context for AI coding agents. Any harness that supports a
 base URL override (Reasonix, Claude Code, Aider, Cursor, etc.) works unchanged.
 
+## Project Description
+
+`cth.context-engine` is a transparent OpenAI-compatible proxy for coding agents
+that replaces append-only transcript replay with continual context curation.
+Instead of repeatedly resending stale conversation history, it extracts durable
+session facts, maintains a curated working memory, and reconstructs only the
+context needed for the next turn. The goal is lower token spend, less
+destructive compaction, and better continuity in long-running coding sessions.
+
+## Technical Thesis
+
+The system is built around a simple claim: linear transcript replay is the wrong
+data structure for long coding sessions.
+
+- Standard agent clients treat context as an append-only log and pay the cost of
+  resending large amounts of stale history on every turn.
+- This project treats context as a continuously curated working set: preserve the
+  local coherence tail, extract durable state off-path, invalidate superseded
+  facts, and rebuild the middle of the prompt from session state instead of raw
+  replay.
+- Token savings is the measurable outcome, but the deeper architectural goal is
+  to make prompt compaction less necessary by keeping the session state curated
+  continuously rather than waiting for the transcript to overflow.
+- The proxy shape matters: by enforcing this curation layer at the API boundary,
+  the system can improve existing harnesses without requiring each agent runtime
+  to adopt a custom memory SDK or internal framework.
+
 ## Tech Stack
 
 | Layer | Technology |

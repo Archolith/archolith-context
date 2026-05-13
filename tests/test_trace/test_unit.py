@@ -1,0 +1,344 @@
+"""Unit tests for trace builder, store, and DTOs."""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+
+from src.models.dtos import TurnTrace, SessionTraceSummary, TRACE_VERSION
+from src.trace.builder import TraceBuilder
+from src.trace.store import TraceStore, reset_trace_store, get_trace_store
+
+
+class TestTurnTraceDTO:
+    """Test TurnTrace model defaults and field types."""
+
+    def test_defaults(self):
+        trace = TurnTrace()
+        assert trace.session_id is None
+        assert trace.turn_number == 0
+        assert trace.trace_version == TRACE_VERSION
+        assert trace.assembly_mode == "passthrough"
+        assert trace.input_tokens == 0
+        assert trace.facts_selected == []
+        assert trace.original_messages == []
+        assert trace.rewritten_messages == []
+        assert trace.fallback_reason == ""
+        assert trace.recall_used is False
+
+    def test_turn_id_auto_generated(self):
+        trace = TurnTrace()
+        assert len(trace.turn_id) == 16  # uuid4 hex[:16]
+
+    def test_turn_id_unique(self):
+        t1 = TurnTrace()
+        t2 = TurnTrace()
+        assert t1.turn_id != t2.turn_id
+
+    def test_created_at_populated(self):
+        before = time.time()
+        trace = TurnTrace()
+        after = time.time()
+        assert before <= trace.created_at <= after
+
+    def test_full_construction(self):
+        trace = TurnTrace(
+            session_id="sess-123",
+            turn_number=5,
+            model="gpt-4",
+            stream=True,
+            input_tokens=1000,
+            assembly_mode="graph",
+            assembly_reason="sufficient facts",
+            assembly_latency_ms=42.5,
+            rewritten_tokens=600,
+            savings_tokens=400,
+            savings_ratio=0.4,
+            facts_selected=[{"content": "fact1"}],
+            original_messages=[{"role": "user", "content": "hello"}],
+            rewritten_messages=[{"role": "user", "content": "hello"}],
+            upstream_status=200,
+            upstream_latency_ms=1500.0,
+            facts_stored=3,
+            duplicates_skipped=1,
+            invalidations_attempted=0,
+            recall_used=True,
+            recall_question="what files were modified?",
+            recall_facts_returned=2,
+        )
+        assert trace.session_id == "sess-123"
+        assert trace.turn_number == 5
+        assert trace.savings_ratio == 0.4
+        assert trace.recall_used is True
+
+    def test_model_dump_roundtrip(self):
+        trace = TurnTrace(session_id="s1", turn_number=1, input_tokens=500)
+        data = trace.model_dump()
+        restored = TurnTrace(**data)
+        assert restored.session_id == trace.session_id
+        assert restored.turn_number == trace.turn_number
+        assert restored.turn_id == trace.turn_id
+
+
+class TestSessionTraceSummaryDTO:
+    def test_defaults(self):
+        summary = SessionTraceSummary(session_id="s1")
+        assert summary.turn_count == 0
+        assert summary.total_input_tokens == 0
+        assert summary.avg_savings_ratio == 0.0
+        assert summary.assembly_modes == {}
+        assert summary.total_recalls == 0
+
+    def test_full_construction(self):
+        summary = SessionTraceSummary(
+            session_id="s1",
+            goal="test goal",
+            turn_count=10,
+            total_input_tokens=50000,
+            total_savings_tokens=20000,
+            avg_savings_ratio=0.4,
+            assembly_modes={"graph": 7, "passthrough": 3},
+            total_facts_stored=25,
+            total_duplicates_skipped=5,
+            total_invalidations_attempted=2,
+            total_recalls=4,
+        )
+        assert summary.goal == "test goal"
+        assert summary.assembly_modes["graph"] == 7
+
+
+class TestTraceBuilder:
+    """Test the incremental TraceBuilder."""
+
+    def test_empty_build(self):
+        builder = TraceBuilder()
+        trace = builder.build()
+        assert trace.session_id is None
+        assert trace.turn_number == 0
+        assert trace.input_tokens == 0
+
+    def test_set_request(self):
+        builder = TraceBuilder()
+        builder.set_request(
+            session_id="sess-abc",
+            turn_number=3,
+            model="claude-3",
+            stream=True,
+            input_tokens=2000,
+            message_count=10,
+        )
+        trace = builder.build()
+        assert trace.session_id == "sess-abc"
+        assert trace.turn_number == 3
+        assert trace.model == "claude-3"
+        assert trace.stream is True
+        assert trace.input_tokens == 2000
+        assert trace.message_count == 10
+
+    def test_set_assembly(self):
+        builder = TraceBuilder()
+        builder.set_assembly(
+            mode="graph",
+            reason="sufficient context",
+            latency_ms=55.0,
+            facts_selected=[{"content": "f1"}],
+            files_selected=[{"path": "/foo.py"}],
+            decisions_selected=[{"summary": "use X"}],
+            rewritten_tokens=500,
+            savings_tokens=1500,
+            savings_ratio=0.75,
+        )
+        trace = builder.build()
+        assert trace.assembly_mode == "graph"
+        assert trace.assembly_reason == "sufficient context"
+        assert trace.assembly_latency_ms == 55.0
+        assert len(trace.facts_selected) == 1
+        assert trace.savings_tokens == 1500
+
+    def test_set_response(self):
+        builder = TraceBuilder()
+        builder.set_response(
+            status=200,
+            latency_ms=1200.0,
+            output_tokens=150,
+            response_summary="Here is the answer",
+        )
+        trace = builder.build()
+        assert trace.upstream_status == 200
+        assert trace.upstream_latency_ms == 1200.0
+        assert trace.output_tokens == 150
+        assert trace.upstream_response_summary == "Here is the answer"
+
+    def test_set_extraction(self):
+        builder = TraceBuilder()
+        builder.set_extraction(
+            facts_stored=4,
+            duplicates_skipped=2,
+            invalidations_attempted=1,
+            invalidations_matched=1,
+            extraction_latency_ms=350.0,
+            extracted_facts=[{"content": "x", "type": "observation"}],
+        )
+        trace = builder.build()
+        assert trace.facts_stored == 4
+        assert trace.duplicates_skipped == 2
+        assert trace.invalidations_attempted == 1
+        assert trace.invalidations_matched == 1
+        assert trace.extraction_latency_ms == 350.0
+
+    def test_set_recall(self):
+        builder = TraceBuilder()
+        builder.set_recall(used=True, question="what files?", facts_returned=3)
+        trace = builder.build()
+        assert trace.recall_used is True
+        assert trace.recall_question == "what files?"
+        assert trace.recall_facts_returned == 3
+
+    def test_set_fallback_reason(self):
+        builder = TraceBuilder()
+        builder.set_fallback_reason("Neo4j connection failed")
+        trace = builder.build()
+        assert trace.fallback_reason == "Neo4j connection failed"
+
+    def test_incremental_build(self):
+        """Builder can be built multiple times as data accumulates."""
+        builder = TraceBuilder()
+        builder.set_request("s1", 1, "gpt-4", False, 1000, 5)
+        trace1 = builder.build()
+        assert trace1.input_tokens == 1000
+        assert trace1.facts_stored == 0  # Not set yet
+
+        builder.set_extraction(facts_stored=3)
+        trace2 = builder.build()
+        assert trace2.facts_stored == 3
+        assert trace2.input_tokens == 1000  # Previous data preserved
+
+    def test_set_original_messages_truncation(self):
+        """Messages with content longer than 2000 chars get truncated."""
+        builder = TraceBuilder()
+        long_msg = [{"role": "user", "content": "x" * 3000}]
+        builder.set_original_messages(long_msg)
+        trace = builder.build()
+        stored = trace.original_messages[0]["content"]
+        assert "truncated" in stored
+        assert len(stored) < 3000
+
+    def test_set_response_summary_truncation(self):
+        """Response summaries longer than 500 chars get truncated."""
+        builder = TraceBuilder()
+        builder.set_response(status=200, response_summary="y" * 600)
+        trace = builder.build()
+        assert len(trace.upstream_response_summary) <= 500
+
+    def test_recall_question_truncation(self):
+        """Recall questions longer than 200 chars get truncated."""
+        builder = TraceBuilder()
+        builder.set_recall(used=True, question="q" * 300)
+        trace = builder.build()
+        assert len(trace.recall_question) <= 200
+
+
+class TestTraceStore:
+    """Test the in-memory TraceStore."""
+
+    def setup_method(self):
+        """Reset the singleton before each test."""
+        reset_trace_store()
+
+    @pytest.mark.asyncio
+    async def test_record_and_get_turn(self):
+        store = TraceStore()
+        trace = TurnTrace(session_id="s1", turn_number=1, input_tokens=500)
+        await store.record(trace)
+        retrieved = await store.get_turn(trace.turn_id)
+        assert retrieved is not None
+        assert retrieved.session_id == "s1"
+        assert retrieved.turn_id == trace.turn_id
+
+    @pytest.mark.asyncio
+    async def test_get_turn_not_found(self):
+        store = TraceStore()
+        result = await store.get_turn("nonexistent")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_session_turns_pagination(self):
+        store = TraceStore()
+        for i in range(5):
+            await store.record(TurnTrace(session_id="s1", turn_number=i))
+        turns = await store.get_session_turns("s1", limit=3, offset=0)
+        assert len(turns) == 3
+        turns2 = await store.get_session_turns("s1", limit=3, offset=3)
+        assert len(turns2) == 2
+
+    @pytest.mark.asyncio
+    async def test_session_summary(self):
+        store = TraceStore()
+        await store.record(TurnTrace(session_id="s1", turn_number=1, input_tokens=1000, savings_tokens=300, assembly_mode="graph", recall_used=True))
+        await store.record(TurnTrace(session_id="s1", turn_number=2, input_tokens=2000, savings_tokens=600, assembly_mode="passthrough", recall_used=False))
+        summary = await store.get_session_summary("s1")
+        assert summary is not None
+        assert summary.turn_count == 2
+        assert summary.total_input_tokens == 3000
+        assert summary.total_savings_tokens == 900
+        assert summary.avg_savings_ratio == 0.3
+        assert summary.assembly_modes == {"graph": 1, "passthrough": 1}
+        assert summary.total_recalls == 1
+
+    @pytest.mark.asyncio
+    async def test_session_summary_not_found(self):
+        store = TraceStore()
+        result = await store.get_session_summary("nonexistent")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_list_sessions(self):
+        store = TraceStore()
+        await store.record(TurnTrace(session_id="s1", turn_number=1))
+        await store.record(TurnTrace(session_id="s2", turn_number=1))
+        summaries = await store.list_sessions()
+        assert len(summaries) == 2
+        ids = {s.session_id for s in summaries}
+        assert ids == {"s1", "s2"}
+
+    @pytest.mark.asyncio
+    async def test_eviction_on_max_turns(self):
+        store = TraceStore(max_turns_per_session=3)
+        traces = []
+        for i in range(5):
+            t = TurnTrace(session_id="s1", turn_number=i)
+            await store.record(t)
+            traces.append(t)
+        # Only last 3 should be kept
+        turns = await store.get_session_turns("s1")
+        assert len(turns) == 3
+        # First 2 should be evicted
+        for t in traces[:2]:
+            result = await store.get_turn(t.turn_id)
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_total_traces_counter(self):
+        store = TraceStore()
+        for i in range(3):
+            await store.record(TurnTrace(session_id="s1", turn_number=i))
+        assert store.total_traces == 3
+
+    @pytest.mark.asyncio
+    async def test_session_count(self):
+        store = TraceStore()
+        await store.record(TurnTrace(session_id="s1", turn_number=1))
+        await store.record(TurnTrace(session_id="s2", turn_number=1))
+        assert store.session_count == 2
+
+    @pytest.mark.asyncio
+    async def test_no_session_uses_placeholder(self):
+        """Traces with no session_id get stored under __no_session__."""
+        store = TraceStore()
+        trace = TurnTrace(session_id=None, turn_number=0, input_tokens=100)
+        await store.record(trace)
+        # Should be retrievable by turn_id
+        retrieved = await store.get_turn(trace.turn_id)
+        assert retrieved is not None
+        assert retrieved.input_tokens == 100

@@ -29,6 +29,8 @@ from src.proxy.live import (
     broadcast_extraction, broadcast_session_event, broadcast_recall,
 )
 from src.proxy.streaming import ResponseCapture, stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _non_streaming_to_sse
+from src.trace.builder import TraceBuilder
+from src.trace.store import get_trace_store
 
 logger = structlog.get_logger()
 
@@ -211,6 +213,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     from src.main import _metrics
     settings = get_settings()
 
+    # Start trace builder for observability
+    trace_builder = TraceBuilder()
+
     # Parse request body
     try:
         body = await request.json()
@@ -288,8 +293,23 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     # Context assembly — rewrite messages if graph has enough data
     assembled = None
     assembly_mode = "passthrough"
+    assembly_latency_ms = 0.0
+    rewritten_tokens = 0
+    savings = 0
+    savings_ratio = 0.0
     input_tokens = _estimate_input_tokens(body.get("messages", []))
     _metrics["total_input_tokens_seen"] += input_tokens
+
+    # Trace: record request arrival
+    trace_builder.set_request(
+        session_id=session_id,
+        turn_number=turn_number,
+        model=req.model,
+        stream=req.stream,
+        input_tokens=input_tokens,
+        message_count=len(body.get("messages", [])),
+    )
+    trace_builder.set_original_messages(body.get("messages", []))
 
     # Live stream: broadcast incoming request
     await broadcast_request(
@@ -338,6 +358,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 )
                 rewritten_count = len(body["messages"])
                 assembly_mode = "graph"
+
+                # Trace: capture rewritten messages
+                trace_builder.set_rewritten_messages(body.get("messages", []))
 
                 # Estimate token savings
                 rewritten_tokens = _estimate_input_tokens(body["messages"])
@@ -449,8 +472,20 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         except Exception as e:
             logger.warning("context_assembly_failed", session_id=session_id, error=str(e), exc_info=True)
             assembly_mode = "fallback"
+            trace_builder.set_fallback_reason(str(e)[:200])
             _metrics["neo4j_errors"] += 1
             # Fall through to passthrough — assembly failure must not block requests
+
+    # Trace: record assembly result
+    trace_builder.set_assembly(
+        mode=assembly_mode,
+        reason="session not ready" if not (session_id and neo4j_ready) else "",
+        latency_ms=assembly_latency_ms,
+        facts_selected=[{"content": m.get("content", "")[:100]} for m in (assembled.graph_context if assembled else [])],
+        rewritten_tokens=rewritten_tokens,
+        savings_tokens=savings,
+        savings_ratio=savings_ratio,
+    )
 
     _record_assembly_mode(assembly_mode)
 
@@ -488,6 +523,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             session_id=session_id, turn_number=turn_number,
             messages=body.get("messages", []), recall_injected=recall_injected,
             session_goal=session_goal,
+            trace_builder=trace_builder,
         )
     else:
         return await _handle_non_streaming(
@@ -495,6 +531,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             session_id=session_id, turn_number=turn_number,
             messages=body.get("messages", []), recall_injected=recall_injected,
             session_goal=session_goal,
+            trace_builder=trace_builder,
         )
 
 
@@ -509,6 +546,7 @@ async def _handle_streaming(
     messages: list[dict] | None = None,
     recall_injected: bool = False,
     session_goal: str | None = None,
+    trace_builder: TraceBuilder | None = None,
 ) -> StreamingResponse:
     """Stream SSE chunks from upstream with response capture and extraction.
 
@@ -604,6 +642,15 @@ async def _handle_streaming(
 
                 # Good response (2xx) — keep the stream open for phase 2
                 upstream_resp = resp
+
+                # Trace: record upstream response (streaming)
+                if trace_builder:
+                    trace_builder.set_response(
+                        status=resp.status_code,
+                        latency_ms=0.0,
+                        output_tokens=None,
+                        response_summary="",
+                    )
                 break
 
             except (httpx.TimeoutException, httpx.ConnectError) as e:
@@ -713,6 +760,8 @@ async def _handle_streaming(
                                 session_id=session_id, turn_number=turn_number,
                                 question=question, facts_returned=0,
                             )
+                            if trace_builder:
+                                trace_builder.set_recall(used=True, question=question, facts_returned=0)
 
                             # Assemble the model message from the buffered stream
                             first_response = _assemble_streaming_response(
@@ -803,6 +852,8 @@ async def _handle_streaming(
                                         session_id=session_id, turn_number=turn_number,
                                         question=second_question, facts_returned=0,
                                     )
+                                    if trace_builder:
+                                        trace_builder.set_recall(used=True, question=question, facts_returned=0)
 
                                     second_model_msg = second_data["choices"][0]["message"]
                                     second_remaining_calls = [
@@ -896,6 +947,7 @@ async def _handle_streaming(
                         response_text=cap.get_full_text(),
                         truncated=cap.truncated,
                         session_goal=session_goal,
+                        trace_builder=trace_builder,
                     )
 
             background_tasks.add_task(post_stream_extraction)
@@ -910,6 +962,7 @@ async def _handle_streaming(
                     response_text=capture.get_full_text(),
                     truncated=capture.truncated,
                     session_goal=session_goal,
+                    trace_builder=trace_builder,
                 )
             background_tasks.add_task(post_recall_stream_extraction)
 
@@ -920,6 +973,16 @@ async def _handle_streaming(
             status=200, latency_ms=0.0, output_tokens=None,
         )
     background_tasks.add_task(_broadcast_streaming_response)
+
+    # Trace: store turn trace as background task (streaming path)
+    if trace_builder:
+        async def _store_trace_streaming():
+            try:
+                trace = trace_builder.build()
+                await get_trace_store().record(trace)
+            except Exception:
+                logger.warning("trace_store_failed_streaming", exc_info=True)
+        background_tasks.add_task(_store_trace_streaming)
 
     return StreamingResponse(
         stream_generator(),
@@ -945,6 +1008,7 @@ async def _handle_non_streaming(
     messages: list[dict] | None = None,
     recall_injected: bool = False,
     session_goal: str | None = None,
+    trace_builder: TraceBuilder | None = None,
 ) -> Response:
     """Handle non-streaming request with retry, recall interception, and extraction."""
     from src.main import _metrics
@@ -966,6 +1030,15 @@ async def _handle_non_streaming(
     except httpx.ConnectError as e:
         _metrics["upstream_errors"] += 1
         return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
+
+    # Trace: record upstream response (non-streaming)
+    if trace_builder:
+        trace_builder.set_response(
+            status=resp.status_code,
+            latency_ms=0.0,
+            output_tokens=None,
+            response_summary="",
+        )
 
     # Check for recall tool call interception (non-streaming only for now)
     if recall_injected and session_id:
@@ -1012,6 +1085,8 @@ async def _handle_non_streaming(
                         session_id=session_id, turn_number=turn_number,
                         question=question, facts_returned=0,
                     )
+                    if trace_builder:
+                        trace_builder.set_recall(used=True, question=question, facts_returned=0)
 
                     # Build the tool result message
                     tool_call_id = tool_call.get("id", "recall_0")
@@ -1082,6 +1157,7 @@ async def _handle_non_streaming(
                                 messages=resend_messages,
                                 response_text=final_response_text,
                                 session_goal=session_goal,
+                                trace_builder=trace_builder,
                             )
 
                         return Response(
@@ -1128,6 +1204,7 @@ async def _handle_non_streaming(
                     messages=messages or [],
                     response_text=response_text,
                     session_goal=session_goal,
+                    trace_builder=trace_builder,
                 )
         except Exception as e:
             logger.warning("non_streaming_extraction_setup_failed", error=str(e))
@@ -1147,6 +1224,16 @@ async def _handle_non_streaming(
         except Exception:
             pass  # Fall back to original response
 
+    # Trace: store turn trace as background task
+    if trace_builder:
+        async def _store_trace_non_stream():
+            try:
+                trace = trace_builder.build()
+                await get_trace_store().record(trace)
+            except Exception:
+                logger.warning("trace_store_failed_non_stream", exc_info=True)
+        background_tasks.add_task(_store_trace_non_stream)
+
     return Response(
         content=resp.content,
         status_code=resp.status_code,
@@ -1163,6 +1250,7 @@ async def _run_extraction(
     response_text: str,
     truncated: bool = False,
     session_goal: str | None = None,
+    trace_builder: TraceBuilder | None = None,
 ) -> None:
     """Run fact extraction and store results in graph. Best-effort, non-blocking.
 
@@ -1326,6 +1414,13 @@ async def _run_extraction(
             session_goal=result.session_goal,
             latency_ms=extraction_latency_ms,
         )
+
+        if trace_builder:
+            trace_builder.set_extraction(
+                facts_extracted=len(unique_facts) if 'unique_facts' in dir() else 0,
+                extraction_latency_ms=0.0,
+                extraction_summary="",
+            )
 
     except Exception as e:
         _metrics["extraction_failures"] += 1

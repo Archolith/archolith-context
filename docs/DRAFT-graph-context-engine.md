@@ -8,6 +8,34 @@
 
 ---
 
+## Executive Summary
+
+`cth.context-engine` is a transparent OpenAI-compatible proxy for coding agents
+that replaces append-only transcript replay with continual context curation.
+Instead of repeatedly resending stale conversation history, it extracts durable
+session facts, maintains a curated working memory, and reconstructs only the
+context needed for the next turn. The goal is lower token spend, less
+destructive compaction, and better continuity in long-running coding sessions.
+
+## Design Thesis
+
+The core thesis is not "store more memory." It is "send less while losing less."
+
+- Linear replay is a poor fit for long coding sessions because it treats all
+  prior turns as equally resend-worthy, even after much of that history has
+  become stale.
+- Reactive compaction is inherently lossy because it waits until the transcript
+  is already too large, then compresses under pressure.
+- Continual context curation is a better model: extract durable state after each
+  turn, preserve only the coherence tail verbatim, and reconstruct the middle of
+  the prompt from session state rather than raw transcript replay.
+- The graph is an implementation choice in service of curation, not the product
+  thesis by itself. The win condition is reduced replay and reduced need for
+  destructive compaction, not merely "having memory."
+- The proxy delivery model is part of the differentiation: existing harnesses
+  can adopt the curation layer by changing a base URL rather than rewriting
+  their internal agent architecture.
+
 ## Problem
 
 Coding agents manage context as a linear append-only log. Every API call re-sends
@@ -29,6 +57,12 @@ dominant cost is re-transmitting stale context the model never attends to.
 **No shipping coding agent uses a temporal knowledge graph as the primary
 in-session context store with a cheap auxiliary model performing continuous
 curation, delivered as a harness-agnostic proxy.**
+
+More precisely, the novelty is architectural rather than scientific:
+- a session-local curated working memory instead of raw transcript replay,
+- enforced at the proxy boundary instead of inside one agent framework,
+- with continuous off-path extraction so prompt compression becomes proactive
+  rather than an emergency fallback.
 
 This proposal:
 1. A cheap model (gpt-4.1-mini, <$0.02/session) extracts facts after each turn

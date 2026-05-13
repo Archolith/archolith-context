@@ -16,6 +16,8 @@ from src.config import get_settings
 from src.graph.driver import close_driver, init_driver, ensure_indexes
 from src.logging_config import configure_logging
 from src.openai.router import router as openai_router
+from src.trace.router import router as trace_router
+from src.trace.store import get_trace_store
 
 # Configure structured JSON logging before first use
 configure_logging()
@@ -109,6 +111,10 @@ async def lifespan(app: FastAPI):
     from src.proxy.live import get_live_stream
     app.state.live_stream = get_live_stream()
 
+    # Turn trace store (in-memory per-turn inspection)
+    from src.trace.store import get_trace_store
+    app.state.trace_store = get_trace_store()
+
     # Optional: check upstream connectivity (warn-only, not fatal)
     try:
         resp = await app.state.http_client.get(
@@ -177,6 +183,7 @@ def create_app() -> FastAPI:
 
     # Mount routes
     app.include_router(openai_router)
+    app.include_router(trace_router)
 
     # --- Health endpoint ---
     @app.get("/health")
@@ -257,9 +264,11 @@ def create_app() -> FastAPI:
             "token_savings_estimated": _metrics["token_savings_estimated"],
             "avg_token_savings_per_request": avg_token_savings,
             "token_savings_rate": token_savings_rate,
-        "total_input_tokens_seen": _metrics["total_input_tokens_seen"],
-        "compaction_applied": _metrics["compaction_applied"],
-        "uptime_s": round(time.time() - _metrics["start_time"], 0) if _metrics["start_time"] else 0,
+            "total_input_tokens_seen": _metrics["total_input_tokens_seen"],
+            "compaction_applied": _metrics["compaction_applied"],
+            "trace_records": getattr(app.state, "trace_store", get_trace_store()).total_traces,
+            "trace_sessions": getattr(app.state, "trace_store", get_trace_store()).session_count,
+            "uptime_s": round(time.time() - _metrics["start_time"], 0) if _metrics["start_time"] else 0,
         }
 
     # --- Sessions admin endpoints ---
