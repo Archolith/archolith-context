@@ -321,3 +321,149 @@ async def graph_recall_hits(request: Request, session_id: str) -> dict:
         "recall_events": recall_events,
         "count": len(recall_events),
     }
+
+
+# ---------------------------------------------------------------------------
+# Extraction QA Workbench
+# ---------------------------------------------------------------------------
+
+
+@router.post("/qa/extract")
+async def qa_extract(request: Request) -> dict:
+    """Extraction QA workbench — run extraction against sample input.
+
+    This endpoint lets operators evaluate extraction prompt changes against
+    real examples without replaying the full proxy. It does NOT write to
+    the graph — it only returns the diagnostic output.
+
+    Request body (JSON):
+    - user_message: The user message from the turn
+    - assistant_response: The assistant's response
+    - tool_results: Optional tool results string
+    - session_goal: Optional session goal for context
+    - turn_number: Optional turn number (default 0)
+    - session_id: Optional session_id to run dedup/invalidation against
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+
+    user_message = body.get("user_message", "")
+    assistant_response = body.get("assistant_response", "")
+    if not user_message and not assistant_response:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "At least one of user_message or assistant_response is required"},
+        )
+
+    tool_results = body.get("tool_results")
+    session_goal = body.get("session_goal")
+    turn_number = body.get("turn_number", 0)
+    session_id = body.get("session_id")
+
+    # Step 1: Run extraction
+    try:
+        from src.config import get_settings
+        settings = get_settings()
+        extractor_client = getattr(request.app.state, "extractor_client", None)
+        if not extractor_client:
+            return JSONResponse(status_code=503, content={"error": "Extractor client not available"})
+
+        from src.extractor.client import extract_facts
+        import time
+
+        start = time.monotonic()
+        result = await extract_facts(
+            http_client=extractor_client,
+            turn_number=turn_number,
+            user_message=user_message,
+            assistant_response=assistant_response,
+            tool_results=tool_results,
+            session_goal=session_goal,
+        )
+        extraction_latency_ms = (time.monotonic() - start) * 1000
+
+        if result is None:
+            return {
+                "status": "extraction_failed",
+                "extraction_latency_ms": round(extraction_latency_ms, 1),
+                "raw_result": None,
+                "normalized": None,
+                "dedup": None,
+                "invalidation_candidates": None,
+                "graph_write_set": None,
+            }
+
+    except Exception as e:
+        logger.warning("qa_extract_failed", error=str(e))
+        return JSONResponse(status_code=503, content={"error": f"Extraction call failed: {e}"})
+
+    # Step 2: Normalize the result
+    normalized = result.model_dump()
+
+    # Step 3: Run dedup check if session_id provided
+    dedup_info = None
+    if session_id and _neo4j_ready(request):
+        try:
+            from src.extractor.dedup import deduplicate_facts
+            from src.graph.facts import get_active_facts
+
+            existing_facts = await get_active_facts(session_id, limit=200)
+            before_count = len(result.facts)
+            kept_facts = deduplicate_facts(result.facts, existing_facts)
+            skipped_count = before_count - len(kept_facts)
+
+            dedup_info = {
+                "existing_active_facts": len(existing_facts),
+                "new_facts_before_dedup": before_count,
+                "new_facts_after_dedup": len(kept_facts),
+                "duplicates_skipped": skipped_count,
+                "kept_facts": kept_facts,
+            }
+        except Exception as e:
+            dedup_info = {"error": f"Dedup check failed: {e}"}
+
+    # Step 4: Run invalidation matching if session_id provided
+    invalidation_info = None
+    if session_id and _neo4j_ready(request) and result.invalidated_fact_ids:
+        try:
+            from src.graph.facts import find_matching_fact_ids
+
+            matched_ids = await find_matching_fact_ids(session_id, result.invalidated_fact_ids)
+            invalidation_info = {
+                "invalidation_descriptions": result.invalidated_fact_ids,
+                "matched_fact_ids": matched_ids,
+                "match_count": len(matched_ids),
+                "description_count": len(result.invalidated_fact_ids),
+            }
+        except Exception as e:
+            invalidation_info = {"error": f"Invalidation matching failed: {e}"}
+    elif result.invalidated_fact_ids:
+        invalidation_info = {
+            "invalidation_descriptions": result.invalidated_fact_ids,
+            "matched_fact_ids": [],
+            "note": "No session_id provided — cannot match to actual fact IDs",
+        }
+
+    # Step 5: Estimate graph write set
+    graph_write_set = {
+        "facts_to_store": len(result.facts) if result.facts else 0,
+        "files_to_touch": len(result.files_touched) if result.files_touched else 0,
+        "decisions_to_store": len(result.decisions) if result.decisions else 0,
+        "invalidations_to_attempt": len(result.invalidated_fact_ids) if result.invalidated_fact_ids else 0,
+    }
+    if dedup_info and "duplicates_skipped" in dedup_info:
+        graph_write_set["facts_after_dedup"] = graph_write_set["facts_to_store"] - dedup_info["duplicates_skipped"]
+    if invalidation_info and "match_count" in invalidation_info:
+        graph_write_set["invalidations_matched"] = invalidation_info["match_count"]
+
+    return {
+        "status": "success",
+        "extraction_latency_ms": round(extraction_latency_ms, 1),
+        "raw_result": normalized,
+        "normalized": normalized,
+        "dedup": dedup_info,
+        "invalidation_candidates": invalidation_info,
+        "graph_write_set": graph_write_set,
+    }
