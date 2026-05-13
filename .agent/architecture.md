@@ -103,7 +103,16 @@ Harness → POST /v1/chat/completions → Proxy
 - Cold start thresholds (turns + token count)
 - Retry settings: upstream and Neo4j (max retries, backoff base seconds)
 - Promotion settings (if wired to long-term memory)
+- Memory engine config (JSON array of engine definitions)
+- Promotion policy defaults (min confidence, dry-run mode)
 - Settings singleton caching (get_settings / reset_settings)
+
+### Memory Engine & Promotion (`src/memory/`)
+- **Registry** (`registry.py`): Config-driven engine registration, lazy adapter instantiation, priority-based default resolution
+- **Canonical models** (`models.py`): `PromotionRecord`, `PromotionResult`, `EngineCapabilities`, `MemoryEngineConfig`
+- **Adapter base** (`adapters/base.py`): Abstract contract — validate_config, capabilities, healthcheck, promote_fact, optional batch/dedupe/CRUD
+- **Concrete adapters** (`adapters/`): cth_mcp_memory, mem0, zep, generic_http
+- **Promotion service** (`promotion.py`): Policy layer (confidence threshold, fact type allowlist, multi-turn survival), dedupe, dry-run, audit trail
 
 ## Isolation from Long-term Memory
 
@@ -159,6 +168,11 @@ NEO4J_RETRY_BACKOFF_BASE_S=1.0
 MEMORY_API_URL=http://localhost:8200
 MEMORY_API_KEY=...
 PROMOTION_ENABLED=false
+
+# Memory engine configuration (JSON array)
+MEMORY_ENGINES_JSON=[{"id":"cth-memory","type":"cth_mcp_memory","enabled":true,"priority":10,"base_url":"http://localhost:8200","api_key_env":"MEMORY_API_KEY"}]
+PROMOTION_MIN_CONFIDENCE=0.9
+PROMOTION_DRY_RUN=false
 ```
 
 ## Observability (Phase 4)
@@ -178,6 +192,10 @@ PROMOTION_ENABLED=false
 | `GET /trace/graph/{sid}/decisions` | Decisions recorded for a session |
 | `GET /trace/graph/{sid}/recall` | Recall events from trace records |
 | `POST /trace/qa/extract` | Extraction QA workbench — run extraction without full proxy replay |
+| `GET /memory-engines` | List configured memory engines with health status |
+| `GET /memory-engines/{id}` | Single engine details, health, and capabilities |
+| `GET /promotions` | Promotion history and stats |
+| `POST /promotions/retry/{id}` | Retry a failed promotion |
 | `GET /dashboard/` | Web dashboard (single-page HTML, zero build step) |
 | `GET /ws/stream` | WebSocket live event stream |
 

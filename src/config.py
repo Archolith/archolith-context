@@ -77,6 +77,14 @@ class Settings(BaseSettings):
     memory_api_key: str = ""
     promotion_enabled: bool = False
 
+    # Memory engine configuration (JSON array of engine configs)
+    # See src/memory/models.py MemoryEngineConfig for schema
+    memory_engines_json: str = ""  # JSON array of engine config dicts
+
+    # Promotion policy defaults
+    promotion_min_confidence: float = 0.9
+    promotion_dry_run: bool = False  # If True, generate records but don't write
+
     @property
     def upstream_api_url(self) -> str:
         """Full upstream API base URL (ensures no trailing slash issues)."""

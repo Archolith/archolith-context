@@ -37,7 +37,47 @@ _metrics: dict = {
     "token_savings_estimated": 0,
     "total_input_tokens_seen": 0,
     "compaction_applied": 0,
+    "promotions_attempted": 0,
+    "promotions_succeeded": 0,
+    "promotions_failed": 0,
+    "promotions_skipped": 0,
 }
+
+
+def _load_memory_engines(settings, registry) -> None:
+    """Load memory engine configs from env and register them."""
+    import json
+
+    from src.memory.models import MemoryEngineConfig
+
+    # If MEMORY_ENGINES_JSON is set, parse and register each engine
+    if settings.memory_engines_json:
+        try:
+            engines_raw = json.loads(settings.memory_engines_json)
+            if isinstance(engines_raw, list):
+                for raw in engines_raw:
+                    try:
+                        cfg = MemoryEngineConfig(**raw)
+                        registry.register(cfg)
+                    except Exception as e:
+                        logger.warning("memory_engine_config_invalid", raw=raw, error=str(e))
+            logger.info("memory_engines_loaded", count=registry.engine_count)
+        except json.JSONDecodeError as e:
+            logger.warning("memory_engines_json_parse_error", error=str(e))
+    else:
+        # Fallback: auto-register cth-memory from legacy settings if promotion is enabled
+        if settings.memory_api_url:
+            registry.register(
+                MemoryEngineConfig(
+                    id="cth-memory",
+                    type="cth_mcp_memory",
+                    enabled=True,
+                    priority=10,
+                    base_url=settings.memory_api_url,
+                    api_key_env="MEMORY_API_KEY",
+                )
+            )
+            logger.info("memory_engine_auto_registered", engine_id="cth-memory", base_url=settings.memory_api_url)
 
 
 async def _init_neo4j_with_retry(settings, max_retries: int = 3, backoff_base: float = 1.0) -> bool:
@@ -115,6 +155,23 @@ async def lifespan(app: FastAPI):
     # Turn trace store (in-memory per-turn inspection)
     from src.trace.store import get_trace_store
     app.state.trace_store = get_trace_store()
+
+    # Memory engine registry — load from config if promotion enabled
+    from src.memory.registry import get_registry, reset_registry
+    from src.memory.models import MemoryEngineConfig
+    reset_registry()
+    registry = get_registry()
+    if settings.promotion_enabled:
+        _load_memory_engines(settings, registry)
+    elif settings.memory_engines_json:
+        logger.info("memory_engines_configured_but_disabled", note="set PROMOTION_ENABLED=true to activate")
+
+    # Promotion service
+    from src.memory.promotion import PromotionService
+    app.state.promotion_service = PromotionService(
+        registry=registry,
+        min_confidence=settings.promotion_min_confidence,
+    )
 
     # Optional: check upstream connectivity (warn-only, not fatal)
     try:
@@ -313,6 +370,78 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.warning("session_stats_failed", session_id=session_id, error=str(e))
             return JSONResponse(status_code=503, content={"error": f"Neo4j error: {e}"})
+
+    # --- Memory engine & promotion admin endpoints ---
+
+    @app.get("/memory-engines")
+    async def list_memory_engines() -> dict:
+        """List all configured memory engines and their health."""
+        from src.memory.registry import get_registry
+
+        registry = get_registry()
+        engines = registry.list_engines()
+        health = await registry.healthcheck_all()
+        return {
+            "engines": engines,
+            "health": health,
+            "default_engine_id": registry.default_engine_id,
+            "promotion_enabled": get_settings().promotion_enabled,
+        }
+
+    @app.get("/memory-engines/{engine_id}")
+    async def get_memory_engine(engine_id: str) -> dict:
+        """Get details and health for a specific memory engine."""
+        from src.memory.registry import get_registry
+
+        registry = get_registry()
+        config = registry.get_config(engine_id)
+        if config is None:
+            return JSONResponse(status_code=404, content={"error": f"Engine {engine_id} not found"})
+        adapter = registry.get_adapter(engine_id)
+        caps = await adapter.capabilities() if adapter else None
+        healthy = False
+        if adapter:
+            try:
+                healthy = await adapter.healthcheck()
+            except Exception:
+                pass
+        return {
+            "id": config.id,
+            "type": config.type,
+            "enabled": config.enabled,
+            "priority": config.priority,
+            "base_url": config.base_url,
+            "is_default": config.id == registry.default_engine_id,
+            "healthy": healthy,
+            "capabilities": caps.model_dump() if caps else None,
+        }
+
+    @app.get("/promotions")
+    async def list_promotions() -> dict:
+        """List promotion history and stats."""
+        svc = getattr(app.state, "promotion_service", None)
+        if svc is None:
+            return JSONResponse(status_code=503, content={"error": "Promotion service not initialized"})
+        return {
+            "stats": svc.stats,
+            "recent": [r.model_dump(mode="json") for r in svc.audit_trail[-50:]],
+        }
+
+    @app.post("/promotions/retry/{promotion_id}")
+    async def retry_promotion(promotion_id: str) -> dict:
+        """Retry a failed promotion by its promotion_id (finds it in audit trail)."""
+        svc = getattr(app.state, "promotion_service", None)
+        if svc is None:
+            return JSONResponse(status_code=503, content={"error": "Promotion service not initialized"})
+        # Find the original record in the audit trail
+        original = None
+        for r in svc.audit_trail:
+            if r.promotion_id == promotion_id:
+                original = r
+                break
+        if original is None:
+            return JSONResponse(status_code=404, content={"error": f"Promotion {promotion_id} not found"})
+        return JSONResponse(status_code=200, content={"note": "Retry requires resubmission with the original PromotionRecord"})
 
     # --- WebSocket live stream endpoint ---
     @app.websocket("/ws/stream")

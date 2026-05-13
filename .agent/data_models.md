@@ -179,3 +179,63 @@ class ExtractionResult:
 | Embeddings | Stored as node properties in Neo4j | Vector index for similarity search |
 | Session metadata | Neo4j Session nodes (`:ContextSession`) | Direct lookup by session_id/fingerprint |
 | Cleanup | Neo4j TTL-based sweep | Background task deletes expired sessions by label |
+
+## Promotion Models (`src/memory/models.py`)
+
+### PromotionRecord
+Canonical payload for outbound fact promotion — one durable fact being promoted to a memory engine.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| promotion_id | str | Unique ID (auto-generated hex[:16]) |
+| session_id | str | Source session |
+| source_turn | int | Which turn produced this fact |
+| fact_type | str | Type classification (matches FactType values) |
+| content | str | The fact text |
+| confidence | float | Extraction confidence (0–1) |
+| session_goal | str \| None | Session objective at time of promotion |
+| touched_files | list[str] | Files referenced by this fact |
+| decision_context | str \| None | Rationale if fact_type == decision |
+| promotion_reason | str | Why this fact was promoted |
+| promoted_at | float | Unix timestamp |
+| tags | list[str] | Classification tags |
+| dedupe_key | str | Deterministic hash for idempotency |
+| source_trace_ref | str \| None | TurnTrace.turn_id for audit trail |
+
+### PromotionResult
+Outcome of a single promotion attempt through an adapter.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| promotion_id | str | Matches the PromotionRecord |
+| engine_id | str | Target engine |
+| outcome | PromotionOutcome | pending / success / failed / skipped / retry |
+| remote_id | str \| None | ID in the target memory system |
+| error_message | str \| None | Error details on failure |
+| elapsed_ms | float | Latency of the promotion attempt |
+
+### MemoryEngineConfig
+Configuration for a single registered memory engine.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| id | str | Unique engine identifier |
+| type | str | Adapter type: cth_mcp_memory, mem0, zep, generic_http |
+| enabled | bool | Whether the engine is active |
+| priority | int | Higher = preferred default |
+| base_url | str | Backend endpoint URL |
+| api_key_env | str | Env var name holding the API key |
+| extra | dict | Adapter-specific configuration |
+
+### EngineCapabilities
+What a memory engine adapter supports.
+
+| Property | Type | Default |
+|----------|------|---------|
+| promote_fact | bool | True |
+| promote_batch | bool | True |
+| dedupe_lookup | bool | False |
+| list_by_source | bool | False |
+| update_promoted | bool | False |
+| delete_promoted | bool | False |
+| healthcheck | bool | True |
