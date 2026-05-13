@@ -482,6 +482,8 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         reason="session not ready" if not (session_id and neo4j_ready) else "",
         latency_ms=assembly_latency_ms,
         facts_selected=[{"content": m.get("content", "")[:100]} for m in (assembled.graph_context if assembled else [])],
+        files_selected=assembled.files_selected if assembled else [],
+        decisions_selected=assembled.decisions_selected if assembled else [],
         rewritten_tokens=rewritten_tokens,
         savings_tokens=savings,
         savings_ratio=savings_ratio,

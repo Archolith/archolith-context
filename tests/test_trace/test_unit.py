@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from src.models.dtos import TurnTrace, SessionTraceSummary, TRACE_VERSION
+from src.models.dtos import TurnTrace, SessionTraceSummary, AssembledContext, TRACE_VERSION
 from src.trace.builder import TraceBuilder
 from src.trace.store import TraceStore, reset_trace_store, get_trace_store
 
@@ -108,6 +108,41 @@ class TestSessionTraceSummaryDTO:
         assert summary.assembly_modes["graph"] == 7
 
 
+class TestAssembledContextDTO:
+    """Test AssembledContext has files_selected and decisions_selected fields."""
+
+    def test_defaults_empty_lists(self):
+        ctx = AssembledContext(system_message={"role": "system", "content": "test"}, graph_context=[], coherence_tail=[])
+        assert ctx.files_selected == []
+        assert ctx.decisions_selected == []
+
+    def test_files_selected_populated(self):
+        ctx = AssembledContext(
+            system_message={"role": "system", "content": "test"},
+            graph_context=[],
+            coherence_tail=[],
+            files_selected=[{"path": "/foo.py", "status": "modified"}],
+            decisions_selected=[{"summary": "use X", "turn": 3}],
+        )
+        assert len(ctx.files_selected) == 1
+        assert ctx.files_selected[0]["path"] == "/foo.py"
+        assert len(ctx.decisions_selected) == 1
+        assert ctx.decisions_selected[0]["summary"] == "use X"
+
+    def test_model_dump_roundtrip(self):
+        ctx = AssembledContext(
+            system_message={"role": "system", "content": "test"},
+            graph_context=[],
+            coherence_tail=[],
+            files_selected=[{"path": "/a.py"}],
+            decisions_selected=[{"summary": "dec"}],
+        )
+        data = ctx.model_dump()
+        restored = AssembledContext(**data)
+        assert restored.files_selected == ctx.files_selected
+        assert restored.decisions_selected == ctx.decisions_selected
+
+
 class TestTraceBuilder:
     """Test the incremental TraceBuilder."""
 
@@ -154,7 +189,19 @@ class TestTraceBuilder:
         assert trace.assembly_reason == "sufficient context"
         assert trace.assembly_latency_ms == 55.0
         assert len(trace.facts_selected) == 1
+        assert len(trace.files_selected) == 1
+        assert trace.files_selected[0]["path"] == "/foo.py"
+        assert len(trace.decisions_selected) == 1
+        assert trace.decisions_selected[0]["summary"] == "use X"
         assert trace.savings_tokens == 1500
+
+    def test_set_assembly_defaults(self):
+        """files_selected and decisions_selected default to [] when not passed."""
+        builder = TraceBuilder()
+        builder.set_assembly(mode="passthrough")
+        trace = builder.build()
+        assert trace.files_selected == []
+        assert trace.decisions_selected == []
 
     def test_set_response(self):
         builder = TraceBuilder()

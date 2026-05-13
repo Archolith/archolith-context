@@ -1,5 +1,15 @@
 # Changelog — cth.context-engine
 
+## 2026-05-13 — Observability Trace Contract Remediation
+
+- **AssembledContext DTO extended**: Added `files_selected` and `decisions_selected` fields (`list[dict]`, default empty) to `AssembledContext` in `src/models/dtos.py`
+- **Assembler propagation**: `assemble_context()` now populates `files_selected` and `decisions_selected` in the returned `AssembledContext` from the assembler's internal file/decision lists
+- **Proxy wiring fix**: `chat.py` `set_assembly()` call now passes `files_selected=assembled.files_selected` and `decisions_selected=assembled.decisions_selected` instead of implicit `[]`
+- **Dashboard rendering**: Turn detail in dashboard now renders "Files Injected" and "Decisions Injected" sections when `files_selected`/`decisions_selected` are populated
+- **Test coverage**: Extended `test_set_assembly` with assertions on `files_selected`/`decisions_selected`; added `test_set_assembly_defaults`; added `TestAssembledContextDTO` class (3 tests)
+- **Historical changelog backfill**: Added retrospective entry for Phase 3 remediation batch (smart tail, tiktoken, reasoning strip) that was previously missing
+- **Wrapup artifact normalization**: Fixed observability dashboard wrapup metadata (added docs commit `a9fcf1b`, fixed plan path to archive, added `docs/DRAFT-graph-context-engine.md` to files changed); added remediation note to Phase 3 wrapup for backfilled changelog
+
 ## 2026-05-13 — Memory Engine Registration and Promotion Adapters (Phase 1 + 2)
 
 - **Canonical promotion model (`src/memory/models.py`)**: `PromotionRecord`, `PromotionResult`, `EngineCapabilities`, `MemoryEngineConfig` — single payload shape emitted before adapter translation with auto-dedupe key generation
@@ -131,6 +141,18 @@
 - **Cost**: ~$0.0003/turn when triggered (only fires for ambiguous queries, uses cheap gpt-4.1-mini).
 - **35 new tests**: TestNeedsRewrite (20), TestExtractRecentExchanges (6), TestRewriteQuery (6), TestQueryRewriteIntegration (3).
 - **189 tests passing** (up from 154).
+
+## 2026-05-11 — Phase 3 Remediation Batch: Smart Tail, Tiktoken, Reasoning Strip
+
+- **IndentationError fix**: Rewrote the assembly section of `chat.py` (lines 258–311) — `if assembled:` was at indent 8 (sibling of `try:`) instead of indent 12 (child), causing Python to reject the try/if/except nesting
+- **Smart Tail (`src/assembler/tail.py`)**: Expands coherence tail to include orphaned tool messages' matching assistant messages, preventing broken tool-call/tool-result sequences after message rewriting
+- **Tiktoken upgrade**: Replaced crude `len//3` token estimation with `cl100k_base` + 10% margin in both assembler (floor=1) and chat handler (floor=500 for cold-start threshold)
+- **Reasoning stripping**: Added `_strip_reasoning()` to strip `<thinking>/<reasoning>/<inner_monologue>` blocks from model output before extraction
+- **Tool result serialization**: Changed from bare content to `Tool [{name}]:\n{content[:2000]}` format
+- **Assembly latency budget**: Added `assembly_latency_budget_ms` config (default 150) with P99 warning log
+- **Validation script fix**: `invalidated_at IS NULL` → `valid_until IS NULL` (property name mismatch)
+- **`max_tail_messages`** config setting (default 20) wired through to `_rewrite_messages()`
+- **112 tests passing** (8 new smart tail tests + 104 existing)
 
 ## 2026-05-11 — Phase 3 Remediation Batch: Steps 7a, 7b, 11, 12
 

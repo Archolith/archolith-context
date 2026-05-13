@@ -485,6 +485,8 @@ async def assemble_context(
         token_estimate=context_tokens,
         facts_retrieved=len(budgeted_facts),
         session_id=session_id,
+        files_selected=files,
+        decisions_selected=decisions,
     )
 
     logger.info(

@@ -109,14 +109,15 @@ class FileStatus(str, Enum):
 What the assembler produces for the proxy to forward.
 
 ```python
-@dataclass
-class AssembledContext:
+class AssembledContext(BaseModel):
     system_message: dict  # original system prompt (pass-through)
     graph_context: list[dict]  # synthesized messages from graph facts
     coherence_tail: list[dict]  # last N raw messages (verbatim)
     token_estimate: int  # estimated total tokens
     facts_retrieved: int  # how many facts contributed
     session_id: str
+    files_selected: list[dict]  # files injected into the assembled context
+    decisions_selected: list[dict]  # decisions injected into the assembled context
 ```
 
 ### ExtractionResult

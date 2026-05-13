@@ -16,6 +16,8 @@ class AssembledContext(BaseModel):
     token_estimate: int = 0
     facts_retrieved: int = 0
     session_id: str = ""
+    files_selected: list[dict] = Field(default_factory=list)
+    decisions_selected: list[dict] = Field(default_factory=list)
 
 
 class ExtractionResult(BaseModel):
