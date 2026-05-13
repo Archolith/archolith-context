@@ -11,6 +11,7 @@ import structlog
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.config import get_settings
 from src.graph.driver import close_driver, init_driver, ensure_indexes
@@ -184,6 +185,19 @@ def create_app() -> FastAPI:
     # Mount routes
     app.include_router(openai_router)
     app.include_router(trace_router)
+
+    # Dashboard static files (serve /dashboard/ -> src/static/)
+    import os
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    if os.path.isdir(static_dir):
+        app.mount("/dashboard", StaticFiles(directory=static_dir, html=True), name="dashboard")
+
+    # Redirect root to dashboard
+    from fastapi.responses import RedirectResponse
+
+    @app.get("/", include_in_schema=False)
+    async def root_redirect():
+        return RedirectResponse(url="/dashboard/dashboard.html")
 
     # --- Health endpoint ---
     @app.get("/health")

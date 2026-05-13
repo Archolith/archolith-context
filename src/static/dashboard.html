@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>context-engine dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --purple: #bc8cff;
+    --mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* Layout */
+  .app { display: flex; flex-direction: column; min-height: 100vh; }
+  .header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 12px 24px; display: flex; align-items: center; gap: 20px;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .header h1 { font-size: 16px; font-weight: 600; }
+  .header nav { display: flex; gap: 16px; }
+  .header nav a { font-size: 13px; color: var(--text-dim); }
+  .header nav a.active { color: var(--accent); }
+  .header .status { margin-left: auto; font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+  .header .status .ok { color: var(--green); }
+  .header .status .err { color: var(--red); }
+
+  .main { flex: 1; padding: 20px 24px; max-width: 1440px; margin: 0 auto; width: 100%; }
+
+  /* Cards */
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .card-header h2 { font-size: 14px; font-weight: 600; }
+
+  /* Metrics grid */
+  .metrics-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px;
+  }
+  .metric {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px; text-align: center;
+  }
+  .metric .value { font-size: 24px; font-weight: 700; font-family: var(--mono); }
+  .metric .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; margin-top: 4px; }
+  .metric .value.green { color: var(--green); }
+  .metric .value.red { color: var(--red); }
+  .metric .value.yellow { color: var(--yellow); }
+  .metric .value.purple { color: var(--purple); }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--text-dim); font-weight: 500; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  tr:hover { background: rgba(88,166,255,0.04); }
+  tr { cursor: pointer; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+
+  /* Tags */
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 11px; font-weight: 500;
+  }
+  .tag.graph { background: rgba(63,185,80,0.15); color: var(--green); }
+  .tag.fallback { background: rgba(248,81,73,0.15); color: var(--red); }
+  .tag.passthrough { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+  .tag.cold_start { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .tag.skipped { background: rgba(139,148,158,0.1); color: var(--text-dim); }
+
+  /* Session detail */
+  .session-header { display: flex; gap: 24px; align-items: flex-start; margin-bottom: 20px; flex-wrap: wrap; }
+  .session-header .sid { font-family: var(--mono); font-size: 16px; font-weight: 600; word-break: break-all; }
+  .session-header .goal { color: var(--text-dim); font-style: italic; max-width: 600px; }
+
+  /* Turn timeline */
+  .timeline { position: relative; }
+  .turn-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s;
+  }
+  .turn-card:hover { border-color: var(--accent); }
+  .turn-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .turn-header { display: flex; align-items: center; gap: 12px; }
+  .turn-num { font-family: var(--mono); font-weight: 700; font-size: 13px; min-width: 60px; }
+  .turn-mode { flex-shrink: 0; }
+  .turn-tokens { font-family: var(--mono); font-size: 12px; color: var(--text-dim); margin-left: auto; }
+  .turn-latency { font-family: var(--mono); font-size: 12px; color: var(--text-dim); min-width: 80px; text-align: right; }
+  .turn-detail { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); display: none; }
+  .turn-card.selected .turn-detail { display: block; }
+
+  /* Prompt diff */
+  .diff-container { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .diff-pane { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow: auto; max-height: 500px; }
+  .diff-pane h3 { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; text-transform: uppercase; }
+  .diff-pane pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+  .msg-role { font-weight: 700; color: var(--accent); }
+  .msg-role.user { color: var(--green); }
+  .msg-role.assistant { color: var(--purple); }
+
+  /* Fact list */
+  .fact-list { list-style: none; }
+  .fact-list li { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .fact-type { font-family: var(--mono); font-size: 11px; color: var(--purple); margin-right: 8px; }
+  .fact-content { color: var(--text); }
+
+  /* Latency bar */
+  .latency-bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; min-width: 60px; display: inline-block; vertical-align: middle; }
+  .latency-bar .fill { height: 100%; border-radius: 3px; }
+  .latency-bar .fill.fast { background: var(--green); }
+  .latency-bar .fill.med { background: var(--yellow); }
+  .latency-bar .fill.slow { background: var(--red); }
+
+  /* Loading / empty */
+  .loading { text-align: center; color: var(--text-dim); padding: 40px; }
+  .empty { text-align: center; color: var(--text-dim); padding: 40px; font-style: italic; }
+  .error-msg { color: var(--red); padding: 16px; background: rgba(248,81,73,0.08); border-radius: 6px; margin-bottom: 16px; }
+
+  /* Back link */
+  .back { font-size: 13px; margin-bottom: 16px; display: inline-flex; align-items: center; gap: 6px; }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .diff-container { grid-template-columns: 1fr; }
+    .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>context-engine</h1>
+    <nav id="nav">
+      <a href="#/" data-view="overview" class="active">overview</a>
+      <a href="#/sessions" data-view="sessions">sessions</a>
+    </nav>
+    <div class="status" id="status-bar">connecting...</div>
+  </div>
+  <div class="main" id="content">
+    <div class="loading">Loading...</div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// API client
+// ---------------------------------------------------------------------------
+const API_BASE = window.location.origin;
+
+async function api(path) {
+  const r = await fetch(`${API_BASE}${path}`);
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+// ---------------------------------------------------------------------------
+// Router (hash-based SPA)
+// ---------------------------------------------------------------------------
+const content = document.getElementById('content');
+const nav = document.getElementById('nav');
+const statusBar = document.getElementById('status-bar');
+
+function route() {
+  const hash = location.hash.slice(1) || '/';
+  // Update nav active state
+  nav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+
+  if (hash === '/') {
+    nav.querySelector('[data-view="overview"]').classList.add('active');
+    renderOverview();
+  } else if (hash === '/sessions') {
+    nav.querySelector('[data-view="sessions"]').classList.add('active');
+    renderSessionList();
+  } else if (hash.startsWith('/sessions/')) {
+    const parts = hash.split('/');
+    const sid = parts[2];
+    renderSessionDetail(sid);
+  } else {
+    content.innerHTML = '<div class="empty">Unknown view</div>';
+  }
+}
+
+window.addEventListener('hashchange', route);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function ago(ts) {
+  if (!ts) return '—';
+  const d = Date.now() / 1000 - ts;
+  if (d < 60) return `${Math.floor(d)}s ago`;
+  if (d < 3600) return `${Math.floor(d / 60)}m ago`;
+  if (d < 86400) return `${Math.floor(d / 3600)}h ago`;
+  return `${Math.floor(d / 86400)}d ago`;
+}
+
+function pct(v) {
+  if (v == null || isNaN(v)) return '—';
+  return `${(v * 100).toFixed(1)}%`;
+}
+
+function modeTag(mode) {
+  const cls = mode === 'graph' ? 'graph' : mode === 'fallback' ? 'fallback' : mode === 'cold_start' ? 'cold_start' : mode.startsWith('skipped') ? 'skipped' : 'passthrough';
+  return `<span class="tag ${cls}">${mode}</span>`;
+}
+
+function latencyBar(ms, max = 3000) {
+  const ratio = Math.min(ms / max, 1);
+  const cls = ratio < 0.3 ? 'fast' : ratio < 0.7 ? 'med' : 'slow';
+  return `<span class="latency-bar"><span class="fill ${cls}" style="width:${ratio * 100}%"></span></span> <span class="mono">${Math.round(ms)}ms</span>`;
+}
+
+function escapeHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderMessages(msgs) {
+  if (!msgs || !msgs.length) return '<em style="color:var(--text-dim)">No messages captured</em>';
+  return msgs.map(m => {
+    const role = (m.role || 'unknown').toLowerCase();
+    const roleCls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : '';
+    const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2);
+    return `<div><span class="msg-role ${roleCls}">${escapeHtml(role)}:</span> ${escapeHtml(content).substring(0, 2000)}</div>`;
+  }).join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Overview
+// ---------------------------------------------------------------------------
+async function renderOverview() {
+  content.innerHTML = '<div class="loading">Loading metrics...</div>';
+  try {
+    const [m, traceData] = await Promise.all([api('/metrics'), api('/trace/sessions')]);
+
+    const totalRequests = m.total_requests || 0;
+    const savingsRate = m.token_savings_rate || 0;
+    const extractionRate = m.extraction_success_rate || 0;
+    const upstreamErrors = m.upstream_errors || 0;
+    const neo4jErrors = m.neo4j_errors || 0;
+    const traceRecords = m.trace_records || 0;
+    const traceSessions = m.trace_sessions || 0;
+
+    const srCls = savingsRate > 0.3 ? 'green' : savingsRate > 0.1 ? 'yellow' : 'red';
+    const erCls = extractionRate > 0.9 ? 'green' : extractionRate > 0.5 ? 'yellow' : 'red';
+
+    statusBar.innerHTML = `uptime ${Math.round(m.uptime_s || 0)}s · neo4j <span class="${m.neo4j_ready ? 'ok' : 'err'}">${m.neo4j_ready ? 'ok' : 'off'}</span> · traces ${traceRecords}`;
+
+    let sessionRows = '';
+    if (traceData.sessions && traceData.sessions.length > 0) {
+      sessionRows = traceData.sessions.slice(0, 10).map(s => `
+        <tr onclick="location.hash='/sessions/${s.session_id}'">
+          <td class="mono">${escapeHtml(s.session_id.substring(0, 12))}…</td>
+          <td>${s.turn_count}</td>
+          <td>${pct(s.avg_savings_ratio)}</td>
+          <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => modeTag(k)).join(' ')}</td>
+          <td>${ago(s.last_turn_at)}</td>
+        </tr>
+      `).join('');
+    }
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header"><h2>Proxy Metrics</h2></div>
+        <div class="metrics-grid">
+          <div class="metric"><div class="value">${totalRequests}</div><div class="label">Total Requests</div></div>
+          <div class="metric"><div class="value ${srCls}">${pct(savingsRate)}</div><div class="label">Token Savings</div></div>
+          <div class="metric"><div class="value ${erCls}">${pct(extractionRate)}</div><div class="label">Extraction Success</div></div>
+          <div class="metric"><div class="value">${m.total_input_tokens_seen || 0}</div><div class="label">Input Tokens Seen</div></div>
+          <div class="metric"><div class="value">${m.token_savings_estimated || 0}</div><div class="label">Tokens Saved</div></div>
+          <div class="metric"><div class="value ${upstreamErrors > 0 ? 'red' : 'green'}">${upstreamErrors}</div><div class="label">Upstream Errors</div></div>
+          <div class="metric"><div class="value ${neo4jErrors > 0 ? 'red' : 'green'}">${neo4jErrors}</div><div class="label">Neo4j Errors</div></div>
+          <div class="metric"><div class="value purple">${traceRecords}</div><div class="label">Trace Records</div></div>
+          <div class="metric"><div class="value purple">${traceSessions}</div><div class="label">Traced Sessions</div></div>
+          <div class="metric"><div class="value">${m.active_sessions || 0}</div><div class="label">Active Sessions</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h2>Assembly Modes</h2></div>
+        <div class="metrics-grid">
+          ${Object.entries(m.assembly_modes || {}).map(([k,v]) => `
+            <div class="metric"><div class="value">${v}</div><div class="label">${k}</div></div>
+          `).join('')}
+        </div>
+      </div>
+
+      ${traceData.sessions && traceData.sessions.length > 0 ? `
+      <div class="card">
+        <div class="card-header">
+          <h2>Recent Sessions</h2>
+          <a href="#/sessions">view all →</a>
+        </div>
+        <table>
+          <thead><tr><th>Session</th><th>Turns</th><th>Savings</th><th>Modes</th><th>Last Activity</th></tr></thead>
+          <tbody>${sessionRows}</tbody>
+        </table>
+      </div>
+      ` : ''}
+    `;
+  } catch (e) {
+    content.innerHTML = `<div class="error-msg">Failed to load overview: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Session List
+// ---------------------------------------------------------------------------
+async function renderSessionList() {
+  content.innerHTML = '<div class="loading">Loading sessions...</div>';
+  try {
+    const data = await api('/trace/sessions');
+    if (!data.sessions || data.sessions.length === 0) {
+      content.innerHTML = '<div class="empty">No traced sessions yet</div>';
+      return;
+    }
+
+    const rows = data.sessions.map(s => `
+      <tr onclick="location.hash='/sessions/${s.session_id}'">
+        <td class="mono">${escapeHtml(s.session_id)}</td>
+        <td>${s.turn_count}</td>
+        <td>${pct(s.avg_savings_ratio)}</td>
+        <td>${s.total_input_tokens || 0}</td>
+        <td>${s.total_savings_tokens || 0}</td>
+        <td>${s.total_facts_stored || 0}</td>
+        <td>${s.total_duplicates_skipped || 0}</td>
+        <td>${s.total_invalidations_attempted || 0}</td>
+        <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => `${modeTag(k)}×${v}`).join(' ')}</td>
+        <td>${ago(s.last_turn_at)}</td>
+      </tr>
+    `).join('');
+
+    content.innerHTML = `
+      <div class="card">
+        <div class="card-header"><h2>Sessions (${data.count})</h2></div>
+        <table>
+          <thead><tr>
+            <th>Session ID</th><th>Turns</th><th>Savings</th><th>In Tokens</th><th>Saved Tokens</th>
+            <th>Facts</th><th>Dupes</th><th>Invalidations</th><th>Modes</th><th>Last</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  } catch (e) {
+    content.innerHTML = `<div class="error-msg">Failed to load sessions: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Session Detail (with turn timeline, prompt diff, fact inspector)
+// ---------------------------------------------------------------------------
+async function renderSessionDetail(sessionId) {
+  content.innerHTML = '<div class="loading">Loading session...</div>';
+  try {
+    const data = await api(`/trace/sessions/${sessionId}`);
+    const summary = data.summary || {};
+    const turns = data.turns || [];
+
+    // Session header
+    let html = `
+      <a class="back" href="#/sessions">← sessions</a>
+      <div class="session-header">
+        <div>
+          <div class="sid">${escapeHtml(sessionId)}</div>
+          ${summary.goal ? `<div class="goal">"${escapeHtml(summary.goal)}"</div>` : ''}
+        </div>
+        <div class="metrics-grid" style="flex:1;min-width:300px;">
+          <div class="metric"><div class="value">${summary.turn_count || 0}</div><div class="label">Turns</div></div>
+          <div class="metric"><div class="value">${summary.total_input_tokens || 0}</div><div class="label">In Tokens</div></div>
+          <div class="metric"><div class="value">${summary.total_savings_tokens || 0}</div><div class="label">Saved Tokens</div></div>
+          <div class="metric"><div class="value">${pct(summary.avg_savings_ratio)}</div><div class="label">Savings</div></div>
+          <div class="metric"><div class="value">${summary.total_facts_stored || 0}</div><div class="label">Facts Stored</div></div>
+          <div class="metric"><div class="value">${summary.total_duplicates_skipped || 0}</div><div class="label">Dupes Skipped</div></div>
+          <div class="metric"><div class="value">${summary.total_invalidations_attempted || 0}</div><div class="label">Invalidations</div></div>
+          <div class="metric"><div class="value">${summary.total_recalls || 0}</div><div class="label">Recalls</div></div>
+        </div>
+      </div>
+    `;
+
+    // Mode distribution
+    const modes = summary.assembly_modes || {};
+    if (Object.keys(modes).length > 0) {
+      html += `
+        <div class="card">
+          <div class="card-header"><h2>Mode Distribution</h2></div>
+          <div class="metrics-grid">
+            ${Object.entries(modes).map(([k,v]) => `
+              <div class="metric"><div class="value">${v}</div><div class="label">${modeTag(k)}</div></div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // Turn timeline
+    html += '<div class="card"><div class="card-header"><h2>Turn Timeline</h2></div><div class="timeline" id="timeline">';
+    if (turns.length === 0) {
+      html += '<div class="empty">No turns recorded</div>';
+    } else {
+      turns.forEach(t => {
+        const savingsCls = t.savings_ratio > 0.3 ? 'green' : t.savings_ratio > 0.1 ? 'yellow' : 'red';
+        const reasonStr = t.assembly_reason ? ` — ${escapeHtml(t.assembly_reason)}` : '';
+        const fallbackStr = t.fallback_reason ? `<div style="color:var(--red);font-size:12px;margin-top:4px;">fallback: ${escapeHtml(t.fallback_reason)}</div>` : '';
+
+        // Facts section
+        let factsHtml = '';
+        if (t.facts_selected && t.facts_selected.length > 0) {
+          factsHtml += '<h4 style="margin:8px 0 4px;font-size:12px;color:var(--text-dim)">Facts Injected</h4><ul class="fact-list">';
+          t.facts_selected.forEach(f => {
+            const ftype = f.type || f.fact_type || '?';
+            const fcontent = f.content || f.text || f.summary || JSON.stringify(f).substring(0, 100);
+            factsHtml += `<li><span class="fact-type">${escapeHtml(ftype)}</span><span class="fact-content">${escapeHtml(String(fcontent).substring(0, 200))}</span></li>`;
+          });
+          factsHtml += '</ul>';
+        }
+
+        // Extraction results
+        if (t.extracted_facts && t.extracted_facts.length > 0) {
+          factsHtml += '<h4 style="margin:8px 0 4px;font-size:12px;color:var(--green)">Extracted Facts</h4><ul class="fact-list">';
+          t.extracted_facts.forEach(f => {
+            const ftype = f.type || f.fact_type || '?';
+            const fcontent = f.content || f.text || f.summary || JSON.stringify(f).substring(0, 100);
+            factsHtml += `<li><span class="fact-type">${escapeHtml(ftype)}</span><span class="fact-content">${escapeHtml(String(fcontent).substring(0, 200))}</span></li>`;
+          });
+          factsHtml += '</ul>';
+        }
+
+        // Extraction stats
+        if (t.facts_stored > 0 || t.duplicates_skipped > 0 || t.invalidations_attempted > 0) {
+          factsHtml += `<div style="font-size:12px;color:var(--text-dim);margin-top:8px;">stored=${t.facts_stored} dupes=${t.duplicates_skipped} invalidations=${t.invalidations_attempted}/${t.invalidations_matched}</div>`;
+        }
+
+        // Recall
+        if (t.recall_used) {
+          factsHtml += `<div style="font-size:12px;color:var(--purple);margin-top:4px;">recall: "${escapeHtml(t.recall_question)}" → ${t.recall_facts_returned} facts</div>`;
+        }
+
+        html += `
+          <div class="turn-card" onclick="this.classList.toggle('selected')">
+            <div class="turn-header">
+              <span class="turn-num">t${t.turn_number}</span>
+              <span class="turn-mode">${modeTag(t.assembly_mode)}${reasonStr}</span>
+              <span class="turn-tokens">
+                <span class="${savingsCls}" style="color:var(--${savingsCls})">${t.savings_tokens}tok saved (${pct(t.savings_ratio)})</span>
+              </span>
+              <span class="turn-latency">${latencyBar(t.assembly_latency_ms + t.upstream_latency_ms)}</span>
+            </div>
+            ${fallbackStr}
+            <div class="turn-detail">
+              <!-- Latency breakdown -->
+              <div style="margin-bottom:12px;">
+                <span style="font-size:12px;color:var(--text-dim);margin-right:16px;">assembly ${latencyBar(t.assembly_latency_ms, 500)}</span>
+                <span style="font-size:12px;color:var(--text-dim);margin-right:16px;">upstream ${latencyBar(t.upstream_latency_ms, 3000)}</span>
+                <span style="font-size:12px;color:var(--text-dim);">extraction ${latencyBar(t.extraction_latency_ms, 500)}</span>
+              </div>
+
+              <!-- Token economics -->
+              <div style="margin-bottom:12px;font-size:12px;color:var(--text-dim);">
+                in=${t.input_tokens} → out=${t.rewritten_tokens} · saved=${t.savings_tokens} (${pct(t.savings_ratio)}) · output=${t.output_tokens || '?'}
+              </div>
+
+              <!-- Facts & Extraction -->
+              ${factsHtml}
+
+              <!-- Prompt diff -->
+              <div class="diff-container" style="margin-top:12px;">
+                <div class="diff-pane">
+                  <h3>Original Request (${t.message_count} msgs)</h3>
+                  <pre>${renderMessages(t.original_messages)}</pre>
+                </div>
+                <div class="diff-pane">
+                  <h3>Rewritten Payload</h3>
+                  <pre>${renderMessages(t.rewritten_messages)}</pre>
+                </div>
+              </div>
+
+              <!-- Upstream response -->
+              ${t.upstream_response_summary ? `
+              <div style="margin-top:12px;">
+                <h4 style="font-size:12px;color:var(--text-dim);margin-bottom:4px;">Upstream Response (HTTP ${t.upstream_status})</h4>
+                <pre style="font-family:var(--mono);font-size:12px;background:var(--bg);padding:8px;border-radius:4px;max-height:200px;overflow:auto;">${escapeHtml(t.upstream_response_summary)}</pre>
+              </div>
+              ` : ''}
+
+              <!-- Turn ID -->
+              <div style="margin-top:8px;font-size:11px;color:var(--text-dim);">turn_id: <span class="mono">${escapeHtml(t.turn_id)}</span></div>
+            </div>
+          </div>
+        `;
+      });
+    }
+    html += '</div></div>';
+
+    content.innerHTML = html;
+  } catch (e) {
+    content.innerHTML = `
+      <a class="back" href="#/sessions">← sessions</a>
+      <div class="error-msg">Failed to load session: ${escapeHtml(e.message)}</div>
+    `;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-refresh overview
+// ---------------------------------------------------------------------------
+let refreshTimer = null;
+function startAutoRefresh() {
+  clearInterval(refreshTimer);
+  const hash = location.hash.slice(1) || '/';
+  if (hash === '/') {
+    refreshTimer = setInterval(renderOverview, 10000);
+  }
+}
+window.addEventListener('hashchange', () => { route(); startAutoRefresh(); });
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+route();
+startAutoRefresh();
+</script>
+</body>
+</html>
