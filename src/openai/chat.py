@@ -1376,10 +1376,12 @@ async def _run_extraction(
             )
 
         # Invalidate superseded facts — match description strings to actual fact IDs
+        invalidations_matched_count = 0
         if result.invalidated_fact_ids:
             matched_ids = await facts_repo.find_matching_fact_ids(
                 session_id, result.invalidated_fact_ids
             )
+            invalidations_matched_count = len(matched_ids)
             if matched_ids:
                 count = await facts_repo.invalidate_facts(matched_ids)
                 if count:
@@ -1416,10 +1418,14 @@ async def _run_extraction(
         )
 
         if trace_builder:
+            duplicates_skipped = len(result.facts) - len(unique_facts)
             trace_builder.set_extraction(
-                facts_extracted=len(unique_facts) if 'unique_facts' in dir() else 0,
-                extraction_latency_ms=0.0,
-                extraction_summary="",
+                facts_stored=len(unique_facts),
+                duplicates_skipped=duplicates_skipped,
+                invalidations_attempted=len(result.invalidated_fact_ids) if result.invalidated_fact_ids else 0,
+                invalidations_matched=invalidations_matched_count,
+                extraction_latency_ms=extraction_latency_ms,
+                extracted_facts=[{"content": f.get("content", "")[:200], "type": f.get("fact_type", "observation")} for f in unique_facts],
             )
 
     except Exception as e:

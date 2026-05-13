@@ -342,3 +342,91 @@ class TestTraceStore:
         retrieved = await store.get_turn(trace.turn_id)
         assert retrieved is not None
         assert retrieved.input_tokens == 100
+
+
+class TestTraceStoreDiskPersistence:
+    """Test optional disk persistence for trace records."""
+
+    @pytest.mark.asyncio
+    async def test_disk_persistence_creates_jsonl(self, tmp_path):
+        """When trace_dir is set, traces are written as JSONL files."""
+        store = TraceStore(trace_dir=str(tmp_path))
+        trace = TurnTrace(session_id="s1", turn_number=1, input_tokens=50)
+        await store.record(trace)
+
+        jsonl_path = tmp_path / "s1.jsonl"
+        assert jsonl_path.exists()
+        content = jsonl_path.read_text(encoding="utf-8").strip()
+        assert len(content) > 0
+        # Should be valid JSON
+        import json
+        data = json.loads(content)
+        assert data["session_id"] == "s1"
+        assert data["input_tokens"] == 50
+
+    @pytest.mark.asyncio
+    async def test_disk_persistence_appends(self, tmp_path):
+        """Multiple traces to the same session append to the same file."""
+        store = TraceStore(trace_dir=str(tmp_path))
+        for i in range(3):
+            t = TurnTrace(session_id="s1", turn_number=i, input_tokens=i * 10)
+            await store.record(t)
+
+        jsonl_path = tmp_path / "s1.jsonl"
+        lines = jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 3
+
+    @pytest.mark.asyncio
+    async def test_disk_persistence_no_dir_means_no_files(self, tmp_path):
+        """When trace_dir is None, no files are written."""
+        store = TraceStore()
+        await store.record(TurnTrace(session_id="s1", turn_number=1))
+        # tmp_path should be empty (no jsonl files)
+        jsonl_files = list(tmp_path.glob("*.jsonl"))
+        assert len(jsonl_files) == 0
+
+    @pytest.mark.asyncio
+    async def test_disk_persistence_session_id_sanitized(self, tmp_path):
+        """Session IDs with slashes are sanitized for filesystem safety."""
+        store = TraceStore(trace_dir=str(tmp_path))
+        trace = TurnTrace(session_id="path/with/slashes", turn_number=1)
+        await store.record(trace)
+
+        jsonl_path = tmp_path / "path_with_slashes.jsonl"
+        assert jsonl_path.exists()
+
+
+class TestTraceBuilderExtraction:
+    """Test that TraceBuilder.set_extraction captures all extraction fields."""
+
+    def test_set_extraction_full(self):
+        builder = TraceBuilder()
+        builder.set_request("s1", 1, "model", False, 100, 1)
+        builder.set_extraction(
+            facts_stored=3,
+            duplicates_skipped=2,
+            invalidations_attempted=1,
+            invalidations_matched=1,
+            extraction_latency_ms=150.0,
+            extracted_facts=[{"content": "fact1", "type": "observation"}],
+        )
+        trace = builder.build()
+        assert trace.facts_stored == 3
+        assert trace.duplicates_skipped == 2
+        assert trace.invalidations_attempted == 1
+        assert trace.invalidations_matched == 1
+        assert trace.extraction_latency_ms == 150.0
+        assert len(trace.extracted_facts) == 1
+        assert trace.extracted_facts[0]["content"] == "fact1"
+
+    def test_set_extraction_defaults(self):
+        builder = TraceBuilder()
+        builder.set_request("s1", 1, "model", False, 100, 1)
+        builder.set_extraction()
+        trace = builder.build()
+        assert trace.facts_stored == 0
+        assert trace.duplicates_skipped == 0
+        assert trace.invalidations_attempted == 0
+        assert trace.invalidations_matched == 0
+        assert trace.extraction_latency_ms == 0.0
+        assert trace.extracted_facts == []

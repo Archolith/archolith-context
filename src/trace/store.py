@@ -1,4 +1,4 @@
-"""In-memory turn trace store with session-level indexing.
+"""In-memory turn trace store with session-level indexing and optional disk persistence.
 
 A single TraceStore instance lives on app.state.trace_store. It collects
 TurnTrace records as they are produced during proxy request handling and
@@ -11,12 +11,17 @@ Design choices:
   long-running or abandoned sessions.
 - Indexed by session_id and turn_id for O(1) lookups.
 - Session summary is computed on demand from the stored turns.
+- Optional disk persistence: when trace_dir is set, each trace record is
+  also appended to a per-session JSONL file under trace_dir/<session_id>.jsonl.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from collections import defaultdict
+from pathlib import Path
 
 import structlog
 
@@ -35,7 +40,11 @@ class TraceStore:
     of TurnTrace records, indexed for fast lookup by turn_id.
     """
 
-    def __init__(self, max_turns_per_session: int = DEFAULT_MAX_TURNS_PER_SESSION) -> None:
+    def __init__(
+        self,
+        max_turns_per_session: int = DEFAULT_MAX_TURNS_PER_SESSION,
+        trace_dir: str | None = None,
+    ) -> None:
         self._max_turns = max_turns_per_session
         self._lock = asyncio.Lock()
         # session_id -> list[TurnTrace] (ordered by turn_number)
@@ -43,11 +52,17 @@ class TraceStore:
         # turn_id -> TurnTrace (global index for direct lookup)
         self._by_turn_id: dict[str, TurnTrace] = {}
         self._total_traces = 0
+        # Optional disk persistence
+        self._trace_dir = Path(trace_dir) if trace_dir else None
+        if self._trace_dir:
+            self._trace_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("trace_disk_persistence_enabled", dir=str(self._trace_dir))
 
     async def record(self, trace: TurnTrace) -> None:
         """Store a turn trace record.
 
         Evicts oldest turns if the session exceeds the per-session limit.
+        If disk persistence is enabled, appends the trace as JSONL.
         """
         async with self._lock:
             session_id = trace.session_id or "__no_session__"
@@ -61,6 +76,18 @@ class TraceStore:
             turn_list.append(trace)
             self._by_turn_id[trace.turn_id] = trace
             self._total_traces += 1
+
+        # Disk persistence (outside lock — I/O should not block reads)
+        if self._trace_dir:
+            try:
+                safe_session = session_id.replace("/", "_").replace("\\", "_")
+                path = self._trace_dir / f"{safe_session}.jsonl"
+                line = trace.model_dump_json() + "\n"
+                # Write append — no lock needed, OS provides atomic appends for small writes
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(line)
+            except Exception:
+                logger.warning("trace_disk_write_failed", session_id=session_id, exc_info=True)
 
     async def get_turn(self, turn_id: str) -> TurnTrace | None:
         """Look up a single turn by its turn_id."""
