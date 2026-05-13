@@ -25,6 +25,11 @@ _ADAPTER_TYPES: dict[str, str] = {
     "mem0": "src.memory.adapters.mem0",
     "zep": "src.memory.adapters.zep",
     "generic_http": "src.memory.adapters.generic_http",
+    "basic_memory": "src.memory.adapters.basic_memory",
+    "claude_mem": "src.memory.adapters.claude_mem",
+    "cognee": "src.memory.adapters.cognee",
+    "openmemory": "src.memory.adapters.openmemory",
+    "nocturne_memory": "src.memory.adapters.nocturne_memory",
 }
 
 

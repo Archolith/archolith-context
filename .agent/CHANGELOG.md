@@ -3,18 +3,23 @@
 ## 2026-05-13 — Memory Engine Registration and Promotion Adapters (Phase 1 + 2)
 
 - **Canonical promotion model (`src/memory/models.py`)**: `PromotionRecord`, `PromotionResult`, `EngineCapabilities`, `MemoryEngineConfig` — single payload shape emitted before adapter translation with auto-dedupe key generation
-- **Memory engine registry (`src/memory/registry.py`)**: `MemoryEngineRegistry` with config-driven engine registration, lazy adapter instantiation, priority-based default resolution, and healthcheck aggregation
+- **Memory engine registry (`src/memory/registry.py`)**: `MemoryEngineRegistry` with config-driven engine registration, lazy adapter instantiation, priority-based default resolution, and healthcheck aggregation. Supports 9 adapter types
 - **Adapter base contract (`src/memory/adapters/base.py`)**: `MemoryAdapterBase` abstract class with required methods (validate_config, capabilities, healthcheck, promote_fact) and sensible defaults for optional methods (promote_batch, dedupe_lookup, list_by_source, update/delete_promoted)
 - **First-party cth.mcp.memory adapter (`src/memory/adapters/cth_memory.py`)**: Promotes facts via the cth.mcp.memory HTTP REST API with auth, healthcheck, and source-attributed metadata
 - **Generic HTTP adapter (`src/memory/adapters/generic_http.py`)**: Config-driven POST target for systems without bespoke integration, supports payload templates
 - **Mem0 adapter (`src/memory/adapters/mem0.py`)**: Basic fact/observation write adapter via Mem0 REST API
 - **Zep adapter (`src/memory/adapters/zep.py`)**: Basic memory/fact write adapter via Zep REST API
+- **basic-memory (Obsidian) adapter (`src/memory/adapters/basic_memory.py`)**: Promotes facts as markdown files with YAML frontmatter in an Obsidian-compatible vault. Supports filesystem mode (direct .md writes) and API mode (via basic-memory REST API). Generates structured markdown with observations, relations, and provenance
+- **claude-mem adapter (`src/memory/adapters/claude_mem.py`)**: Promotes facts as observations into the claude-mem worker service (SQLite + ChromaDB). Targets the HTTP API on port 37777
+- **Cognee adapter (`src/memory/adapters/cognee.py`)**: Promotes facts via Cognee's ingest API (graph+vector memory control plane). Supports configurable dataset and delete (via `forget`)
+- **OpenMemory adapter (`src/memory/adapters/openmemory.py`)**: Promotes facts via OpenMemory's cognitive memory REST API (multi-sector, temporal knowledge graph, decay & reinforcement). Supports delete and list-by-source
+- **Nocturne Memory adapter (`src/memory/adapters/nocturne_memory.py`)**: Promotes facts as URI-graph nodes in Nocturne Memory's hierarchical namespace. Supports create, update, delete, and list-by-source with disclosure triggers and priority
 - **Promotion service (`src/memory/promotion.py`)**: `PromotionService` with conservative promotion policy (confidence ≥0.9, fact type allowlist, multi-turn survival gate), dedupe, dry-run, batch promotion, audit trail, and stats
 - **Config integration**: Added `MEMORY_ENGINES_JSON`, `PROMOTION_MIN_CONFIDENCE`, `PROMOTION_DRY_RUN` to `Settings`; auto-registers cth-memory from legacy `MEMORY_API_URL` if `MEMORY_ENGINES_JSON` is empty
 - **Startup wiring**: Registry initialized in lifespan, `PromotionService` attached to `app.state.promotion_service`
 - **Admin endpoints**: `GET /memory-engines`, `GET /memory-engines/{id}`, `GET /promotions`, `POST /promotions/retry/{id}` — engine health, capabilities, promotion audit, retry
-- **35 new tests** in `tests/test_memory_promotion.py` covering models, registry, adapter base, policy, service, dedupe, batch, audit trail
-- **371 tests passing** (up from 336)
+- **62 tests** in `tests/test_memory_promotion.py` covering models, registry, adapter base, policy, service, dedupe, batch, audit trail, all 5 new adapters, and registry type coverage
+- **398 tests passing** (up from 336)
 
 ## 2026-05-12 — Observability Dashboard and Operator Tooling
 
