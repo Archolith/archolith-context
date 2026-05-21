@@ -1172,23 +1172,25 @@ async def _run_extraction(
         fact_contents = [fact.get("content", "") for fact in unique_facts]
         embeddings = await _compute_fact_embeddings(client, fact_contents)
 
-        # Store deduplicated facts with their embeddings
+        # Store deduplicated facts with their embeddings via batch call
+        enriched_facts = []
         for i, fact in enumerate(unique_facts):
-            content = fact.get("content", "")
             fact_type_str = fact.get("fact_type", "observation")
             try:
                 fact_type = FactType(fact_type_str)
             except ValueError:
                 fact_type = FactType.OBSERVATION
-
-            await facts_repo.store_fact(
-                session_id=session_id,
-                content=content,
-                fact_type=fact_type,
-                source_turn=turn_number,
-                confidence=fact.get("confidence", 0.5),
-                embedding=embeddings[i] if i < len(embeddings) else None,
-            )
+            enriched_facts.append({
+                "content": fact.get("content", ""),
+                "fact_type": fact_type.value,
+                "confidence": fact.get("confidence", 0.5),
+                "embedding": embeddings[i] if i < len(embeddings) else None,
+            })
+        await facts_repo.store_facts_batch(
+            session_id=session_id,
+            facts=enriched_facts,
+            source_turn=turn_number,
+        )
 
         # Store file touches
         for file_path in result.files_touched:
