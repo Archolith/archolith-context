@@ -56,3 +56,16 @@ data/
 scripts/*.json
 audit_results.json
 
+# Internal agent docs (not for public repo)
+.agent/audits/
+.agent/plans/
+.agent/reviews/
+.agent/design.md
+CLAUDE.md
+QWEN.md
+gemini.md
+.clinerules
+.cursorrules
+.windsurfrules
+.github/copilot-instructions.md
+
