@@ -858,161 +858,87 @@ async def _handle_non_streaming(
         record_metric("upstream_errors", 1)
         return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
 
-    # Trace: record upstream response (non-streaming)
-    if trace_builder:
-        trace_builder.set_response(
-            status=resp.status_code,
-            latency_ms=0.0,
-            output_tokens=None,
-            response_summary="",
-        )
-
-    # Check for recall tool call interception (non-streaming only for now)
+    # Check for recall tool call interception via the shared helper.
+    # This handles up to 2 recall rounds consistently with the streaming path.
+    recall_result = None
+    final_data = None
     if recall_injected and session_id:
         try:
-            from src.proxy.tool_injection import (
-                find_recall_tool_call,
-                handle_recall_tool_call,
-                build_tool_result_message,
-                strip_recall_from_response,
-                strip_recall_tool,
-                RECALL_TOOL_NAME,
+            from src.proxy.recall import handle_non_streaming_recall
+
+            recall_result = await handle_non_streaming_recall(
+                resp=resp,
+                http_client=request.app.state.http_client,
+                url=url,
+                headers=headers,
+                body=body,
+                session_id=session_id,
+                turn_number=turn_number,
+                original_messages=messages or [],
+                max_retries=settings.upstream_max_retries,
+                backoff_base=settings.upstream_retry_backoff_base_s,
             )
 
-            data = resp.json()
-            tool_call = find_recall_tool_call(data)
+            if recall_result.recall_used and recall_result.final_data is not None:
+                final_data = recall_result.final_data
 
-            if tool_call:
-                logger.info(
-                    "recall_tool_call_intercepted",
-                    session_id=session_id,
-                    turn=turn_number,
-                )
-                get_metrics()["recall_tool_calls"] = get_metrics().get("recall_tool_calls", 0) + 1
-
-                # Parse the question from the tool call
-                func = tool_call.get("function", {})
-                try:
-                    args = json.loads(func.get("arguments", "{}"))
-                    question = args.get("question", "")
-                except json.JSONDecodeError:
-                    question = ""
-
-                if question:
-                    # Handle the recall: query session graph
-                    recall_result = await handle_recall_tool_call(
-                        http_client=request.app.state.http_client,
-                        session_id=session_id,
-                        question=question,
-                        turn_number=turn_number,
-                    )
-
-                    # Live stream: broadcast recall event
+                # Broadcast recall events for each round
+                for q, fc in zip(recall_result.recall_questions, recall_result.facts_returned_counts):
                     await broadcast_recall(
                         session_id=session_id, turn_number=turn_number,
-                        question=question, facts_returned=0,
+                        question=q, facts_returned=fc,
                     )
-                    if trace_builder:
-                        trace_builder.set_recall(used=True, question=question, facts_returned=0)
 
-                    # Build the tool result message
-                    tool_call_id = tool_call.get("id", "recall_0")
-                    tool_result_msg = build_tool_result_message(tool_call_id, recall_result)
+                # Set trace recall info (use the first question for the trace)
+                if trace_builder and recall_result.recall_questions:
+                    trace_builder.set_recall(
+                        used=True,
+                        question=recall_result.recall_questions[0],
+                        facts_returned=recall_result.facts_returned_counts[0] if recall_result.facts_returned_counts else 0,
+                    )
 
-                    # Reconstruct messages: original messages + model's recall call + tool result
-                    original_messages = messages or []
-                    model_message = data["choices"][0]["message"]
+                # Trace: update response to reflect the actual final response
+                if trace_builder:
+                    trace_builder.set_response(
+                        status=resp.status_code,
+                        latency_ms=0.0,
+                        output_tokens=None,
+                        response_summary="",
+                    )
 
-                    # Strip the recall tool call from the model message
-                    remaining_calls = [
-                        tc for tc in model_message.get("tool_calls", [])
-                        if tc.get("function", {}).get("name") != RECALL_TOOL_NAME
-                    ]
+                # Schedule extraction for the final response
+                response_text = ""
+                final_choices = final_data.get("choices", [])
+                if final_choices:
+                    final_msg = final_choices[0].get("message", {})
+                    response_text = final_msg.get("content", "") or ""
 
-                    # Build the re-send message array
-                    resend_messages = list(original_messages)
-                    resend_model_msg = dict(model_message)
-                    if remaining_calls:
-                        resend_model_msg["tool_calls"] = remaining_calls
-                    else:
-                        resend_model_msg.pop("tool_calls", None)
-                    # If the model only had the recall tool call, keep the message
-                    # but make it clear the model chose to recall
-                    if not remaining_calls and not resend_model_msg.get("content"):
-                        resend_model_msg["content"] = None
-                    resend_messages.append(resend_model_msg)
-                    resend_messages.append(tool_result_msg)
-
-                    # Strip the recall tool from the tools array for the re-send
-                    body_dict = json.loads(body)
-                    strip_recall_tool(body_dict)
-
-                    # Re-send to upstream with the tool result
-                    resend_body = json.dumps({
-                        **body_dict,
-                        "messages": resend_messages,
-                    }).encode("utf-8")
-
-                    try:
-                        second_resp = await upstream_request_with_retry(
-                            client=request.app.state.http_client,
-                            url=url,
-                            headers=headers,
-                            content=resend_body,
-                            max_retries=settings.upstream_max_retries,
-                            backoff_base=settings.upstream_retry_backoff_base_s,
-                        )
-
-                        # Strip recall tool from the final response
-                        final_data = second_resp.json()
-                        strip_recall_from_response(final_data)
-
-                        # Schedule extraction for the second response
-                        final_response_text = ""
-                        final_choices = final_data.get("choices", [])
-                        if final_choices:
-                            final_msg = final_choices[0].get("message", {})
-                        final_response_text = final_msg.get("content", "") or ""
-
-                        if session_id and final_response_text:
-                            background_tasks.add_task(
-                                _run_extraction,
-                                client=request.app.state.extractor_client,
-                                session_id=session_id,
-                                turn_number=turn_number,
-                                messages=resend_messages,
-                                response_text=final_response_text,
-                                session_goal=session_goal,
-                                trace_builder=trace_builder,
-                            )
-
-                        return Response(
-                            content=json.dumps(final_data).encode(),
-                            status_code=second_resp.status_code,
-                            media_type="application/json",
-                            background=background_tasks,
-                        )
-                    except httpx.TimeoutException:
-                        record_metric("upstream_errors", 1)
-                        return make_error_response(504, "Upstream request timed out during recall re-send", "upstream_timeout", code="timeout")
-                    except httpx.ConnectError as e:
-                        record_metric("upstream_errors", 1)
-                        return make_error_response(502, f"Upstream connection failed during recall re-send: {e}", "upstream_error")
-                else:
-                    # Model called recall with empty question — return original response
-                    logger.warning("recall_tool_empty_question", session_id=session_id)
+                if session_id and response_text:
+                    # Determine the messages that led to the final response
+                    # (the recall re-send added tool result messages)
+                    extraction_messages = messages or []
+                    background_tasks.add_task(
+                        _run_extraction,
+                        client=request.app.state.extractor_client,
+                        session_id=session_id,
+                        turn_number=turn_number,
+                        messages=extraction_messages,
+                        response_text=response_text,
+                        session_goal=session_goal,
+                        trace_builder=trace_builder,
+                    )
         except Exception as e:
             logger.warning("recall_interception_failed", session_id=session_id, error=str(e), exc_info=True)
-            # Fall through to return original response
+            # Fall through to use original response
 
-    # Live stream: broadcast response event (non-streaming)
+    # Live stream: broadcast response event (non-streaming — always, for both recall and normal)
     await broadcast_response(
         session_id=session_id, turn_number=turn_number,
         status=resp.status_code, latency_ms=0.0, output_tokens=None,
     )
 
-    # Schedule extraction as background task (original response, no recall)
-    if session_id:
+    # Schedule extraction for the original response if recall was NOT used
+    if session_id and not (recall_result and recall_result.recall_used and final_data is not None):
         try:
             data = resp.json()
             response_text = ""
@@ -1035,12 +961,62 @@ async def _handle_non_streaming(
         except Exception as e:
             logger.warning("non_streaming_extraction_setup_failed", error=str(e))
 
+    # Trace: record upstream response (non-streaming) — always stored
+    if trace_builder:
+        if not (recall_result and recall_result.recall_used and final_data is not None):
+            # Normal path: trace the original response
+            trace_builder.set_response(
+                status=resp.status_code,
+                latency_ms=0.0,
+                output_tokens=None,
+                response_summary="",
+            )
+
+    # Build and return the response
+    if final_data is not None:
+        # Recall path: return the final data from the recall interception
+        # Strip recall tool from the final response if still present
+        try:
+            from src.proxy.tool_injection import strip_recall_from_response
+            strip_recall_from_response(final_data)
+        except Exception:
+            pass
+
+        # Store trace as background task (recall path)
+        if trace_builder:
+            async def _store_trace_recall():
+                try:
+                    trace = trace_builder.build()
+                    await get_trace_store().record(trace)
+                except Exception:
+                    logger.warning("trace_store_failed_recall", exc_info=True)
+            background_tasks.add_task(_store_trace_recall)
+
+        return Response(
+            content=json.dumps(final_data).encode(),
+            status_code=resp.status_code,
+            media_type="application/json",
+            background=background_tasks,
+        )
+
+    # Normal path (no recall)
     # Strip recall tool from the final response if it was injected
     if recall_injected:
         try:
             from src.proxy.tool_injection import strip_recall_from_response
             data = resp.json()
             strip_recall_from_response(data)
+
+            # Trace: store turn trace as background task (normal path)
+            if trace_builder:
+                async def _store_trace_non_stream():
+                    try:
+                        trace = trace_builder.build()
+                        await get_trace_store().record(trace)
+                    except Exception:
+                        logger.warning("trace_store_failed_non_stream", exc_info=True)
+                background_tasks.add_task(_store_trace_non_stream)
+
             return Response(
                 content=json.dumps(data).encode(),
                 status_code=resp.status_code,
@@ -1050,7 +1026,7 @@ async def _handle_non_streaming(
         except Exception:
             pass  # Fall back to original response
 
-    # Trace: store turn trace as background task
+    # Trace: store turn trace as background task (fallback passthrough)
     if trace_builder:
         async def _store_trace_non_stream():
             try:

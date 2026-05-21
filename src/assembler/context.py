@@ -375,20 +375,21 @@ async def assemble_context(
         and http_client
     ):
         try:
-                from src.assembler.query_rewrite import needs_rewrite, rewrite_query, extract_recent_exchanges
-                if needs_rewrite(user_message):
-                    # Extract recent user/assistant exchanges for reference resolution
-                    recent = extract_recent_exchanges(messages or [], max_exchanges=3)
-                    rewritten = await rewrite_query(http_client, user_message, recent)
-                if rewritten:
-                    effective_query = rewritten
-                    logger.debug(
-                        "query_rewritten_for_embedding",
-                        session_id=session_id,
-                        turn=turn_number,
-                        original=user_message[:60],
-                        rewritten=rewritten[:60],
-                    )
+            from src.assembler.query_rewrite import needs_rewrite, rewrite_query, extract_recent_exchanges
+            rewritten = None
+            if needs_rewrite(user_message):
+                # Extract recent user/assistant exchanges for reference resolution
+                recent = extract_recent_exchanges(messages or [], max_exchanges=3)
+                rewritten = await rewrite_query(http_client, user_message, recent)
+            if rewritten:
+                effective_query = rewritten
+                logger.debug(
+                    "query_rewritten_for_embedding",
+                    session_id=session_id,
+                    turn=turn_number,
+                    original=user_message[:60],
+                    rewritten=rewritten[:60],
+                )
         except Exception as e:
             logger.warning("query_rewrite_error", session_id=session_id, error=str(e))
 

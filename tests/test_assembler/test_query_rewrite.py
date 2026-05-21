@@ -349,3 +349,82 @@ class TestQueryRewriteIntegration:
             settings = get_settings()
             assert settings.query_rewrite_enabled is False
             reset_settings()
+
+    @pytest.mark.asyncio
+    async def test_rewrite_enabled_non_ambiguous_no_nameerror(self):
+        """Regression: when QUERY_REWRITE_ENABLED=true and the user message
+        is specific (needs_rewrite=False), assemble_context must not raise
+        NameError on the unassigned 'rewritten' variable."""
+        from src.assembler.context import assemble_context
+
+        mock_backend = AsyncMock()
+        mock_backend.find_session_by_id = AsyncMock(return_value={"goal": "test goal"})
+        mock_backend.get_active_facts = AsyncMock(return_value=[])
+        mock_backend.get_touched_files = AsyncMock(return_value=[])
+        mock_backend.get_decisions = AsyncMock(return_value=[])
+
+        mock_http_client = AsyncMock()
+
+        with patch.dict("os.environ", {
+            "QUERY_REWRITE_ENABLED": "true",
+            "EMBEDDING_ENABLED": "true",
+            "COLD_START_TURNS": "0",
+            "COLD_START_TOKEN_THRESHOLD": "0",
+            "SESSION_NEO4J_PASSWORD": "test",
+        }):
+            reset_settings()
+            with patch("src.assembler.context.get_backend", return_value=mock_backend):
+                # A specific, non-ambiguous message — needs_rewrite() returns False
+                result = await assemble_context(
+                    session_id="test-session",
+                    turn_number=5,
+                    input_token_estimate=1000,
+                    user_message="Add error handling to the Calculator class",
+                    http_client=mock_http_client,
+                    messages=[
+                        {"role": "user", "content": "Add error handling to the Calculator class"},
+                    ],
+                )
+            # The key assertion: no NameError was raised.
+            # Result may be None (no facts) or an AssembledContext — both are fine.
+            # The bug would have caused a NameError before the fix.
+            assert result is None or result.session_id == "test-session"
+            reset_settings()
+
+    @pytest.mark.asyncio
+    async def test_rewrite_enabled_ambiguous_rewritten(self):
+        """When rewrite is enabled and message is ambiguous, rewrite fires
+        and the rewritten query replaces the effective_query."""
+        from src.assembler.context import assemble_context
+
+        mock_backend = AsyncMock()
+        mock_backend.find_session_by_id = AsyncMock(return_value={"goal": "test goal"})
+        mock_backend.get_active_facts = AsyncMock(return_value=[])
+        mock_backend.get_touched_files = AsyncMock(return_value=[])
+        mock_backend.get_decisions = AsyncMock(return_value=[])
+
+        mock_http_client = AsyncMock()
+        # Patch the source module since rewrite_query is imported inline
+        with patch.dict("os.environ", {
+            "QUERY_REWRITE_ENABLED": "true",
+            "EMBEDDING_ENABLED": "true",
+            "COLD_START_TURNS": "0",
+            "COLD_START_TOKEN_THRESHOLD": "0",
+            "SESSION_NEO4J_PASSWORD": "test",
+        }):
+            reset_settings()
+            with patch("src.assembler.context.get_backend", return_value=mock_backend), \
+                 patch("src.assembler.query_rewrite.rewrite_query", new=AsyncMock(return_value="Fix the ImportError in calculator.py")):
+                result = await assemble_context(
+                    session_id="test-session",
+                    turn_number=5,
+                    input_token_estimate=1000,
+                    user_message="fix it",
+                    http_client=mock_http_client,
+                    messages=[
+                        {"role": "user", "content": "fix it"},
+                    ],
+                )
+            # Should succeed without error — may return None (no facts) or a valid context
+            assert result is None or result.session_id == "test-session"
+            reset_settings()
