@@ -21,7 +21,7 @@ _registry: MemoryEngineRegistry | None = None
 
 # Adapter type → module path mapping
 _ADAPTER_TYPES: dict[str, str] = {
-    "cth_mcp_memory": "archolith_proxy.memory.adapters.cth_memory",
+    "cth_mcp_memory": "archolith_proxy.memory.adapters.archolith_memory",
     "mem0": "archolith_proxy.memory.adapters.mem0",
     "zep": "archolith_proxy.memory.adapters.zep",
     "generic_http": "archolith_proxy.memory.adapters.generic_http",

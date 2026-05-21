@@ -43,7 +43,7 @@ class Adapter(MemoryAdapterBase):
 
     @property
     def _user_id(self) -> str:
-        return self.config.extra.get("user_id", "context-engine")
+        return self.config.extra.get("user_id", "archolith-proxy")
 
     @property
     def _api_key(self) -> str:
@@ -183,7 +183,7 @@ class Adapter(MemoryAdapterBase):
             "content": promotion.content,
             "user_id": self._user_id,
             "metadata": {
-                "source": "context-engine-promotion",
+                "source": "archolith-proxy-promotion",
                 "promotion_id": promotion.promotion_id,
                 "fact_type": promotion.fact_type,
                 "confidence": promotion.confidence,

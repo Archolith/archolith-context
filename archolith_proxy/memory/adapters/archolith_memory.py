@@ -1,6 +1,6 @@
-"""First-party adapter for cth.mcp.memory — the in-workspace durable memory system.
+"""First-party adapter for archolith-memory — the long-term durable memory system.
 
-This adapter promotes facts via the cth.mcp.memory HTTP API, which is the
+This adapter promotes facts via the archolith-memory HTTP API, which is the
 same backend used by the memory MCP tools (add_memory, recall_memories, etc.).
 """
 
@@ -83,7 +83,7 @@ class Adapter(MemoryAdapterBase):
             resp = await client.get("/health")
             return resp.status_code == 200
         except Exception:
-            logger.debug("cth_memory_healthcheck_failed", base_url=self._base_url)
+            logger.debug("archolith_memory_healthcheck_failed", base_url=self._base_url)
             return False
 
     async def promote_fact(self, promotion: PromotionRecord) -> PromotionResult:
@@ -102,7 +102,7 @@ class Adapter(MemoryAdapterBase):
                 data = resp.json()
                 remote_id = data.get("uuid") or data.get("id", "")
                 logger.info(
-                    "cth_memory_promoted",
+                    "archolith_memory_promoted",
                     promotion_id=promotion.promotion_id,
                     remote_id=remote_id,
                     session_id=promotion.session_id,
@@ -117,7 +117,7 @@ class Adapter(MemoryAdapterBase):
             else:
                 error_msg = f"HTTP {resp.status_code}: {resp.text[:500]}"
                 logger.warning(
-                    "cth_memory_promote_failed",
+                    "archolith_memory_promote_failed",
                     promotion_id=promotion.promotion_id,
                     status=resp.status_code,
                 )
@@ -130,7 +130,7 @@ class Adapter(MemoryAdapterBase):
                 )
         except Exception as exc:
             elapsed_ms = (time.monotonic() - start) * 1000
-            logger.exception("cth_memory_promote_error", promotion_id=promotion.promotion_id)
+            logger.exception("archolith_memory_promote_error", promotion_id=promotion.promotion_id)
             return PromotionResult(
                 promotion_id=promotion.promotion_id,
                 engine_id=self.config.id,
@@ -159,7 +159,7 @@ class Adapter(MemoryAdapterBase):
                 return resp.json().get("memories", [])
             return []
         except Exception:
-            logger.debug("cth_memory_list_failed", session_id=session_id)
+            logger.debug("archolith_memory_list_failed", session_id=session_id)
             return []
 
     # --- Internal ---
@@ -168,7 +168,7 @@ class Adapter(MemoryAdapterBase):
         """Translate a canonical PromotionRecord into cth.mcp.memory's add_memory payload."""
         return {
             "text": promotion.content,
-            "source": "context-engine-promotion",
+            "source": "archolith-proxy-promotion",
             "type": "SEMANTIC",
             "session_id": promotion.session_id,
             "metadata": {

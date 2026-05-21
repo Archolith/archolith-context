@@ -230,7 +230,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(
-        title="cth.context-engine",
+        title="archolith-proxy",
         description="OpenAI-compatible proxy with graph-assembled context",
         version="0.1.0",
         lifespan=lifespan,
@@ -426,7 +426,7 @@ def create_app() -> FastAPI:
         )
 
         return {
-            "proxy": "cth.context-engine",
+            "proxy": "archolith-proxy",
             "version": "0.1.0",
             "graph_ready": is_graph_ready(),
             "total_requests": get_metrics()["total_requests"],

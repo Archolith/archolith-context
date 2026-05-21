@@ -43,7 +43,7 @@ class Adapter(MemoryAdapterBase):
 
     @property
     def _dataset(self) -> str:
-        return self.config.extra.get("dataset", "context-engine")
+        return self.config.extra.get("dataset", "archolith-proxy")
 
     @property
     def _api_key(self) -> str:
@@ -175,7 +175,7 @@ class Adapter(MemoryAdapterBase):
             "content": promotion.content,
             "dataset": self._dataset,
             "metadata": {
-                "source": "context-engine-promotion",
+                "source": "archolith-proxy-promotion",
                 "promotion_id": promotion.promotion_id,
                 "fact_type": promotion.fact_type,
                 "confidence": promotion.confidence,

@@ -126,7 +126,7 @@ class Adapter(MemoryAdapterBase):
         return {
             "messages": [{"role": "user", "content": promotion.content}],
             "metadata": {
-                "source": "context-engine",
+                "source": "archolith-proxy",
                 "fact_type": promotion.fact_type,
                 "confidence": promotion.confidence,
                 "session_id": promotion.session_id,

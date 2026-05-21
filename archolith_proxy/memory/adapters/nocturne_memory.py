@@ -49,7 +49,7 @@ class Adapter(MemoryAdapterBase):
 
     @property
     def _parent_uri(self) -> str:
-        return self.config.extra.get("parent_uri", f"{self._domain}://context-engine")
+        return self.config.extra.get("parent_uri", f"{self._domain}://archolith-proxy")
 
     @property
     def _api_key(self) -> str:
@@ -230,7 +230,7 @@ class Adapter(MemoryAdapterBase):
             "priority": min(10, int(promotion.confidence * 10)),  # 0-10 scale
             "disclosure": f"When discussing {promotion.fact_type} from session {promotion.session_id}",
             "metadata": {
-                "source": "context-engine-promotion",
+                "source": "archolith-proxy-promotion",
                 "promotion_id": promotion.promotion_id,
                 "fact_type": promotion.fact_type,
                 "confidence": promotion.confidence,

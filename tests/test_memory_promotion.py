@@ -427,7 +427,7 @@ class TestBasicMemoryAdapter:
         assert "title:" in md
         assert rec.content[:80] in md
         assert "[decision]" in md
-        assert "[source] context-engine promotion" in md
+        assert "[source] archolith-proxy promotion" in md
 
     def test_slugify(self):
         from archolith_proxy.memory.adapters.basic_memory import Adapter
@@ -517,7 +517,7 @@ class TestCogneeAdapter:
         from archolith_proxy.memory.adapters.cognee import Adapter
         cfg = _make_config(type="cognee", base_url="http://localhost:8000")
         adapter = Adapter(cfg)
-        assert adapter._dataset == "context-engine"
+        assert adapter._dataset == "archolith-proxy"
 
 
 class TestOpenMemoryAdapter:
@@ -579,7 +579,7 @@ class TestNocturneMemoryAdapter:
         cfg = _make_config(type="nocturne_memory", base_url="http://localhost:8233", extra={"domain": "work"})
         adapter = Adapter(cfg)
         assert adapter._domain == "work"
-        assert adapter._parent_uri == "work://context-engine"
+        assert adapter._parent_uri == "work://archolith-proxy"
 
     def test_payload_structure(self):
         from archolith_proxy.memory.adapters.nocturne_memory import Adapter

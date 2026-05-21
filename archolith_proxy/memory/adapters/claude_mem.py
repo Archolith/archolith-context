@@ -133,7 +133,7 @@ class Adapter(MemoryAdapterBase):
             "type": promotion.fact_type,
             "session_id": promotion.session_id,
             "metadata": {
-                "source": "context-engine-promotion",
+                "source": "archolith-proxy-promotion",
                 "promotion_id": promotion.promotion_id,
                 "confidence": promotion.confidence,
                 "source_turn": promotion.source_turn,

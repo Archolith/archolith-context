@@ -124,12 +124,12 @@ class Adapter(MemoryAdapterBase):
 
     def _build_payload(self, promotion: PromotionRecord) -> dict:
         """Translate a canonical PromotionRecord into Zep's fact payload."""
-        user_id = self.config.extra.get("user_id", "context-engine")
+        user_id = self.config.extra.get("user_id", "archolith-proxy")
         return {
             "user_id": user_id,
             "fact": promotion.content,
             "metadata": {
-                "source": "context-engine",
+                "source": "archolith-proxy",
                 "fact_type": promotion.fact_type,
                 "confidence": promotion.confidence,
                 "session_id": promotion.session_id,

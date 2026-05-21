@@ -211,7 +211,7 @@ class Adapter(MemoryAdapterBase):
         # Provenance
         lines.append("## Provenance")
         lines.append("")
-        lines.append(f"- [source] context-engine promotion")
+        lines.append(f"- [source] archolith-proxy promotion")
         lines.append(f"- [session] {promotion.session_id}")
         lines.append(f"- [turn] {promotion.source_turn}")
         if promotion.promotion_reason:
