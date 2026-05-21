@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     neo4j_retry_backoff_base_s: float = 1.0
     assembly_latency_budget_ms: int = 150
 
+    # Graph backend selection
+    graph_backend: str = "neo4j"  # "neo4j" or "ladybug"
+    ladybug_db_path: str = "./data/context.lbug"
+    ladybug_max_concurrent: int = 8
+
     # Optional: promotion to long-term memory
     memory_api_url: str = "http://localhost:8200"
     memory_api_key: str = ""

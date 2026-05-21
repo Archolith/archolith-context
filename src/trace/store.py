@@ -43,14 +43,18 @@ class TraceStore:
     def __init__(
         self,
         max_turns_per_session: int = DEFAULT_MAX_TURNS_PER_SESSION,
+        max_sessions: int = 1000,
         trace_dir: str | None = None,
     ) -> None:
         self._max_turns = max_turns_per_session
+        self._max_sessions = max_sessions
         self._lock = asyncio.Lock()
         # session_id -> list[TurnTrace] (ordered by turn_number)
         self._by_session: dict[str, list[TurnTrace]] = defaultdict(list)
         # turn_id -> TurnTrace (global index for direct lookup)
         self._by_turn_id: dict[str, TurnTrace] = {}
+        # Track insertion order for LRU eviction
+        self._session_order: list[str] = []
         self._total_traces = 0
         # Optional disk persistence
         self._trace_dir = Path(trace_dir) if trace_dir else None
@@ -68,10 +72,28 @@ class TraceStore:
             session_id = trace.session_id or "__no_session__"
             turn_list = self._by_session[session_id]
 
-            # Evict oldest turns if over limit
+            # Evict oldest turns if over per-session limit
             while len(turn_list) >= self._max_turns:
                 oldest = turn_list.pop(0)
                 self._by_turn_id.pop(oldest.turn_id, None)
+
+            # Evict least-recently-active session if over global cap
+            if session_id not in self._session_order:
+                self._session_order.append(session_id)
+            else:
+                # Move to end (most-recently touched)
+                self._session_order.remove(session_id)
+                self._session_order.append(session_id)
+
+            while len(self._by_session) > self._max_sessions:
+                # Evict the least-recently-active session
+                evict_sid = self._session_order[0]
+                if evict_sid != session_id:
+                    for t in self._by_session.pop(evict_sid, []):
+                        self._by_turn_id.pop(t.turn_id, None)
+                    self._session_order.pop(0)
+                else:
+                    break  # Can't evict the current session
 
             turn_list.append(trace)
             self._by_turn_id[trace.turn_id] = trace

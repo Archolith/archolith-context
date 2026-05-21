@@ -95,6 +95,28 @@ async def _init_neo4j_with_retry(settings, max_retries: int = 3, backoff_base: f
     return False
 
 
+async def _background_cleanup_loop() -> None:
+    """Hourly background task: expire sessions, delete expired, prune locks."""
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Every hour
+            if is_graph_ready():
+                backend = get_backend()
+                expired = await backend.expire_sessions()
+                if expired:
+                    deleted = await backend.delete_expired_sessions()
+                    logger.info("background_cleanup_cycle", expired=expired, deleted=deleted)
+            # Prune stale session locks
+            from src.proxy.locks import cleanup_stale_locks
+            cleaned = cleanup_stale_locks()
+            if cleaned:
+                logger.info("background_lock_cleanup", locks_removed=cleaned)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("background_cleanup_error", error=str(e))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize resources on startup, cleanup on shutdown."""
@@ -174,7 +196,17 @@ async def lifespan(app: FastAPI):
 
     logger.info("proxy_starting", port=settings.proxy_port, upstream=settings.upstream_base_url)
 
+    # Background cleanup loop — hourly session expiry + lock pruning
+    _cleanup_task = asyncio.create_task(_background_cleanup_loop())
+
     yield
+
+    # Cancel background cleanup
+    _cleanup_task.cancel()
+    try:
+        await _cleanup_task
+    except asyncio.CancelledError:
+        pass
 
     # Cleanup
     await app.state.http_client.aclose()
@@ -245,7 +277,7 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> dict:
         neo4j_status = "not_configured"
-        if getattr(app.state, "neo4j_ready", False):
+        if is_graph_ready():
             from src.graph.driver import get_driver
             try:
                 driver = await get_driver()
@@ -280,7 +312,7 @@ def create_app() -> FastAPI:
     @app.get("/metrics")
     async def metrics() -> dict:
         active_sessions = 0
-        if getattr(app.state, "neo4j_ready", False):
+        if is_graph_ready():
             try:
                 from src.graph.session import list_active_sessions
                 sessions = await list_active_sessions()
@@ -308,7 +340,7 @@ def create_app() -> FastAPI:
         return {
             "proxy": "cth.context-engine",
             "version": "0.1.0",
-            "neo4j_ready": getattr(app.state, "neo4j_ready", False),
+            "graph_ready": is_graph_ready(),
             "total_requests": get_metrics()["total_requests"],
             "assembly_modes": dict(get_metrics()["assembly_modes"]),
             "extraction_successes": get_metrics()["extraction_successes"],
@@ -331,7 +363,7 @@ def create_app() -> FastAPI:
     @app.get("/sessions")
     async def list_sessions() -> dict:
         """List all active sessions (admin endpoint)."""
-        if not getattr(app.state, "neo4j_ready", False):
+        if not is_graph_ready():
             return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
         try:
             from src.graph.session import list_active_sessions
@@ -344,7 +376,7 @@ def create_app() -> FastAPI:
     @app.get("/sessions/{session_id}")
     async def get_session(session_id: str) -> dict:
         """Get session details (admin endpoint)."""
-        if not getattr(app.state, "neo4j_ready", False):
+        if not is_graph_ready():
             return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
         try:
             from src.graph.session import get_session_stats

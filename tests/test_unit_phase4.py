@@ -174,7 +174,7 @@ class TestGracefulDegradation:
         assert "total_requests" in data
         assert "assembly_modes" in data
         assert "extraction_successes" in data
-        assert "neo4j_ready" in data
+        assert "graph_ready" in data
         assert "active_sessions" in data
         assert "uptime_s" in data
 

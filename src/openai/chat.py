@@ -20,6 +20,7 @@ from src.graph import decisions as decisions_repo
 from src.graph import edges as edges_repo
 from src.graph import facts as facts_repo
 from src.graph import session as session_repo
+from src.graph.backend import is_graph_ready
 from src.metrics import get_metrics, record_assembly_mode, record_metric
 from src.models.graph_nodes import FactType, FileStatus
 from src.openai.errors import make_error_response
@@ -70,7 +71,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     # Session resolution (graceful — skip if Neo4j not ready)
     session_id = None
     turn_number = 0
-    neo4j_ready = getattr(request.app.state, "neo4j_ready", False)
+    neo4j_ready = is_graph_ready()
 
     # Guard: if lifespan didn't initialize http_client, return 503
     if not hasattr(request.app.state, "http_client"):
