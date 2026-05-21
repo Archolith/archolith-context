@@ -1,6 +1,15 @@
 # Changelog — cth.context-engine
 
+## 2026-05-21 — Security, Resilience, Concurrency, and Memory Alignment Audit Templates
+
+- **Audit Templates Added**: Created four new template files inside `.agent/` directory to structure ongoing system audits:
+  - `SECURITY-PRIVACY-TEMPLATE.md`: Focuses on credentials leakage, authorization, database isolation, and upstream privacy.
+  - `RESILIENCE-CHAOS-TEMPLATE.md`: Focuses on downstream outage simulation, timeouts, latency handling, and WAL crash recovery.
+  - `CONCURRENCY-LOAD-TEMPLATE.md`: Focuses on memory profiling, cache evictions, turn-locking, and connection pool leaks.
+  - `MEMORY-ALIGNMENT-TEMPLATE.md`: Focuses on fact promotion generalizability, adapter CRUD compatibility, and context drift.
+
 ## 2026-05-20 — Graph Backend Adapter & LadybugDB (Phases 0-5)
+
 
 - **Phase 0A — Cypher consolidation**: All inline Cypher moved from `trace/router.py` (5 blocks) and `assembler/context.py` (2 blocks) into `src/graph/`. Created `decisions.py` with `store_decision` / `get_decisions`. Added `get_facts_filtered`, `get_supersession_chain`, `get_invalidated_facts` to `facts.py`. Moved `list_active_sessions` / `get_session_stats` from `cleanup.py` to `session.py`.
 - **Phase 0B — Module extraction**: Extracted `src/metrics.py`, `src/proxy/rewrite.py`, `src/proxy/upstream.py` from `chat.py` (1455→1280 lines). Added `find_matching_fact_ids` to protocol. Fixed `_run_extraction` to call `store_facts_batch`. Extracted `src/proxy/recall.py` for unified recall interception.
