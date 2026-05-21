@@ -30,7 +30,10 @@ from src.models.graph_nodes import FactType
 logger = structlog.get_logger()
 
 # In-memory cache for user message embeddings (keyed by SHA-256 hash)
-_embedding_cache: dict[str, list[float]] = {}
+# Each entry: (embedding_vector, insertion_time)
+_embedding_cache: dict[str, tuple[list[float], float]] = {}
+_EMBEDDING_CACHE_MAX = 128
+_EMBEDDING_CACHE_TTL_S = 3600  # 1 hour TTL
 
 # Priority ordering for fact types (higher = more important)
 _FACT_TYPE_PRIORITY = {
@@ -511,15 +514,22 @@ async def _get_query_embedding(
 
     Uses an in-memory cache keyed by SHA-256 hash to avoid
     re-computing embeddings for identical queries (retries, etc).
+    Entries are TTL-bounded (1 hour) and size-bounded (128 entries).
     """
     import hashlib
+    import time
+
     from src.extractor.embeddings import compute_embeddings_batch
 
     cache_key = hashlib.sha256(user_message.encode()).hexdigest()[:16]
 
-    # Check in-memory cache
+    # Check in-memory cache (with TTL check)
     if cache_key in _embedding_cache:
-        return _embedding_cache[cache_key]
+        embedding, inserted_at = _embedding_cache[cache_key]
+        if time.monotonic() - inserted_at < _EMBEDDING_CACHE_TTL_S:
+            return embedding
+        # Expired — remove
+        del _embedding_cache[cache_key]
 
     if http_client is None:
         return None
@@ -528,9 +538,9 @@ async def _get_query_embedding(
         results = await compute_embeddings_batch(http_client, [user_message[:8000]])
         embedding = results[0] if results else None
         if embedding is not None:
-            _embedding_cache[cache_key] = embedding
+            _embedding_cache[cache_key] = (embedding, time.monotonic())
             # Evict oldest entries if cache grows too large
-            if len(_embedding_cache) > 64:
+            if len(_embedding_cache) > _EMBEDDING_CACHE_MAX:
                 _evict_embedding_cache()
         return embedding
     except Exception as e:
@@ -539,10 +549,28 @@ async def _get_query_embedding(
 
 
 def _evict_embedding_cache() -> None:
-    """Evict half the embedding cache entries (simple FIFO eviction)."""
-    keys = list(_embedding_cache.keys())
-    for key in keys[: len(keys) // 2]:
-        del _embedding_cache[key]
+    """Evict expired and excess embedding cache entries.
+
+    1. Remove all entries older than TTL.
+    2. If still over max, remove the oldest remaining entries (FIFO).
+    """
+    import time
+
+    now = time.monotonic()
+    # Purge expired entries
+    expired_keys = [
+        k for k, (_, ts) in _embedding_cache.items()
+        if now - ts >= _EMBEDDING_CACHE_TTL_S
+    ]
+    for k in expired_keys:
+        del _embedding_cache[k]
+
+    # If still over limit, remove oldest
+    if len(_embedding_cache) > _EMBEDDING_CACHE_MAX:
+        sorted_keys = sorted(_embedding_cache, key=lambda k: _embedding_cache[k][1])
+        excess = len(_embedding_cache) - _EMBEDDING_CACHE_MAX
+        for k in sorted_keys[:excess]:
+            del _embedding_cache[k]
 
 
 async def _get_touched_files(session_id: str) -> list[dict]:

@@ -82,6 +82,9 @@ FOR (n:Session) ON (n.status);
 
 CREATE INDEX fact_invalidated_at_idx IF NOT EXISTS
 FOR (n:Fact) ON (n.invalidated_at);
+
+CREATE INDEX decision_session_id_idx IF NOT EXISTS
+FOR (n:Decision) ON (n.session_id);
 """
 
 
