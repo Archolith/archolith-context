@@ -47,3 +47,12 @@ adversarial-review-output.md
 # Debug scripts
 _debug_*.py
 _fix_*.py
+
+# Database and local state
+data/
+*.lbug*
+
+# Benchmark execution outputs
+scripts/*.json
+audit_results.json
+
