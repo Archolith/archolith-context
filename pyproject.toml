@@ -14,6 +14,7 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
     "structlog>=24.4.0",
+    "ladybug>=0.16.0",
 ]
 
 [project.optional-dependencies]
