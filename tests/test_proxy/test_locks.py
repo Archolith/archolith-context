@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from src.proxy.locks import (
+from archolith_proxy.proxy.locks import (
     get_session_lock,
     wait_for_prior_extraction,
     cleanup_session_lock,
@@ -77,7 +77,7 @@ class TestCleanupSessionLock:
 class TestCleanupStaleLocks:
     def test_no_cleanup_when_under_limit(self):
         # Clean up test locks first
-        from src.proxy import locks
+        from archolith_proxy.proxy import locks
         locks._session_locks.clear()
         for i in range(5):
             get_session_lock(f"stale-test-{i}")
@@ -85,7 +85,7 @@ class TestCleanupStaleLocks:
         assert removed == 0
 
     def test_removes_oldest_when_over_limit(self):
-        from src.proxy import locks
+        from archolith_proxy.proxy import locks
         locks._session_locks.clear()
         for i in range(20):
             get_session_lock(f"stale-over-{i}")

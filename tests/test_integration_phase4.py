@@ -18,8 +18,8 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from src.main import create_app
-from src.metrics import get_metrics
+from archolith_proxy.main import create_app
+from archolith_proxy.metrics import get_metrics
 
 
 # --- Shared mock infrastructure ---
@@ -105,8 +105,8 @@ class TestNeo4jChaos:
         mock_transport = httpx.MockTransport(mock_handler)
 
         # Mock the graph modules to simulate Neo4j failure
-        with patch("src.proxy.session.resolve_session", new_callable=AsyncMock) as mock_resolve, \
-             patch("src.openai.chat.assemble_context", new_callable=AsyncMock) as mock_assemble:
+        with patch("archolith_proxy.proxy.session.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+             patch("archolith_proxy.openai.chat.assemble_context", new_callable=AsyncMock) as mock_assemble:
 
             mock_resolve.side_effect = Exception("Neo4j connection refused")
             mock_assemble.return_value = None
@@ -141,7 +141,7 @@ class TestExtractionChaos:
 
         mock_transport = httpx.MockTransport(mock_handler)
 
-        with patch("src.openai.chat.extract_facts", new_callable=AsyncMock) as mock_extract:
+        with patch("archolith_proxy.openai.chat.extract_facts", new_callable=AsyncMock) as mock_extract:
             mock_extract.side_effect = Exception("Extraction API returned 500")
 
             async with app.router.lifespan_context(app):
@@ -167,7 +167,7 @@ class TestSessionIsolation:
     @pytest.mark.asyncio
     async def test_concurrent_sessions_isolated_fingerprints(self):
         """Different conversations produce different fingerprints."""
-        from src.proxy.session import compute_fingerprint
+        from archolith_proxy.proxy.session import compute_fingerprint
 
         fp1 = compute_fingerprint("System prompt A", "First user message A")
         fp2 = compute_fingerprint("System prompt B", "First user message B")
@@ -181,7 +181,7 @@ class TestSessionIsolation:
     @pytest.mark.asyncio
     async def test_concurrent_sessions_different_session_ids(self):
         """Concurrent requests with different fingerprints get different sessions."""
-        from src.proxy.session import compute_fingerprint
+        from archolith_proxy.proxy.session import compute_fingerprint
 
         fp_a = compute_fingerprint("Agent A system prompt", "Question about project A")
         fp_b = compute_fingerprint("Agent B system prompt", "Question about project B")
@@ -254,7 +254,7 @@ class TestStructuredLogging:
         # Ensure LOG_FORMAT is not set (defaults to json)
         old_val = os.environ.pop("LOG_FORMAT", None)
         try:
-            from src.logging_config import configure_logging
+            from archolith_proxy.logging_config import configure_logging
             configure_logging()
             # After configuration, structlog should be configured
             # We can verify by checking that structlog is configured
@@ -271,7 +271,7 @@ class TestStructuredLogging:
         import os
         os.environ["LOG_FORMAT"] = "dev"
         try:
-            from src.logging_config import configure_logging
+            from archolith_proxy.logging_config import configure_logging
             configure_logging()
             import structlog
             log = structlog.get_logger()
@@ -401,7 +401,7 @@ class TestStreamingRetry:
         mock_transport = httpx.MockTransport(mock_handler)
 
         # Patch only the retry settings on the real settings object
-        from src.config import get_settings
+        from archolith_proxy.config import get_settings
         real_settings = get_settings()
         original_retries = real_settings.upstream_max_retries
         original_backoff = real_settings.upstream_retry_backoff_base_s
@@ -485,7 +485,7 @@ class TestMetricsDerivedRates:
     @pytest.mark.asyncio
     async def test_metrics_rate_calculation(self):
         """Derived rates should be correctly computed from raw counters."""
-        from src.metrics import get_metrics
+        from archolith_proxy.metrics import get_metrics
 
         _metrics = get_metrics()
         # Simulate some activity
@@ -515,7 +515,7 @@ class TestBatchEmbeddings:
     @pytest.mark.asyncio
     async def test_compute_embeddings_batch_empty(self):
         """Empty input returns empty list."""
-        from src.extractor.embeddings import compute_embeddings_batch
+        from archolith_proxy.extractor.embeddings import compute_embeddings_batch
         client = httpx.AsyncClient()
         result = await compute_embeddings_batch(client, [])
         assert result == []
@@ -524,8 +524,8 @@ class TestBatchEmbeddings:
     @pytest.mark.asyncio
     async def test_compute_embeddings_batch_no_api_key(self):
         """Without API key, returns None for each text."""
-        from src.extractor.embeddings import compute_embeddings_batch
-        from src.config import get_settings
+        from archolith_proxy.extractor.embeddings import compute_embeddings_batch
+        from archolith_proxy.config import get_settings
 
         client = httpx.AsyncClient()
         # Patch settings to ensure embedding_api_key is empty
@@ -537,7 +537,7 @@ class TestBatchEmbeddings:
     @pytest.mark.asyncio
     async def test_compute_embeddings_batch_with_mock(self):
         """With a mock upstream, embeddings are computed correctly."""
-        from src.extractor.embeddings import compute_embeddings_batch
+        from archolith_proxy.extractor.embeddings import compute_embeddings_batch
 
         async def mock_handler(request: httpx.Request) -> httpx.Response:
             body = json.loads(request.content.decode())
@@ -558,7 +558,7 @@ class TestBatchEmbeddings:
         # Need to set embedding API key for the function to proceed
         import os
         os.environ["EMBEDDING_API_KEY"] = "sk-test-key"
-        from src.config import reset_settings
+        from archolith_proxy.config import reset_settings
         reset_settings()
 
         try:
@@ -574,7 +574,7 @@ class TestBatchEmbeddings:
     @pytest.mark.asyncio
     async def test_compute_embeddings_batch_api_failure_graceful(self):
         """Embedding API failure returns None for each text (graceful fallback)."""
-        from src.extractor.embeddings import compute_embeddings_batch
+        from archolith_proxy.extractor.embeddings import compute_embeddings_batch
 
         async def mock_handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(500, json={"error": "Internal server error"})
@@ -584,7 +584,7 @@ class TestBatchEmbeddings:
 
         import os
         os.environ["EMBEDDING_API_KEY"] = "sk-test-key"
-        from src.config import reset_settings
+        from archolith_proxy.config import reset_settings
         reset_settings()
 
         try:

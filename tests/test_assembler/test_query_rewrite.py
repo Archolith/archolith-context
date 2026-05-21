@@ -14,12 +14,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.assembler.query_rewrite import (
+from archolith_proxy.assembler.query_rewrite import (
     extract_recent_exchanges,
     needs_rewrite,
     rewrite_query,
 )
-from src.config import get_settings, reset_settings
+from archolith_proxy.config import get_settings, reset_settings
 
 
 # ─── needs_rewrite ───
@@ -355,7 +355,7 @@ class TestQueryRewriteIntegration:
         """Regression: when QUERY_REWRITE_ENABLED=true and the user message
         is specific (needs_rewrite=False), assemble_context must not raise
         NameError on the unassigned 'rewritten' variable."""
-        from src.assembler.context import assemble_context
+        from archolith_proxy.assembler.context import assemble_context
 
         mock_backend = AsyncMock()
         mock_backend.find_session_by_id = AsyncMock(return_value={"goal": "test goal"})
@@ -373,7 +373,7 @@ class TestQueryRewriteIntegration:
             "SESSION_NEO4J_PASSWORD": "test",
         }):
             reset_settings()
-            with patch("src.assembler.context.get_backend", return_value=mock_backend):
+            with patch("archolith_proxy.assembler.context.get_backend", return_value=mock_backend):
                 # A specific, non-ambiguous message — needs_rewrite() returns False
                 result = await assemble_context(
                     session_id="test-session",
@@ -395,7 +395,7 @@ class TestQueryRewriteIntegration:
     async def test_rewrite_enabled_ambiguous_rewritten(self):
         """When rewrite is enabled and message is ambiguous, rewrite fires
         and the rewritten query replaces the effective_query."""
-        from src.assembler.context import assemble_context
+        from archolith_proxy.assembler.context import assemble_context
 
         mock_backend = AsyncMock()
         mock_backend.find_session_by_id = AsyncMock(return_value={"goal": "test goal"})
@@ -413,8 +413,8 @@ class TestQueryRewriteIntegration:
             "SESSION_NEO4J_PASSWORD": "test",
         }):
             reset_settings()
-            with patch("src.assembler.context.get_backend", return_value=mock_backend), \
-                 patch("src.assembler.query_rewrite.rewrite_query", new=AsyncMock(return_value="Fix the ImportError in calculator.py")):
+            with patch("archolith_proxy.assembler.context.get_backend", return_value=mock_backend), \
+                 patch("archolith_proxy.assembler.query_rewrite.rewrite_query", new=AsyncMock(return_value="Fix the ImportError in calculator.py")):
                 result = await assemble_context(
                     session_id="test-session",
                     turn_number=5,

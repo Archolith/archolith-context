@@ -43,7 +43,7 @@ async def test():
     await asyncio.sleep(15)
 
     # Step 3: Check Neo4j directly
-    from src.graph.driver import init_driver, close_driver
+    from archolith_proxy.graph.driver import init_driver, close_driver
 
     driver = await init_driver()
 

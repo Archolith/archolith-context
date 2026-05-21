@@ -11,14 +11,14 @@ from unittest.mock import patch
 
 import pytest
 
-from src.config import reset_settings
+from archolith_proxy.config import reset_settings
 
 
 class TestAdminTokenOpen:
     """When ADMIN_TOKEN is empty, all operator endpoints should be open."""
 
     def setup_method(self):
-        from src.graph.backend import reset_backend
+        from archolith_proxy.graph.backend import reset_backend
         reset_backend()
         reset_settings()
 
@@ -46,7 +46,7 @@ class TestAdminTokenEnforced:
     """When ADMIN_TOKEN is set, operator endpoints require valid token."""
 
     def setup_method(self):
-        from src.graph.backend import reset_backend
+        from archolith_proxy.graph.backend import reset_backend
         reset_backend()
         reset_settings()
 

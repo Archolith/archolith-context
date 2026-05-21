@@ -2,10 +2,10 @@
 
 import pytest
 
-from src.proxy.session import compute_fingerprint, sanitize_system_prompt
-from src.extractor.client import _parse_extraction_response
-from src.graph.repository import _validate_cypher, LabelGuardViolation, CONTEXT_SESSION_LABEL
-from src.models.dtos import ExtractionResult
+from archolith_proxy.proxy.session import compute_fingerprint, sanitize_system_prompt
+from archolith_proxy.extractor.client import _parse_extraction_response
+from archolith_proxy.graph.repository import _validate_cypher, LabelGuardViolation, CONTEXT_SESSION_LABEL
+from archolith_proxy.models.dtos import ExtractionResult
 
 
 # --- Fingerprinting ---

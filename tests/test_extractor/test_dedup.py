@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.extractor.dedup import (
+from archolith_proxy.extractor.dedup import (
     DEFAULT_SIMILARITY_THRESHOLD,
     _normalize,
     _tokenize,

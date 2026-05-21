@@ -19,7 +19,7 @@ def tmp_db_path():
 @pytest.fixture
 async def backend(tmp_db_path):
     """Create and connect a LadybugBackend, then close after test."""
-    from src.graph.ladybug_backend import LadybugBackend
+    from archolith_proxy.graph.ladybug_backend import LadybugBackend
 
     be = LadybugBackend(db_path=tmp_db_path, max_concurrent_queries=4)
     await be.connect()
@@ -31,8 +31,8 @@ async def backend(tmp_db_path):
 @pytest.mark.asyncio
 async def test_protocol_compliance():
     """LadybugBackend satisfies the GraphBackend protocol."""
-    from src.graph.ladybug_backend import LadybugBackend
-    from src.graph.protocol import GraphBackend
+    from archolith_proxy.graph.ladybug_backend import LadybugBackend
+    from archolith_proxy.graph.protocol import GraphBackend
 
     assert isinstance(LadybugBackend, GraphBackend)
 
@@ -40,7 +40,7 @@ async def test_protocol_compliance():
 @pytest.mark.asyncio
 async def test_lifecycle(tmp_db_path):
     """Connect, verify, check ready, close."""
-    from src.graph.ladybug_backend import LadybugBackend
+    from archolith_proxy.graph.ladybug_backend import LadybugBackend
 
     be = LadybugBackend(db_path=tmp_db_path)
     assert not be.is_ready()

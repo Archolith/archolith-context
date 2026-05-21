@@ -20,10 +20,10 @@ from pathlib import Path
 
 import httpx
 
-from src.config import get_settings
-from src.extractor.client import extract_facts, _parse_extraction_response
-from src.extractor.prompts import SYSTEM_PROMPT, build_extraction_prompt
-from src.models.dtos import ExtractionResult
+from archolith_proxy.config import get_settings
+from archolith_proxy.extractor.client import extract_facts, _parse_extraction_response
+from archolith_proxy.extractor.prompts import SYSTEM_PROMPT, build_extraction_prompt
+from archolith_proxy.models.dtos import ExtractionResult
 
 # --- Ground-truth for 5-turn coding session ---
 # Each turn has: user_message, simulated_assistant_response, expected_facts (ground truth)

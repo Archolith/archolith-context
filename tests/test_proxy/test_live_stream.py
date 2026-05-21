@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from src.proxy.live import (
+from archolith_proxy.proxy.live import (
     EVT_ASSEMBLY,
     EVT_EXTRACTION,
     EVT_RECALL,

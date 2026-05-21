@@ -15,9 +15,9 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from src.main import create_app
-from src.metrics import get_metrics
-from src.proxy.streaming import (
+from archolith_proxy.main import create_app
+from archolith_proxy.metrics import get_metrics
+from archolith_proxy.proxy.streaming import (
     ResponseCapture,
     StreamingToolCallAccumulator,
     StreamingRecallResult,
@@ -26,7 +26,7 @@ from src.proxy.streaming import (
     _assemble_streaming_response,
     _non_streaming_to_sse,
 )
-from src.proxy.tool_injection import RECALL_TOOL_NAME
+from archolith_proxy.proxy.tool_injection import RECALL_TOOL_NAME
 
 
 # --- StreamingToolCallAccumulator tests ---
@@ -527,7 +527,7 @@ class TestStreamingRecallInterception:
         env_patch.start()
 
         try:
-            from src.config import reset_settings
+            from archolith_proxy.config import reset_settings
             reset_settings()
 
             app = create_app()
@@ -626,12 +626,12 @@ class TestStreamingRecallInterception:
             async with app.router.lifespan_context(app):
                 app.state.http_client = httpx.AsyncClient(transport=mock_transport)
                 app.state.extractor_client = httpx.AsyncClient(transport=extractor_transport)
-                with patch("src.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
-                     patch("src.openai.chat.is_graph_ready", return_value=True), \
-                     patch("src.openai.chat.get_backend") as mock_get_backend, \
-                     patch("src.proxy.tool_injection.handle_recall_tool_call", new_callable=AsyncMock) as mock_recall, \
-                     patch("src.proxy.locks.wait_for_prior_extraction", new_callable=AsyncMock), \
-                     patch("src.openai.chat.assemble_context", new_callable=AsyncMock, return_value=None):
+                with patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+                     patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+                     patch("archolith_proxy.openai.chat.get_backend") as mock_get_backend, \
+                     patch("archolith_proxy.proxy.tool_injection.handle_recall_tool_call", new_callable=AsyncMock) as mock_recall, \
+                     patch("archolith_proxy.proxy.locks.wait_for_prior_extraction", new_callable=AsyncMock), \
+                     patch("archolith_proxy.openai.chat.assemble_context", new_callable=AsyncMock, return_value=None):
 
                     mock_backend = AsyncMock()
                     mock_backend.get_turn_number.return_value = 1

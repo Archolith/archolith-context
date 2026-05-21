@@ -17,7 +17,7 @@ import time
 
 async def check_neo4j(session_id: str) -> dict:
     """Check Neo4j for session + facts."""
-    from src.graph.driver import get_driver
+    from archolith_proxy.graph.driver import get_driver
     driver = await get_driver()
 
     result_data = {}
@@ -92,7 +92,7 @@ async def send_turn(client: httpx.AsyncClient, session_id: str, user_msg: str, t
 
 
 async def test():
-    from src.graph.driver import init_driver, ensure_indexes, close_driver
+    from archolith_proxy.graph.driver import init_driver, ensure_indexes, close_driver
     await init_driver()
     await ensure_indexes()
 

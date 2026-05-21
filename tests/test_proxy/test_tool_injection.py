@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from src.proxy.tool_injection import (
+from archolith_proxy.proxy.tool_injection import (
     RECALL_TOOL_DEFINITION,
     RECALL_TOOL_NAME,
     build_tool_result_message,

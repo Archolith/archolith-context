@@ -12,14 +12,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.config import reset_settings
+from archolith_proxy.config import reset_settings
 
 
 class TestLivenessProbe:
     """Liveness probe should always return 200."""
 
     def setup_method(self):
-        from src.graph.backend import reset_backend
+        from archolith_proxy.graph.backend import reset_backend
         reset_backend()
         reset_settings()
 
@@ -47,7 +47,7 @@ class TestReadinessProbe:
     """Readiness probe should check graph + upstream."""
 
     def setup_method(self):
-        from src.graph.backend import reset_backend
+        from archolith_proxy.graph.backend import reset_backend
         reset_backend()
         reset_settings()
 
@@ -82,8 +82,8 @@ class TestReadinessProbe:
         mock_backend.is_ready.return_value = True
         mock_backend.verify_connectivity.return_value = True
 
-        with patch("src.main.is_graph_ready", return_value=True), \
-             patch("src.main.get_backend", return_value=mock_backend):
+        with patch("archolith_proxy.main.is_graph_ready", return_value=True), \
+             patch("archolith_proxy.main.get_backend", return_value=mock_backend):
             resp = await client.get("/ready")
             data = resp.json()
             assert data["graph"] == "connected"
@@ -95,8 +95,8 @@ class TestReadinessProbe:
         mock_backend.is_ready.return_value = True
         mock_backend.verify_connectivity.return_value = False
 
-        with patch("src.main.is_graph_ready", return_value=True), \
-             patch("src.main.get_backend", return_value=mock_backend):
+        with patch("archolith_proxy.main.is_graph_ready", return_value=True), \
+             patch("archolith_proxy.main.get_backend", return_value=mock_backend):
             resp = await client.get("/ready")
             data = resp.json()
             assert data["graph"] == "disconnected"
@@ -108,8 +108,8 @@ class TestReadinessProbe:
         mock_backend.is_ready.return_value = True
         mock_backend.verify_connectivity.side_effect = RuntimeError("connection lost")
 
-        with patch("src.main.is_graph_ready", return_value=True), \
-             patch("src.main.get_backend", return_value=mock_backend):
+        with patch("archolith_proxy.main.is_graph_ready", return_value=True), \
+             patch("archolith_proxy.main.get_backend", return_value=mock_backend):
             resp = await client.get("/ready")
             data = resp.json()
             assert data["graph"] == "disconnected"
@@ -119,7 +119,7 @@ class TestHealthLegacy:
     """Legacy /health endpoint should use backend protocol too."""
 
     def setup_method(self):
-        from src.graph.backend import reset_backend
+        from archolith_proxy.graph.backend import reset_backend
         reset_backend()
         reset_settings()
 
@@ -137,8 +137,8 @@ class TestHealthLegacy:
         mock_backend.is_ready.return_value = True
         mock_backend.verify_connectivity.return_value = True
 
-        with patch("src.main.is_graph_ready", return_value=True), \
-             patch("src.main.get_backend", return_value=mock_backend):
+        with patch("archolith_proxy.main.is_graph_ready", return_value=True), \
+             patch("archolith_proxy.main.get_backend", return_value=mock_backend):
             resp = await client.get("/health")
             data = resp.json()
             assert data["graph"] == "connected"

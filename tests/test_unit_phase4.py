@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from src.config import Settings, get_settings, reset_settings
+from archolith_proxy.config import Settings, get_settings, reset_settings
 
 
 class TestConfigValidation:
@@ -96,7 +96,7 @@ class TestMetricsTracking:
 
     def test_initial_metrics_state(self):
         """Metrics should start at zero."""
-        from src.metrics import get_metrics
+        from archolith_proxy.metrics import get_metrics
         _metrics = get_metrics()
         # Reset for clean state
         _metrics["total_requests"] = 0
@@ -113,7 +113,7 @@ class TestMetricsTracking:
 
     def test_assembly_mode_tracking(self):
         """Assembly mode recording should increment the right counter."""
-        from src.metrics import get_metrics, record_assembly_mode
+        from archolith_proxy.metrics import get_metrics, record_assembly_mode
 
         _metrics = get_metrics()
         # Reset
@@ -140,7 +140,7 @@ class TestRetryableStatusCodes:
 
     def test_retryable_codes(self):
         """Verify the set of retryable status codes."""
-        from src.proxy.upstream import RETRYABLE_STATUS_CODES
+        from archolith_proxy.proxy.upstream import RETRYABLE_STATUS_CODES
         assert 429 in RETRYABLE_STATUS_CODES
         assert 500 in RETRYABLE_STATUS_CODES
         assert 502 in RETRYABLE_STATUS_CODES
@@ -155,7 +155,7 @@ class TestGracefulDegradation:
     """Test that the system degrades gracefully when dependencies are unavailable."""
 
     def setup_method(self):
-        from src.graph.backend import reset_backend
+        from archolith_proxy.graph.backend import reset_backend
         reset_backend()
 
     @pytest.mark.asyncio
@@ -222,7 +222,7 @@ class TestTokenEstimation:
 
     def test_estimate_input_tokens_simple(self):
         """Simple message array should estimate tokens."""
-        from src.proxy.rewrite import estimate_input_tokens
+        from archolith_proxy.proxy.rewrite import estimate_input_tokens
         messages = [
             {"role": "system", "content": "You are helpful."},
             {"role": "user", "content": "Hello"},
@@ -232,7 +232,7 @@ class TestTokenEstimation:
 
     def test_estimate_input_tokens_multipart(self):
         """Multi-part content messages should estimate tokens."""
-        from src.proxy.rewrite import estimate_input_tokens
+        from archolith_proxy.proxy.rewrite import estimate_input_tokens
         messages = [
             {
                 "role": "user",
@@ -247,6 +247,6 @@ class TestTokenEstimation:
 
     def test_estimate_input_tokens_empty(self):
         """Empty messages should return minimum 1."""
-        from src.proxy.rewrite import estimate_input_tokens
+        from archolith_proxy.proxy.rewrite import estimate_input_tokens
         tokens = estimate_input_tokens([])
         assert tokens >= 1

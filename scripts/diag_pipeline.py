@@ -5,16 +5,16 @@ import httpx
 
 
 async def test():
-    from src.config import get_settings
+    from archolith_proxy.config import get_settings
     settings = get_settings()
 
     # 1. Test Neo4j session creation
-    from src.graph.driver import init_driver, ensure_indexes, close_driver
+    from archolith_proxy.graph.driver import init_driver, ensure_indexes, close_driver
     driver = await init_driver()
     await ensure_indexes()
     print("1. Neo4j driver OK")
 
-    from src.graph.session import create_session, find_by_session_id, touch_session, get_turn_number
+    from archolith_proxy.graph.session import create_session, find_by_session_id, touch_session, get_turn_number
     try:
         result = await create_session("test-direct-002", fingerprint="fp_test_002")
         sid = result.get("session_id", "?") if isinstance(result, dict) else "?"
@@ -34,7 +34,7 @@ async def test():
     # 2. Test extraction
     client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0))
     try:
-        from src.extractor.client import extract_facts
+        from archolith_proxy.extractor.client import extract_facts
         result = await extract_facts(
             http_client=client,
             turn_number=1,

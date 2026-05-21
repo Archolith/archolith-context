@@ -1,8 +1,8 @@
 """Quick Neo4j diagnostic for E2E session data."""
 
 import asyncio
-from src.graph.driver import init_driver, close_driver
-from src.graph.repository import run_query
+from archolith_proxy.graph.driver import init_driver, close_driver
+from archolith_proxy.graph.repository import run_query
 
 
 async def check():

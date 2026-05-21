@@ -72,8 +72,8 @@ async def send_turn(client: httpx.AsyncClient, messages: list[dict], turn_num: i
 
 async def check_neo4j_facts(session_id: str) -> int:
     """Check how many active facts exist for the session in Neo4j."""
-    from src.graph.driver import init_driver, close_driver
-    from src.graph.repository import run_query, CONTEXT_SESSION_LABEL
+    from archolith_proxy.graph.driver import init_driver, close_driver
+    from archolith_proxy.graph.repository import run_query, CONTEXT_SESSION_LABEL
     try:
         await init_driver()
         cypher = f"""

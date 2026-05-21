@@ -12,7 +12,7 @@ COPY pyproject.toml ./
 RUN uv pip install --system -e ".[dev]" 2>/dev/null || uv pip install --system .
 
 # Copy source code
-COPY src/ src/
+COPY archolith_proxy/ archolith_proxy/
 COPY tests/ tests/
 
 # Create logs directory
@@ -29,4 +29,4 @@ EXPOSE 9800
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import httpx; r = httpx.get('http://localhost:9800/live'); assert r.status_code == 200" || exit 1
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "9800", "--log-level", "info"]
+CMD ["uvicorn", "archolith_proxy.main:app", "--host", "0.0.0.0", "--port", "9800", "--log-level", "info"]

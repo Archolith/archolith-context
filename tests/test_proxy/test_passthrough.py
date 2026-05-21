@@ -6,7 +6,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from src.main import create_app
+from archolith_proxy.main import create_app
 
 
 # --- Mock upstream responses ---

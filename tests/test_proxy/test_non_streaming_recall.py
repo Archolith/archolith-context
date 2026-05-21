@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from src.proxy.recall import (
+from archolith_proxy.proxy.recall import (
     RecallResult,
     handle_non_streaming_recall,
     execute_recall,
@@ -76,7 +76,7 @@ class TestExecuteRecall:
             },
         }
 
-        with patch("src.proxy.tool_injection.handle_recall_tool_call", new=AsyncMock(return_value="API key is in .env")):
+        with patch("archolith_proxy.proxy.tool_injection.handle_recall_tool_call", new=AsyncMock(return_value="API key is in .env")):
             result = await execute_recall(mock_client, tool_call, "session-1", turn_number=5)
             assert result == "API key is in .env"
 
@@ -237,8 +237,8 @@ class TestHandleNonStreamingRecall:
 
         mock_client = AsyncMock()
 
-        with patch("src.proxy.tool_injection.handle_recall_tool_call", new=AsyncMock(return_value="API key is in .env")), \
-             patch("src.proxy.upstream.upstream_request_with_retry", new=AsyncMock(return_value=mock_second_resp)):
+        with patch("archolith_proxy.proxy.tool_injection.handle_recall_tool_call", new=AsyncMock(return_value="API key is in .env")), \
+             patch("archolith_proxy.proxy.upstream.upstream_request_with_retry", new=AsyncMock(return_value=mock_second_resp)):
             result = await handle_non_streaming_recall(
                 resp=resp,
                 http_client=mock_client,
@@ -328,8 +328,8 @@ class TestHandleNonStreamingRecall:
                 return mock_second_resp
             return mock_third_resp
 
-        with patch("src.proxy.tool_injection.handle_recall_tool_call", new=AsyncMock(return_value="Recalled facts")), \
-             patch("src.proxy.upstream.upstream_request_with_retry", side_effect=mock_upstream_request):
+        with patch("archolith_proxy.proxy.tool_injection.handle_recall_tool_call", new=AsyncMock(return_value="Recalled facts")), \
+             patch("archolith_proxy.proxy.upstream.upstream_request_with_retry", side_effect=mock_upstream_request):
             result = await handle_non_streaming_recall(
                 resp=resp,
                 http_client=mock_client,
@@ -402,8 +402,8 @@ class TestResendWithRecallMetadata:
                 return mock_second_resp
             return mock_third_resp
 
-        with patch("src.proxy.tool_injection.handle_recall_tool_call", new=AsyncMock(return_value="Facts")), \
-             patch("src.proxy.upstream.upstream_request_with_retry", side_effect=mock_upstream_request):
+        with patch("archolith_proxy.proxy.tool_injection.handle_recall_tool_call", new=AsyncMock(return_value="Facts")), \
+             patch("archolith_proxy.proxy.upstream.upstream_request_with_retry", side_effect=mock_upstream_request):
             final_data, questions, facts = await resend_with_recall(
                 http_client=AsyncMock(),
                 url="https://upstream/chat/completions",
@@ -430,8 +430,8 @@ class TestNonStreamingRecallTracePersistence:
     @pytest.mark.asyncio
     async def test_recall_turn_stores_trace(self):
         """After recall interception, the trace should be stored in the trace store."""
-        from src.trace.builder import TraceBuilder
-        from src.trace.store import get_trace_store
+        from archolith_proxy.trace.builder import TraceBuilder
+        from archolith_proxy.trace.store import get_trace_store
 
         builder = TraceBuilder()
         builder.set_request(

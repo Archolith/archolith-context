@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from src.memory.models import (
+from archolith_proxy.memory.models import (
     EngineCapabilities,
     MemoryEngineConfig,
     PromotionOutcome,
     PromotionRecord,
     PromotionResult,
 )
-from src.memory.registry import MemoryEngineRegistry, get_registry, reset_registry
-from src.memory.promotion import PromotionService
-from src.memory.adapters.base import MemoryAdapterBase
+from archolith_proxy.memory.registry import MemoryEngineRegistry, get_registry, reset_registry
+from archolith_proxy.memory.promotion import PromotionService
+from archolith_proxy.memory.adapters.base import MemoryAdapterBase
 
 
 # ---------------------------------------------------------------------------
@@ -402,23 +402,23 @@ class TestPromotionService:
 
 class TestBasicMemoryAdapter:
     def test_import(self):
-        from src.memory.adapters.basic_memory import Adapter
+        from archolith_proxy.memory.adapters.basic_memory import Adapter
         assert Adapter is not None
 
     def test_filesystem_mode_config(self):
-        from src.memory.adapters.basic_memory import Adapter
+        from archolith_proxy.memory.adapters.basic_memory import Adapter
         cfg = _make_config(type="basic_memory", base_url="C:/tmp/vault")
         adapter = Adapter(cfg)
         assert adapter._mode == "filesystem"
 
     def test_api_mode_config(self):
-        from src.memory.adapters.basic_memory import Adapter
+        from archolith_proxy.memory.adapters.basic_memory import Adapter
         cfg = _make_config(type="basic_memory", base_url="http://localhost:8080", extra={"mode": "api"})
         adapter = Adapter(cfg)
         assert adapter._mode == "api"
 
     def test_markdown_generation(self):
-        from src.memory.adapters.basic_memory import Adapter
+        from archolith_proxy.memory.adapters.basic_memory import Adapter
         cfg = _make_config(type="basic_memory", base_url="C:/tmp/vault")
         adapter = Adapter(cfg)
         rec = _make_promotion(tags=["durable"], touched_files=["/src/app.py"])
@@ -430,13 +430,13 @@ class TestBasicMemoryAdapter:
         assert "[source] context-engine promotion" in md
 
     def test_slugify(self):
-        from src.memory.adapters.basic_memory import Adapter
+        from archolith_proxy.memory.adapters.basic_memory import Adapter
         assert Adapter._slugify("Hello World! @#") == "hello-world"
         assert Adapter._slugify("a" * 100) == "a" * 60
 
     @pytest.mark.asyncio
     async def test_validate_config_no_base_url(self):
-        from src.memory.adapters.basic_memory import Adapter
+        from archolith_proxy.memory.adapters.basic_memory import Adapter
         cfg = MemoryEngineConfig(id="e1", type="basic_memory")
         adapter = Adapter(cfg)
         problems = await adapter.validate_config()
@@ -444,7 +444,7 @@ class TestBasicMemoryAdapter:
 
     @pytest.mark.asyncio
     async def test_capabilities(self):
-        from src.memory.adapters.basic_memory import Adapter
+        from archolith_proxy.memory.adapters.basic_memory import Adapter
         cfg = _make_config(type="basic_memory", base_url="C:/tmp/vault")
         adapter = Adapter(cfg)
         caps = await adapter.capabilities()
@@ -454,12 +454,12 @@ class TestBasicMemoryAdapter:
 
 class TestClaudeMemAdapter:
     def test_import(self):
-        from src.memory.adapters.claude_mem import Adapter
+        from archolith_proxy.memory.adapters.claude_mem import Adapter
         assert Adapter is not None
 
     @pytest.mark.asyncio
     async def test_validate_config(self):
-        from src.memory.adapters.claude_mem import Adapter
+        from archolith_proxy.memory.adapters.claude_mem import Adapter
         cfg = _make_config(type="claude_mem", base_url="http://localhost:37777")
         adapter = Adapter(cfg)
         problems = await adapter.validate_config()
@@ -467,7 +467,7 @@ class TestClaudeMemAdapter:
 
     @pytest.mark.asyncio
     async def test_capabilities(self):
-        from src.memory.adapters.claude_mem import Adapter
+        from archolith_proxy.memory.adapters.claude_mem import Adapter
         cfg = _make_config(type="claude_mem", base_url="http://localhost:37777")
         adapter = Adapter(cfg)
         caps = await adapter.capabilities()
@@ -475,7 +475,7 @@ class TestClaudeMemAdapter:
         assert caps.list_by_source
 
     def test_payload_structure(self):
-        from src.memory.adapters.claude_mem import Adapter
+        from archolith_proxy.memory.adapters.claude_mem import Adapter
         cfg = _make_config(type="claude_mem", base_url="http://localhost:37777")
         adapter = Adapter(cfg)
         rec = _make_promotion()
@@ -487,12 +487,12 @@ class TestClaudeMemAdapter:
 
 class TestCogneeAdapter:
     def test_import(self):
-        from src.memory.adapters.cognee import Adapter
+        from archolith_proxy.memory.adapters.cognee import Adapter
         assert Adapter is not None
 
     @pytest.mark.asyncio
     async def test_validate_config(self):
-        from src.memory.adapters.cognee import Adapter
+        from archolith_proxy.memory.adapters.cognee import Adapter
         cfg = _make_config(type="cognee", base_url="http://localhost:8000")
         adapter = Adapter(cfg)
         problems = await adapter.validate_config()
@@ -500,7 +500,7 @@ class TestCogneeAdapter:
 
     @pytest.mark.asyncio
     async def test_capabilities(self):
-        from src.memory.adapters.cognee import Adapter
+        from archolith_proxy.memory.adapters.cognee import Adapter
         cfg = _make_config(type="cognee", base_url="http://localhost:8000")
         adapter = Adapter(cfg)
         caps = await adapter.capabilities()
@@ -508,13 +508,13 @@ class TestCogneeAdapter:
         assert caps.delete_promoted  # Cognee has `forget`
 
     def test_dataset_config(self):
-        from src.memory.adapters.cognee import Adapter
+        from archolith_proxy.memory.adapters.cognee import Adapter
         cfg = _make_config(type="cognee", base_url="http://localhost:8000", extra={"dataset": "my-data"})
         adapter = Adapter(cfg)
         assert adapter._dataset == "my-data"
 
     def test_default_dataset(self):
-        from src.memory.adapters.cognee import Adapter
+        from archolith_proxy.memory.adapters.cognee import Adapter
         cfg = _make_config(type="cognee", base_url="http://localhost:8000")
         adapter = Adapter(cfg)
         assert adapter._dataset == "context-engine"
@@ -522,12 +522,12 @@ class TestCogneeAdapter:
 
 class TestOpenMemoryAdapter:
     def test_import(self):
-        from src.memory.adapters.openmemory import Adapter
+        from archolith_proxy.memory.adapters.openmemory import Adapter
         assert Adapter is not None
 
     @pytest.mark.asyncio
     async def test_validate_config(self):
-        from src.memory.adapters.openmemory import Adapter
+        from archolith_proxy.memory.adapters.openmemory import Adapter
         cfg = _make_config(type="openmemory", base_url="http://localhost:8080")
         adapter = Adapter(cfg)
         problems = await adapter.validate_config()
@@ -535,7 +535,7 @@ class TestOpenMemoryAdapter:
 
     @pytest.mark.asyncio
     async def test_capabilities(self):
-        from src.memory.adapters.openmemory import Adapter
+        from archolith_proxy.memory.adapters.openmemory import Adapter
         cfg = _make_config(type="openmemory", base_url="http://localhost:8080")
         adapter = Adapter(cfg)
         caps = await adapter.capabilities()
@@ -544,7 +544,7 @@ class TestOpenMemoryAdapter:
         assert caps.list_by_source
 
     def test_user_id_config(self):
-        from src.memory.adapters.openmemory import Adapter
+        from archolith_proxy.memory.adapters.openmemory import Adapter
         cfg = _make_config(type="openmemory", base_url="http://localhost:8080", extra={"user_id": "alice"})
         adapter = Adapter(cfg)
         assert adapter._user_id == "alice"
@@ -552,12 +552,12 @@ class TestOpenMemoryAdapter:
 
 class TestNocturneMemoryAdapter:
     def test_import(self):
-        from src.memory.adapters.nocturne_memory import Adapter
+        from archolith_proxy.memory.adapters.nocturne_memory import Adapter
         assert Adapter is not None
 
     @pytest.mark.asyncio
     async def test_validate_config(self):
-        from src.memory.adapters.nocturne_memory import Adapter
+        from archolith_proxy.memory.adapters.nocturne_memory import Adapter
         cfg = _make_config(type="nocturne_memory", base_url="http://localhost:8233")
         adapter = Adapter(cfg)
         problems = await adapter.validate_config()
@@ -565,7 +565,7 @@ class TestNocturneMemoryAdapter:
 
     @pytest.mark.asyncio
     async def test_capabilities(self):
-        from src.memory.adapters.nocturne_memory import Adapter
+        from archolith_proxy.memory.adapters.nocturne_memory import Adapter
         cfg = _make_config(type="nocturne_memory", base_url="http://localhost:8233")
         adapter = Adapter(cfg)
         caps = await adapter.capabilities()
@@ -575,14 +575,14 @@ class TestNocturneMemoryAdapter:
         assert caps.list_by_source
 
     def test_domain_config(self):
-        from src.memory.adapters.nocturne_memory import Adapter
+        from archolith_proxy.memory.adapters.nocturne_memory import Adapter
         cfg = _make_config(type="nocturne_memory", base_url="http://localhost:8233", extra={"domain": "work"})
         adapter = Adapter(cfg)
         assert adapter._domain == "work"
         assert adapter._parent_uri == "work://context-engine"
 
     def test_payload_structure(self):
-        from src.memory.adapters.nocturne_memory import Adapter
+        from archolith_proxy.memory.adapters.nocturne_memory import Adapter
         cfg = _make_config(type="nocturne_memory", base_url="http://localhost:8233")
         adapter = Adapter(cfg)
         rec = _make_promotion()
@@ -599,7 +599,7 @@ class TestNocturneMemoryAdapter:
 
 class TestRegistryAdapterTypes:
     def test_all_adapter_types_registered(self):
-        from src.memory.registry import _ADAPTER_TYPES
+        from archolith_proxy.memory.registry import _ADAPTER_TYPES
         expected = {
             "cth_mcp_memory", "mem0", "zep", "generic_http",
             "basic_memory", "claude_mem", "cognee", "openmemory", "nocturne_memory",

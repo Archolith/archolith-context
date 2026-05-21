@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from src.assembler.context import (
+from archolith_proxy.assembler.context import (
     _estimate_tokens,
     _format_context_block,
     _format_session_overview,
@@ -14,8 +14,8 @@ from src.assembler.context import (
     _score_fact,
     _expand_with_context_window,
 )
-from src.proxy.rewrite import rewrite_messages as _rewrite_messages
-from src.models.dtos import AssembledContext
+from archolith_proxy.proxy.rewrite import rewrite_messages as _rewrite_messages
+from archolith_proxy.models.dtos import AssembledContext
 
 
 class TestEstimateTokens:
@@ -410,7 +410,7 @@ class TestColdStartLogic:
     @pytest.mark.asyncio
     async def test_cold_start_turn_0(self):
         """Turn 0 with small input should return None (passthrough)."""
-        from src.assembler.context import assemble_context
+        from archolith_proxy.assembler.context import assemble_context
         # Turn 0, small input: should be cold start
         result = await assemble_context(
             session_id="test-session",
@@ -422,7 +422,7 @@ class TestColdStartLogic:
     @pytest.mark.asyncio
     async def test_cold_start_turn_1(self):
         """Turn 1 with small input should still be cold start (default threshold is turn 3)."""
-        from src.assembler.context import assemble_context
+        from archolith_proxy.assembler.context import assemble_context
         result = await assemble_context(
             session_id="test-session",
             turn_number=1,
@@ -441,7 +441,7 @@ class TestColdStartLogic:
         Since we can't connect to Neo4j in unit tests, we verify the
         cold-start bypass logic directly by checking the condition.
         """
-        from src.config import get_settings
+        from archolith_proxy.config import get_settings
         settings = get_settings()
 
         # Turn 1, tokens > threshold: the cold-start gate should be OPEN

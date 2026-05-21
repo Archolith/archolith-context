@@ -5,11 +5,11 @@ import httpx
 
 
 async def test():
-    from src.config import get_settings
+    from archolith_proxy.config import get_settings
     settings = get_settings()
 
     # Initialize same as the proxy
-    from src.graph.driver import init_driver, ensure_indexes, close_driver
+    from archolith_proxy.graph.driver import init_driver, ensure_indexes, close_driver
     await init_driver()
     await ensure_indexes()
 
@@ -19,7 +19,7 @@ async def test():
     )
 
     # Import and call _run_extraction directly
-    from src.openai.chat import _run_extraction
+    from archolith_proxy.openai.chat import _run_extraction
 
     messages = [
         {"role": "system", "content": "You are a coding assistant."},
@@ -47,7 +47,7 @@ def add_numbers(x, y):
     await extractor_client.aclose()
 
     # Now check Neo4j
-    from src.graph.driver import get_driver
+    from archolith_proxy.graph.driver import get_driver
     driver = await get_driver()
     async with driver.session(database="neo4j") as session:
         result = await session.run(

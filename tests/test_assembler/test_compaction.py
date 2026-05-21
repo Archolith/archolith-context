@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.assembler.compaction import compact_context
-from src.config import get_settings, reset_settings
+from archolith_proxy.assembler.compaction import compact_context
+from archolith_proxy.config import get_settings, reset_settings
 
 
 class TestCompactContext:
