@@ -14,7 +14,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.config import get_settings
-from src.graph.driver import close_driver, init_driver, ensure_indexes
+from src.graph.backend import close_backend, init_backend, is_graph_ready
+from src.graph.neo4j_backend import Neo4jBackend
 from src.metrics import get_metrics, record_metric, record_start_time
 from src.logging_config import configure_logging
 from src.openai.router import router as openai_router
@@ -66,11 +67,10 @@ def _load_memory_engines(settings, registry) -> None:
 
 
 async def _init_neo4j_with_retry(settings, max_retries: int = 3, backoff_base: float = 1.0) -> bool:
-    """Initialize Neo4j with retry logic. Returns True if connected."""
+    """Initialize Neo4j backend with retry logic. Returns True if connected."""
     for attempt in range(max_retries):
         try:
-            await init_driver()
-            await ensure_indexes()
+            await init_backend(Neo4jBackend())
             logger.info("neo4j_initialized", attempt=attempt + 1)
             return True
         except Exception as e:
@@ -179,7 +179,7 @@ async def lifespan(app: FastAPI):
     # Cleanup
     await app.state.http_client.aclose()
     await app.state.extractor_client.aclose()
-    await close_driver()
+    await close_backend()
     logger.info("proxy_stopped")
 
 
