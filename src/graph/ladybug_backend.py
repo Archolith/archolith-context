@@ -563,10 +563,27 @@ class LadybugBackend:
     # ── Cleanup / TTL ──────────────────────────────────────────────────
 
     async def expire_sessions(self) -> int:
-        rows = await self._execute("MATCH (s:Session {status: 'active'}) RETURN count(s) AS expired")
+        """Mark active sessions past their TTL as expired.
+
+        LadybugDB stores timestamps as ISO-8601 strings, so we compute the
+        cutoff in Python and use string comparison (ISO-8601 sorts correctly).
+        """
+        from src.config import get_settings
+        settings = get_settings()
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=settings.session_ttl_hours)).isoformat()
+        rows = await self._execute(
+            """
+            MATCH (s:Session {status: 'active'})
+            WHERE s.last_active < $cutoff
+            SET s.status = 'expired'
+            RETURN count(s) AS expired
+            """,
+            {"cutoff": cutoff},
+        )
         count = rows[0]["expired"] if rows else 0
         if count:
-            logger.info("ladybug_sessions_expired", count=count)
+            logger.info("ladybug_sessions_expired", count=count, ttl_hours=settings.session_ttl_hours)
         return count
 
     async def delete_expired_sessions(self) -> int:
