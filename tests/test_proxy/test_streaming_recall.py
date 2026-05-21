@@ -626,16 +626,21 @@ class TestStreamingRecallInterception:
             async with app.router.lifespan_context(app):
                 app.state.http_client = httpx.AsyncClient(transport=mock_transport)
                 app.state.extractor_client = httpx.AsyncClient(transport=extractor_transport)
-                app.state.neo4j_ready = True  # Enable session resolution
-
                 with patch("src.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
-                     patch("src.openai.chat.session_repo") as mock_session_repo, \
+                     patch("src.openai.chat.is_graph_ready", return_value=True), \
+                     patch("src.openai.chat.get_backend") as mock_get_backend, \
                      patch("src.proxy.tool_injection.handle_recall_tool_call", new_callable=AsyncMock) as mock_recall, \
                      patch("src.proxy.locks.wait_for_prior_extraction", new_callable=AsyncMock), \
                      patch("src.openai.chat.assemble_context", new_callable=AsyncMock, return_value=None):
 
+                    mock_backend = AsyncMock()
+                    mock_backend.get_turn_number.return_value = 1
+                    mock_backend.get_active_facts.return_value = []
+                    mock_backend.get_active_fact_count.return_value = 0
+                    mock_backend.find_matching_fact_ids.return_value = []
+                    mock_backend.invalidate_facts.return_value = 0
+                    mock_get_backend.return_value = mock_backend
                     mock_resolve.return_value = ("test-session-123", True)
-                    mock_session_repo.get_turn_number = AsyncMock(return_value=1)
                     mock_recall.return_value = "Recalled: API key is in .env file at project root."
 
                     asgi_client = httpx.AsyncClient(

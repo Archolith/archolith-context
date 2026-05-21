@@ -87,3 +87,13 @@ def is_graph_ready() -> bool:
         return _backend.is_ready()
     except Exception:
         return False
+
+
+def reset_backend() -> None:
+    """Reset the backend singleton (for testing).
+
+    Does NOT call close() — use close_backend() for graceful shutdown.
+    This just clears the reference to prevent test isolation leaks.
+    """
+    global _backend
+    _backend = None

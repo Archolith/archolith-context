@@ -154,6 +154,10 @@ class TestRetryableStatusCodes:
 class TestGracefulDegradation:
     """Test that the system degrades gracefully when dependencies are unavailable."""
 
+    def setup_method(self):
+        from src.graph.backend import reset_backend
+        reset_backend()
+
     @pytest.mark.asyncio
     async def test_health_endpoint_works_without_neo4j(self, client):
         """Health endpoint should return ok even when Neo4j is not configured."""
