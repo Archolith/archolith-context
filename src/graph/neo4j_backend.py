@@ -123,6 +123,11 @@ class Neo4jBackend:
     async def invalidate_facts(self, fact_ids: list[str]) -> int:
         return await _facts.invalidate_facts(fact_ids)
 
+    async def find_matching_fact_ids(
+        self, session_id: str, descriptions: list[str]
+    ) -> list[str]:
+        return await _facts.find_matching_fact_ids(session_id, descriptions)
+
     async def get_active_facts(
         self, session_id: str, limit: int = 50
     ) -> list[dict]:

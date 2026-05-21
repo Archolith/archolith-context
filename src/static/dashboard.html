@@ -264,7 +264,7 @@ async function renderOverview() {
     const srCls = savingsRate > 0.3 ? 'green' : savingsRate > 0.1 ? 'yellow' : 'red';
     const erCls = extractionRate > 0.9 ? 'green' : extractionRate > 0.5 ? 'yellow' : 'red';
 
-    statusBar.innerHTML = `uptime ${Math.round(m.uptime_s || 0)}s · neo4j <span class="${m.graph_ready ? 'ok' : 'err'}">${m.neo4j_ready ? 'ok' : 'off'}</span> · traces ${traceRecords}`;
+    statusBar.innerHTML = `uptime ${Math.round(m.uptime_s || 0)}s · neo4j <span class="${m.graph_ready ? 'ok' : 'err'}">${m.graph_ready ? 'ok' : 'off'}</span> · traces ${traceRecords}`;
 
     let sessionRows = '';
     if (traceData.sessions && traceData.sessions.length > 0) {

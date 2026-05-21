@@ -229,7 +229,7 @@ async def handle_recall_tool_call(
     )
     from src.assembler.query_rewrite import needs_rewrite, rewrite_query, extract_recent_exchanges
     from src.config import get_settings
-    from src.graph import facts as facts_repo
+    from src.graph.backend import get_backend
 
     settings = get_settings()
 
@@ -256,7 +256,7 @@ async def handle_recall_tool_call(
 
     # Query session facts
     try:
-        all_facts = await facts_repo.get_active_facts(session_id, limit=200)
+        all_facts = await get_backend().get_active_facts(session_id, limit=200)
     except Exception as e:
         logger.warning("recall_graph_query_failed", session_id=session_id, error=str(e))
         return f"Error: Could not query session memory ({e})"

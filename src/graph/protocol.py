@@ -115,6 +115,16 @@ class GraphBackend(Protocol):
         """Mark facts as invalidated (set valid_until). Returns count affected."""
         ...
 
+    async def find_matching_fact_ids(
+        self, session_id: str, descriptions: list[str]
+    ) -> list[str]:
+        """Match invalidation description strings to actual fact IDs.
+
+        Uses Jaccard similarity to find the best match for each description
+        among active facts in the session. Returns matched fact_id list.
+        """
+        ...
+
     async def get_active_facts(
         self, session_id: str, limit: int = 50
     ) -> list[dict]:

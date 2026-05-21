@@ -14,7 +14,7 @@ import re
 
 import structlog
 
-from src.graph import session as session_repo
+from src.graph.backend import get_backend
 
 logger = structlog.get_logger()
 
@@ -62,12 +62,12 @@ async def resolve_session(
     # Primary: explicit X-Session-ID header
     session_id = headers.get("x-session-id") or headers.get("X-Session-ID")
     if session_id:
-        existing = await session_repo.find_by_session_id(session_id)
+        existing = await get_backend().find_session_by_id(session_id)
         if existing:
-            await session_repo.touch_session(session_id)
+            await get_backend().touch_session(session_id)
             return session_id, False
         # Create with explicit ID
-        await session_repo.create_session(session_id, fingerprint=None)
+        await get_backend().create_session(session_id, fingerprint=None)
         return session_id, True
 
     # Fallback: fingerprint from messages
@@ -90,21 +90,21 @@ async def resolve_session(
         # No user message — can't fingerprint, generate random
         import uuid
         session_id = uuid.uuid4().hex[:16]
-        await session_repo.create_session(session_id, fingerprint=None)
+        await get_backend().create_session(session_id, fingerprint=None)
         return session_id, True
 
     fingerprint = compute_fingerprint(system_msg, first_user_msg)
 
     # Look up existing session
-    existing = await session_repo.find_by_fingerprint(fingerprint)
+    existing = await get_backend().find_session_by_fingerprint(fingerprint)
     if existing:
         session_id = existing["session_id"]
-        await session_repo.touch_session(session_id)
+        await get_backend().touch_session(session_id)
         return session_id, False
 
     # Create new session
     import uuid
     session_id = uuid.uuid4().hex[:16]
-    await session_repo.create_session(session_id, fingerprint=fingerprint)
+    await get_backend().create_session(session_id, fingerprint=fingerprint)
     logger.info("session_created", session_id=session_id, fingerprint=fingerprint)
     return session_id, True

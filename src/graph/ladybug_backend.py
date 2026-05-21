@@ -187,7 +187,16 @@ class LadybugBackend:
                     if hasattr(val, "isoformat"):
                         val = val.isoformat()
                     d[name] = val
-            dict_rows.append(d)
+            # Unwrap single-column node results: RETURN s => {"s": {...}} => {...}
+            if len(col_names) == 1 and len(d) == 1:
+                sole_key = list(d.keys())[0]
+                sole_val = d[sole_key]
+                if isinstance(sole_val, dict):
+                    dict_rows.append(sole_val)
+                else:
+                    dict_rows.append(d)
+            else:
+                dict_rows.append(d)
         return dict_rows
 
     # ── Session CRUD ───────────────────────────────────────────────────
@@ -340,12 +349,40 @@ class LadybugBackend:
         )
         return rows[0]["invalidated"] if rows else 0
 
+    async def find_matching_fact_ids(
+        self, session_id: str, descriptions: list[str]
+    ) -> list[str]:
+        """Match description strings to actual fact IDs using Jaccard similarity."""
+        if not descriptions:
+            return []
+        from src.extractor.dedup import jaccard_similarity
+
+        active_facts = await self.get_active_facts(session_id, limit=200)
+        if not active_facts:
+            return []
+
+        matched_ids: set = set()
+        for desc in descriptions:
+            best_id = None
+            best_sim: float = 0.0
+            for fact in active_facts:
+                content = fact.get("content", "")
+                if not content:
+                    continue
+                sim = jaccard_similarity(desc, content)
+                if sim > best_sim and sim >= 0.60:
+                    best_sim = sim
+                    best_id = fact.get("fact_id")
+            if best_id:
+                matched_ids.add(best_id)
+        return list(matched_ids)
+
     async def get_active_facts(self, session_id: str, limit: int = 50) -> list[dict]:
         rows = await self._execute(
             "MATCH (f:Fact {session_id: $session_id}) WHERE f.valid_until IS NULL RETURN f ORDER BY f.source_turn DESC LIMIT $limit",
             {"session_id": session_id, "limit": limit},
         )
-        return [r["f"] for r in rows]
+        return rows  # Unwrapped by _execute
 
     async def get_active_fact_count(self, session_id: str) -> int:
         rows = await self._execute(
@@ -387,7 +424,7 @@ class LadybugBackend:
             f"MATCH (f:Fact {{session_id: $session_id}}) {where_clause} RETURN f ORDER BY f.source_turn ASC LIMIT $limit",
             params,
         )
-        return [r["f"] for r in rows]
+        return rows  # Unwrapped by _execute
 
     async def get_invalidated_facts(self, session_id: str) -> list[dict]:
         return await self._execute(
@@ -503,10 +540,9 @@ class LadybugBackend:
             """,
             {"decision_id": decision_id, "session_id": session_id, "summary": summary, "rationale": rationale, "turn": turn},
         )
-        await self.create_belongs_to(session_id, fact_id=decision_id)
-        # Link Decision to Session via BELONGS_TO
+        # Link Decision to Session via DECIDED_IN edge
         await self._execute(
-            "MATCH (d:Decision {decision_id: $decision_id}) MATCH (s:Session {session_id: $session_id}) MERGE (d)-[:BELONGS_TO]->(s)",
+            "MATCH (d:Decision {decision_id: $decision_id}) MATCH (s:Session {session_id: $session_id}) MERGE (d)-[:DECIDED_IN]->(s)",
             {"decision_id": decision_id, "session_id": session_id},
         )
         return decision_id

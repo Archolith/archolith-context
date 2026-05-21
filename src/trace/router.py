@@ -15,6 +15,7 @@ import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from src.graph.backend import get_backend, is_graph_ready
 from src.trace.store import get_trace_store
 
 logger = structlog.get_logger()
@@ -43,8 +44,8 @@ async def trace_get_session(session_id: str, limit: int = 50, offset: int = 0) -
 
     # Enrich summary with session goal from graph if available
     try:
-        from src.graph import session as session_repo
-        session_data = await session_repo.find_by_session_id(session_id)
+        
+        session_data = await get_backend().find_session_by_id(session_id)
         if session_data:
             goal = session_data.get("goal")
             if goal:
@@ -75,9 +76,7 @@ async def trace_get_turn(turn_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _neo4j_ready(request: Request) -> bool:
-    """Check if Neo4j is available on this app instance."""
-    return getattr(request.app.state, "neo4j_ready", False)
+
 
 
 @router.get("/graph/{session_id}/facts")
@@ -101,13 +100,13 @@ async def graph_facts(
     - include_invalidated: include facts that have been superseded (default false)
     - limit: max facts to return (default 100)
     """
-    if not _neo4j_ready(request):
+    if not is_graph_ready():
         return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
 
     try:
-        from src.graph import facts as facts_repo
+        
 
-        facts = await facts_repo.get_facts_filtered(
+        facts = await get_backend().get_facts_filtered(
             session_id=session_id,
             fact_type=fact_type,
             min_confidence=min_confidence,
@@ -129,14 +128,14 @@ async def graph_invalidation_chains(request: Request, session_id: str) -> dict:
     Returns facts that have been invalidated, grouped by which fact
     superseded them. This reveals how knowledge evolved over the session.
     """
-    if not _neo4j_ready(request):
+    if not is_graph_ready():
         return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
 
     try:
-        from src.graph import facts as facts_repo
+        
 
-        chains = await facts_repo.get_supersession_chain(session_id)
-        invalidated = await facts_repo.get_invalidated_facts(session_id)
+        chains = await get_backend().get_supersession_chain(session_id)
+        invalidated = await get_backend().get_invalidated_facts(session_id)
 
         return {
             "session_id": session_id,
@@ -153,13 +152,13 @@ async def graph_invalidation_chains(request: Request, session_id: str) -> dict:
 @router.get("/graph/{session_id}/files")
 async def graph_touched_files(request: Request, session_id: str) -> dict:
     """Show files touched by a session (via TOUCHES edges)."""
-    if not _neo4j_ready(request):
+    if not is_graph_ready():
         return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
 
     try:
-        from src.graph import edges as edges_repo
+        
 
-        results = await edges_repo.get_touched_files(session_id)
+        results = await get_backend().get_touched_files(session_id)
         files = [
             {
                 "path": r["path"],
@@ -178,13 +177,13 @@ async def graph_touched_files(request: Request, session_id: str) -> dict:
 @router.get("/graph/{session_id}/decisions")
 async def graph_decisions(request: Request, session_id: str) -> dict:
     """Show decisions recorded for a session."""
-    if not _neo4j_ready(request):
+    if not is_graph_ready():
         return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
 
     try:
-        from src.graph import decisions as decisions_repo
+        
 
-        decisions = await decisions_repo.get_decisions(session_id, include_superseded=True)
+        decisions = await get_backend().get_decisions(session_id, include_superseded=True)
         return {"session_id": session_id, "decisions": decisions, "count": len(decisions)}
     except Exception as e:
         logger.warning("graph_decisions_query_failed", session_id=session_id, error=str(e))
@@ -299,7 +298,7 @@ async def qa_extract(request: Request) -> dict:
 
     # Step 3: Run dedup check if session_id provided
     dedup_info = None
-    if session_id and _neo4j_ready(request):
+    if session_id and is_graph_ready():
         try:
             from src.extractor.dedup import deduplicate_facts
             from src.graph.facts import get_active_facts
@@ -321,7 +320,7 @@ async def qa_extract(request: Request) -> dict:
 
     # Step 4: Run invalidation matching if session_id provided
     invalidation_info = None
-    if session_id and _neo4j_ready(request) and result.invalidated_fact_ids:
+    if session_id and is_graph_ready() and result.invalidated_fact_ids:
         try:
             from src.graph.facts import find_matching_fact_ids
 

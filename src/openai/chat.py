@@ -15,12 +15,7 @@ from starlette.responses import Response, StreamingResponse
 from src.assembler.context import assemble_context
 from src.config import get_settings
 from src.extractor.client import extract_facts
-from src.graph import cleanup as cleanup_repo
-from src.graph import decisions as decisions_repo
-from src.graph import edges as edges_repo
-from src.graph import facts as facts_repo
-from src.graph import session as session_repo
-from src.graph.backend import is_graph_ready
+from src.graph.backend import get_backend, is_graph_ready
 from src.metrics import get_metrics, record_assembly_mode, record_metric
 from src.models.graph_nodes import FactType, FileStatus
 from src.openai.errors import make_error_response
@@ -82,7 +77,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             headers = {k: v for k, v in request.headers.items()}
             messages_raw = body.get("messages", [])
             session_id, is_new = await resolve_session(headers, messages_raw)
-            turn_number = await session_repo.get_turn_number(session_id)
+            turn_number = await get_backend().get_turn_number(session_id)
             logger.debug("session_resolved", session_id=session_id, turn=turn_number, is_new=is_new)
 
             # Set initial session goal from first user message on new sessions
@@ -101,7 +96,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     # Truncate to a single-sentence goal
                     goal = first_user_msg.split("\n")[0].strip()[:120]
                     try:
-                        await session_repo.update_goal(session_id, goal)
+                        await get_backend().update_goal(session_id, goal)
                         logger.info("session_goal_set_initial", session_id=session_id, goal=goal[:80])
                         await broadcast_session_event(session_id, "session_created", goal=goal)
                     except Exception as e:
@@ -120,7 +115,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     session_goal = None
     if session_id and neo4j_ready:
         try:
-            session_data = await session_repo.find_by_session_id(session_id)
+            session_data = await get_backend().find_session_by_id(session_id)
             session_goal = session_data.get("goal") if session_data else None
         except Exception:
             pass  # Non-critical — extraction will proceed without goal context
@@ -1144,7 +1139,7 @@ async def _run_extraction(
         # Update session goal if extractor provided one
         if result and result.session_goal:
             try:
-                await session_repo.update_goal(session_id, result.session_goal)
+                await get_backend().update_goal(session_id, result.session_goal)
                 logger.info("session_goal_updated", session_id=session_id, goal=result.session_goal[:80])
                 await broadcast_session_event(session_id, "goal_updated", goal=result.session_goal)
             except Exception as e:
@@ -1157,7 +1152,7 @@ async def _run_extraction(
 
         # Deduplicate: fetch existing active facts and filter duplicates
         from src.extractor.dedup import deduplicate_facts as _deduplicate_facts
-        existing_facts = await facts_repo.get_active_facts(session_id, limit=200)
+        existing_facts = await get_backend().get_active_facts(session_id, limit=200)
         unique_facts = _deduplicate_facts(result.facts, existing_facts)
         if len(unique_facts) < len(result.facts):
             logger.info(
@@ -1187,7 +1182,7 @@ async def _run_extraction(
                 "confidence": fact.get("confidence", 0.5),
                 "embedding": embeddings[i] if i < len(embeddings) else None,
             })
-        await facts_repo.store_facts_batch(
+        await get_backend().store_facts_batch(
             session_id=session_id,
             facts=enriched_facts,
             source_turn=turn_number,
@@ -1196,11 +1191,11 @@ async def _run_extraction(
         # Store file touches
         for file_path in result.files_touched:
             status = FileStatus.MODIFIED  # Default — extraction doesn't always distinguish
-            await edges_repo.create_touches(session_id, file_path, status, turn_number)
+            await get_backend().create_touches(session_id, file_path, status, turn_number)
 
         # Store decisions
         for decision in result.decisions:
-            await decisions_repo.store_decision(
+            await get_backend().store_decision(
                 session_id=session_id,
                 summary=decision.get("summary", ""),
                 rationale=decision.get("rationale"),
@@ -1210,12 +1205,12 @@ async def _run_extraction(
         # Invalidate superseded facts — match description strings to actual fact IDs
         invalidations_matched_count = 0
         if result.invalidated_fact_ids:
-            matched_ids = await facts_repo.find_matching_fact_ids(
+            matched_ids = await get_backend().find_matching_fact_ids(
                 session_id, result.invalidated_fact_ids
             )
             invalidations_matched_count = len(matched_ids)
             if matched_ids:
-                count = await facts_repo.invalidate_facts(matched_ids)
+                count = await get_backend().invalidate_facts(matched_ids)
                 if count:
                     logger.info(
                         "facts_invalidated",
@@ -1227,7 +1222,7 @@ async def _run_extraction(
                     )
 
         # Log active fact count for monitoring
-        active_count = await facts_repo.get_active_fact_count(session_id)
+        active_count = await get_backend().get_active_fact_count(session_id)
         embedding_count = sum(1 for e in embeddings if e is not None)
         record_metric("extraction_successes", 1)
         logger.info(

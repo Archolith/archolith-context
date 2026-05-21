@@ -22,9 +22,7 @@ from __future__ import annotations
 import structlog
 
 from src.config import get_settings
-from src.graph import facts as facts_repo
-from src.graph import session as session_repo
-from src.graph import edges as edges_repo
+from src.graph.backend import get_backend
 
 from src.models.dtos import AssembledContext
 from src.models.graph_nodes import FactType
@@ -411,7 +409,7 @@ async def assemble_context(
 
     # Query session graph — each query is wrapped for graceful degradation
     try:
-        session_data = await session_repo.find_by_session_id(session_id)
+        session_data = await get_backend().find_session_by_id(session_id)
     except Exception as e:
         logger.warning("graph_query_failed_session", session_id=session_id, error=str(e))
         return None
@@ -420,7 +418,7 @@ async def assemble_context(
 
     # Get all active facts
     try:
-        all_facts = await facts_repo.get_active_facts(session_id, limit=200)
+        all_facts = await get_backend().get_active_facts(session_id, limit=200)
     except Exception as e:
         logger.warning("graph_query_failed_facts", session_id=session_id, error=str(e))
         all_facts = []
@@ -548,10 +546,9 @@ def _evict_embedding_cache() -> None:
 
 async def _get_touched_files(session_id: str) -> list[dict]:
     """Get all files touched in a session."""
-    return await edges_repo.get_touched_files(session_id)
+    return await get_backend().get_touched_files(session_id)
 
 
 async def _get_decisions(session_id: str) -> list[dict]:
     """Get all decisions for a session (non-superseded)."""
-    from src.graph import decisions as decisions_repo
-    return await decisions_repo.get_decisions(session_id, include_superseded=False)
+    return await get_backend().get_decisions(session_id, include_superseded=False)

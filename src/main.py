@@ -144,10 +144,9 @@ async def lifespan(app: FastAPI):
         timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0),
     )
 
-    # Neo4j — optional, graceful fallback if unavailable
-    app.state.neo4j_ready = False
+    # Graph backend — optional, graceful fallback if unavailable
     if settings.session_neo4j_password:
-        app.state.neo4j_ready = await _init_neo4j_with_retry(
+        await _init_neo4j_with_retry(
             settings,
             max_retries=settings.neo4j_max_retries,
             backoff_base=settings.neo4j_retry_backoff_base_s,
