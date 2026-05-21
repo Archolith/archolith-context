@@ -85,26 +85,25 @@ def build_resend_messages(
 
     Takes the original messages, the model's response (with the recall tool call),
     and the tool result, and produces the message array for the re-send request.
+
+    The assistant message MUST retain the recall tool_call in its tool_calls array
+    because the OpenAI API requires every role="tool" message to have a matching
+    tool_call_id in the preceding assistant message. Stripping the tool_call from
+    the assistant message while keeping the tool result causes a 400 Bad Request.
+
+    The recall tool is already removed from the tools *definition* array by
+    strip_recall_tool() in resend_with_recall(), so the model cannot call it
+    again in the re-send — it just sees the completed tool call in history.
     """
     from src.proxy.tool_injection import (
-        RECALL_TOOL_NAME,
         build_tool_result_message,
     )
 
-    # Strip the recall tool call from the model message
-    remaining_calls = [
-        tc for tc in model_message.get("tool_calls", [])
-        if tc.get("function", {}).get("name") != RECALL_TOOL_NAME
-    ]
-
     resend_messages = list(original_messages)
+
+    # Keep the assistant message as-is (including the recall tool_call) so the
+    # tool result message has a matching tool_call_id in the conversation history.
     resend_model_msg = dict(model_message)
-    if remaining_calls:
-        resend_model_msg["tool_calls"] = remaining_calls
-    else:
-        resend_model_msg.pop("tool_calls", None)
-    if not remaining_calls and not resend_model_msg.get("content"):
-        resend_model_msg["content"] = None
     resend_messages.append(resend_model_msg)
     resend_messages.append(
         build_tool_result_message(tool_call.get("id", "recall_0"), recall_text)
@@ -153,11 +152,26 @@ async def resend_with_recall(
     current_messages = resend_messages
 
     for depth in range(2):  # Max 2 rounds of recall
-        resend_body = json.dumps({
+        resend_payload = {
             **body_dict,
             "stream": False,
             "messages": current_messages,
-        }).encode("utf-8")
+        }
+        # Debug: log the message structure being sent for the resend
+        msg_summary = []
+        for m in current_messages:
+            role = m.get("role", "?")
+            has_tc = "tool_calls" in m and m["tool_calls"]
+            tc_ids = [tc.get("id", "?") for tc in (m.get("tool_calls") or [])] if has_tc else []
+            tc_id = m.get("tool_call_id", "")
+            msg_summary.append(f"{role}(tc={tc_ids},tcid={tc_id})" if (has_tc or tc_id) else role)
+        logger.debug(
+            "recall_resend_messages",
+            depth=depth,
+            message_roles=msg_summary,
+            has_tools="tools" in resend_payload,
+        )
+        resend_body = json.dumps(resend_payload).encode("utf-8")
 
         try:
             resp = await upstream_request_with_retry(
@@ -178,9 +192,15 @@ async def resend_with_recall(
 
         if resp.status_code >= 400:
             record_metric("upstream_errors", 1)
+            error_body = ""
+            try:
+                error_body = resp.text[:500]
+            except Exception:
+                pass
             logger.warning(
                 "recall_resend_error",
-                session_id=session_id, turn=turn_number, depth=depth, status=resp.status_code,
+                session_id=session_id, turn=turn_number, depth=depth,
+                status=resp.status_code, error_body=error_body,
             )
             return None, tracked_questions, tracked_facts
 
@@ -227,19 +247,10 @@ async def resend_with_recall(
         # which handle_recall_tool_call doesn't currently expose.)
         tracked_facts.append(0)
 
-        # Build next message array for third request
+        # Build next message array for third request — keep the assistant's
+        # tool_calls intact so the tool result has a matching tool_call_id.
         second_model_msg = data["choices"][0]["message"]
-        second_remaining = [
-            tc for tc in second_model_msg.get("tool_calls", [])
-            if tc.get("function", {}).get("name") != RECALL_TOOL_NAME
-        ]
         third_msg = dict(second_model_msg)
-        if second_remaining:
-            third_msg["tool_calls"] = second_remaining
-        else:
-            third_msg.pop("tool_calls", None)
-        if not second_remaining and not third_msg.get("content"):
-            third_msg["content"] = None
 
         current_messages = list(current_messages) + [third_msg, build_tool_result_message(
             second_tc.get("id", "recall_1"), second_recall_text,

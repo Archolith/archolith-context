@@ -601,21 +601,11 @@ async def _handle_streaming(
                             )
                             model_message = first_response.get("choices", [{}])[0].get("message", {})
 
-                            # Strip the recall tool call from the model message
-                            remaining_calls = [
-                                tc for tc in model_message.get("tool_calls", [])
-                                if tc.get("function", {}).get("name") != RECALL_TOOL_NAME
-                            ]
-
-                            # Build the re-send message array
+                            # Build the re-send message array — keep the recall
+                            # tool_call in the assistant message so the tool result
+                            # has a matching tool_call_id (OpenAI requires this).
                             resend_messages = list(messages or [])
                             resend_model_msg = dict(model_message)
-                            if remaining_calls:
-                                resend_model_msg["tool_calls"] = remaining_calls
-                            else:
-                                resend_model_msg.pop("tool_calls", None)
-                            if not remaining_calls and not resend_model_msg.get("content"):
-                                resend_model_msg["content"] = None
                             resend_messages.append(resend_model_msg)
                             resend_messages.append(
                                 build_tool_result_message(recall_tc.get("id", "recall_0"), recall_text)
@@ -685,19 +675,11 @@ async def _handle_streaming(
                                     if trace_builder:
                                         trace_builder.set_recall(used=True, question=question, facts_returned=0)
 
+                                    # Keep assistant tool_calls intact for the
+                                    # same reason as the first round.
                                     second_model_msg = second_data["choices"][0]["message"]
-                                    second_remaining_calls = [
-                                        tc for tc in second_model_msg.get("tool_calls", [])
-                                        if tc.get("function", {}).get("name") != RECALL_TOOL_NAME
-                                    ]
                                     third_messages = list(resend_messages)
                                     third_model_msg = dict(second_model_msg)
-                                    if second_remaining_calls:
-                                        third_model_msg["tool_calls"] = second_remaining_calls
-                                    else:
-                                        third_model_msg.pop("tool_calls", None)
-                                    if not second_remaining_calls and not third_model_msg.get("content"):
-                                        third_model_msg["content"] = None
                                     third_messages.append(third_model_msg)
                                     third_messages.append(build_tool_result_message(
                                         second_recall_tc.get("id", "recall_1"), second_recall_text,
