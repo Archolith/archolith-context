@@ -777,6 +777,7 @@ async def _handle_streaming(
                         truncated=cap.truncated,
                         session_goal=session_goal,
                         trace_builder=trace_builder,
+                        promotion_service=getattr(request.app.state, "promotion_service", None),
                     )
 
             background_tasks.add_task(post_stream_extraction)
@@ -792,6 +793,7 @@ async def _handle_streaming(
                     truncated=capture.truncated,
                     session_goal=session_goal,
                     trace_builder=trace_builder,
+                    promotion_service=getattr(request.app.state, "promotion_service", None),
                 )
             background_tasks.add_task(post_recall_stream_extraction)
 
@@ -926,6 +928,7 @@ async def _handle_non_streaming(
                         response_text=response_text,
                         session_goal=session_goal,
                         trace_builder=trace_builder,
+                        promotion_service=getattr(request.app.state, "promotion_service", None),
                     )
         except Exception as e:
             logger.warning("recall_interception_failed", session_id=session_id, error=str(e), exc_info=True)
@@ -957,6 +960,7 @@ async def _handle_non_streaming(
                     response_text=response_text,
                     session_goal=session_goal,
                     trace_builder=trace_builder,
+                    promotion_service=getattr(request.app.state, "promotion_service", None),
                 )
         except Exception as e:
             logger.warning("non_streaming_extraction_setup_failed", error=str(e))
@@ -1053,6 +1057,7 @@ async def _run_extraction(
     truncated: bool = False,
     session_goal: str | None = None,
     trace_builder: TraceBuilder | None = None,
+    promotion_service: object | None = None,
 ) -> None:
     """Run fact extraction and store results in graph. Best-effort, non-blocking.
 
@@ -1061,6 +1066,10 @@ async def _run_extraction(
     for all facts and stores them with their vectors. If embedding fails,
     facts are stored without embeddings (assembler falls back to recency-only
     retrieval).
+
+    When promotion_service is provided and settings.promotion_enabled is True,
+    eligible facts are promoted to the configured durable memory engine after
+    successful storage.
     """
     from src.proxy.locks import get_session_lock
 
@@ -1251,6 +1260,59 @@ async def _run_extraction(
                 extraction_latency_ms=extraction_latency_ms,
                 extracted_facts=[{"content": f.get("content", "")[:200], "type": f.get("fact_type", "observation")} for f in unique_facts],
             )
+
+        # --- Promotion: push eligible facts to durable memory engine ---
+        if promotion_service is not None:
+            try:
+                from src.memory.models import PromotionRecord
+                from src.memory.promotion import PromotionService
+
+                svc = promotion_service  # type: PromotionService
+                settings = get_settings()
+
+                if settings.promotion_enabled:
+                    eligible_records = []
+                    for fact in unique_facts:
+                        fact_type = fact.get("fact_type", "observation")
+                        confidence = fact.get("confidence", 0.5)
+                        if svc.should_promote(
+                            fact_type=fact_type,
+                            confidence=confidence,
+                            turn_count=turn_number,
+                            tags=fact.get("tags", []),
+                        ):
+                            record = PromotionRecord(
+                                session_id=session_id,
+                                source_turn=turn_number,
+                                fact_type=fact_type,
+                                content=fact.get("content", ""),
+                                confidence=confidence,
+                                session_goal=session_goal,
+                                touched_files=result.files_touched if hasattr(result, "files_touched") else [],
+                                promotion_reason="auto_extracted",
+                                tags=fact.get("tags", []),
+                            )
+                            eligible_records.append(record)
+
+                    if eligible_records:
+                        promo_results = await svc.promote_batch(
+                            eligible_records,
+                            dry_run=settings.promotion_dry_run,
+                        )
+                        succeeded = sum(1 for r in promo_results if r.outcome.value == "success")
+                        skipped = sum(1 for r in promo_results if r.outcome.value == "skipped")
+                        failed = sum(1 for r in promo_results if r.outcome.value == "failed")
+                        logger.info(
+                            "promotion_completed",
+                            session_id=session_id,
+                            turn=turn_number,
+                            eligible=len(eligible_records),
+                            succeeded=succeeded,
+                            skipped=skipped,
+                            failed=failed,
+                        )
+            except Exception as e:
+                logger.warning("promotion_task_failed", session_id=session_id, turn=turn_number, error=str(e), exc_info=True)
 
     except Exception as e:
         record_metric("extraction_failures", 1)
