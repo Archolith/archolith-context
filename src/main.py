@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.config import get_settings
-from src.graph.backend import close_backend, init_backend, is_graph_ready
+from src.graph.backend import close_backend, get_backend, init_backend, is_graph_ready
 from src.graph.neo4j_backend import Neo4jBackend
 from src.metrics import get_metrics, record_metric, record_start_time
 from src.logging_config import configure_logging
@@ -145,14 +145,26 @@ async def lifespan(app: FastAPI):
     )
 
     # Graph backend — optional, graceful fallback if unavailable
-    if settings.session_neo4j_password:
+    if settings.graph_backend == "ladybug":
+        try:
+            from src.graph.ladybug_backend import LadybugBackend
+            await init_backend(LadybugBackend(
+                db_path=settings.ladybug_db_path,
+                max_concurrent_queries=settings.ladybug_max_concurrent,
+            ))
+            logger.info("ladybug_initialized", db_path=settings.ladybug_db_path)
+        except ImportError:
+            logger.error("ladybug_not_installed", note="pip install ladybug, or set GRAPH_BACKEND=neo4j")
+        except Exception as e:
+            logger.warning("ladybug_init_failed", error=str(e), note="proxy will run without graph features")
+    elif settings.session_neo4j_password:
         await _init_neo4j_with_retry(
             settings,
             max_retries=settings.neo4j_max_retries,
             backoff_base=settings.neo4j_retry_backoff_base_s,
         )
     else:
-        logger.info("neo4j_not_configured", note="set SESSION_NEO4J_PASSWORD to enable graph features")
+        logger.info("graph_not_configured", note="set GRAPH_BACKEND=ladybug or SESSION_NEO4J_PASSWORD for graph features")
 
     # Live stream broadcaster (WebSocket pub/sub)
     from src.proxy.live import get_live_stream
