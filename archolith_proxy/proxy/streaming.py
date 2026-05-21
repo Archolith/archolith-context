@@ -6,7 +6,7 @@ post-hoc extraction. Buffer is capped at MAX_BUFFER_SIZE bytes.
 
 When recall tool injection is active, uses a buffer-and-decide approach:
 1. Buffer chunks until we know the model's intent (content vs tool call)
-2. If model calls __context_engine_recall, buffer the full stream,
+2. If model calls __archolith_recall, buffer the full stream,
    execute recall, re-send non-streaming, then stream the second response
 3. Otherwise, flush buffer and switch to passthrough
 """
@@ -403,7 +403,7 @@ class StreamingRecallResult:
     """Result of streaming recall detection.
 
     Attributes:
-        is_recall: True if the model called __context_engine_recall.
+        is_recall: True if the model called __archolith_recall.
         buffered_lines: All SSE lines buffered during the detection phase.
         accumulator: The tool call accumulator (for extracting the full tool call).
         capture: The response capture for extraction.

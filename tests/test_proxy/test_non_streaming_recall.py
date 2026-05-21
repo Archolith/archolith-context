@@ -71,7 +71,7 @@ class TestExecuteRecall:
         tool_call = {
             "id": "call_1",
             "function": {
-                "name": "__context_engine_recall",
+                "name": "__archolith_recall",
                 "arguments": '{"question": "api key location"}',
             },
         }
@@ -86,7 +86,7 @@ class TestExecuteRecall:
         tool_call = {
             "id": "call_1",
             "function": {
-                "name": "__context_engine_recall",
+                "name": "__archolith_recall",
                 "arguments": '{"question": ""}',
             },
         }
@@ -100,7 +100,7 @@ class TestExecuteRecall:
         tool_call = {
             "id": "call_1",
             "function": {
-                "name": "__context_engine_recall",
+                "name": "__archolith_recall",
                 "arguments": "not valid json",
             },
         }
@@ -122,7 +122,7 @@ class TestBuildResendMessages:
             "tool_calls": [{
                 "id": "call_1",
                 "type": "function",
-                "function": {"name": "__context_engine_recall", "arguments": '{"question":"q"}'},
+                "function": {"name": "__archolith_recall", "arguments": '{"question":"q"}'},
             }],
         }
         tool_call = model_msg["tool_calls"][0]
@@ -151,7 +151,7 @@ class TestBuildResendMessages:
                 {
                     "id": "call_2",
                     "type": "function",
-                    "function": {"name": "__context_engine_recall", "arguments": '{"question":"q"}'},
+                    "function": {"name": "__archolith_recall", "arguments": '{"question":"q"}'},
                 },
             ],
         }
@@ -212,7 +212,7 @@ class TestHandleNonStreamingRecall:
                         "id": "call_1",
                         "type": "function",
                         "function": {
-                            "name": "__context_engine_recall",
+                            "name": "__archolith_recall",
                             "arguments": '{"question": "api key"}',
                         },
                     }],
@@ -244,7 +244,7 @@ class TestHandleNonStreamingRecall:
                 http_client=mock_client,
                 url="https://upstream/chat/completions",
                 headers={"Authorization": "Bearer key"},
-                body=json.dumps({"messages": [{"role": "user", "content": "Where is the API key?"}], "tools": [{"type": "function", "function": {"name": "__context_engine_recall"}}]}).encode(),
+                body=json.dumps({"messages": [{"role": "user", "content": "Where is the API key?"}], "tools": [{"type": "function", "function": {"name": "__archolith_recall"}}]}).encode(),
                 session_id="session-1",
                 turn_number=1,
                 original_messages=[{"role": "user", "content": "Where is the API key?"}],
@@ -271,7 +271,7 @@ class TestHandleNonStreamingRecall:
                         "id": "call_1",
                         "type": "function",
                         "function": {
-                            "name": "__context_engine_recall",
+                            "name": "__archolith_recall",
                             "arguments": '{"question": "api key"}',
                         },
                     }],
@@ -291,7 +291,7 @@ class TestHandleNonStreamingRecall:
                         "id": "call_2",
                         "type": "function",
                         "function": {
-                            "name": "__context_engine_recall",
+                            "name": "__archolith_recall",
                             "arguments": '{"question": "config file"}',
                         },
                     }],
@@ -369,7 +369,7 @@ class TestResendWithRecallMetadata:
                         "id": "call_2",
                         "type": "function",
                         "function": {
-                            "name": "__context_engine_recall",
+                            "name": "__archolith_recall",
                             "arguments": '{"question": "deployment config"}',
                         },
                     }],

@@ -1,11 +1,11 @@
-"""Unified recall interception — handles __context_engine_recall tool call interception.
+"""Unified recall interception — handles __archolith_recall tool call interception.
 
 Extracted from openai/chat.py where the logic was duplicated between the
 streaming path and the non-streaming path. Provides a single interface
 that both paths call.
 
 A recall interception workflow:
-1. Detect __context_engine_recall tool call in the response
+1. Detect __archolith_recall tool call in the response
 2. Parse the question from the tool call arguments
 3. Execute the recall query via handle_recall_tool_call
 4. Build a re-send message array (original messages + model response + tool result)
@@ -275,7 +275,7 @@ async def handle_non_streaming_recall(
 ) -> RecallResult:
     """Handle recall interception for a non-streaming response.
 
-    If the response contains a __context_engine_recall call, intercept,
+    If the response contains a __archolith_recall call, intercept,
     execute the recall, and re-send (handling up to 2 recall rounds).
 
     Returns:

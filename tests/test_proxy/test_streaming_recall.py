@@ -41,7 +41,7 @@ class TestStreamingToolCallAccumulator:
             "index": 0,
             "id": "call_abc123",
             "type": "function",
-            "function": {"name": "__context_engine_recall", "arguments": ""},
+            "function": {"name": "__archolith_recall", "arguments": ""},
         }])
         # Argument chunks
         acc.add_delta([{
@@ -58,7 +58,7 @@ class TestStreamingToolCallAccumulator:
         assert len(acc.tool_calls) == 1
         tc = acc.tool_calls[0]
         assert tc["id"] == "call_abc123"
-        assert tc["function"]["name"] == "__context_engine_recall"
+        assert tc["function"]["name"] == "__archolith_recall"
         assert json.loads(tc["function"]["arguments"]) == {"question": "test"}
 
     def test_multiple_tool_calls(self):
@@ -73,7 +73,7 @@ class TestStreamingToolCallAccumulator:
             "index": 1,
             "id": "call_2",
             "type": "function",
-            "function": {"name": "__context_engine_recall", "arguments": ""},
+            "function": {"name": "__archolith_recall", "arguments": ""},
         }])
         acc.add_delta([{
             "index": 1,
@@ -83,7 +83,7 @@ class TestStreamingToolCallAccumulator:
 
         assert acc.first_tool_name == "read_file"  # Index 0 comes first
         assert len(acc.tool_calls) == 2
-        assert acc.tool_calls[1]["function"]["name"] == "__context_engine_recall"
+        assert acc.tool_calls[1]["function"]["name"] == "__archolith_recall"
 
     def test_first_tool_name_none_initially(self):
         acc = StreamingToolCallAccumulator()
@@ -95,9 +95,9 @@ class TestStreamingToolCallAccumulator:
             "index": 0,
             "id": "call_1",
             "type": "function",
-            "function": {"name": "__context_engine_recall", "arguments": ""},
+            "function": {"name": "__archolith_recall", "arguments": ""},
         }])
-        assert acc.first_tool_name == "__context_engine_recall"
+        assert acc.first_tool_name == "__archolith_recall"
 
     def test_empty_delta(self):
         acc = StreamingToolCallAccumulator()
@@ -159,12 +159,12 @@ class TestAssembleStreamingResponse:
     def test_with_tool_calls(self):
         chunks = [
             json.dumps({"model": "test", "id": "chatcmpl-1", "created": 1000, "choices": [{"delta": {"role": "assistant"}, "finish_reason": None}]}),
-            json.dumps({"model": "test", "id": "chatcmpl-1", "created": 1000, "choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "__context_engine_recall", "arguments": ""}}]}, "finish_reason": None}]}),
+            json.dumps({"model": "test", "id": "chatcmpl-1", "created": 1000, "choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "__archolith_recall", "arguments": ""}}]}, "finish_reason": None}]}),
             json.dumps({"model": "test", "id": "chatcmpl-1", "created": 1000, "choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"question":"api"}'}}]}, "finish_reason": None}]}),
             json.dumps({"model": "test", "id": "chatcmpl-1", "created": 1000, "choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
         ]
         acc = StreamingToolCallAccumulator()
-        acc.add_delta([{"index": 0, "id": "call_1", "type": "function", "function": {"name": "__context_engine_recall", "arguments": ""}}])
+        acc.add_delta([{"index": 0, "id": "call_1", "type": "function", "function": {"name": "__archolith_recall", "arguments": ""}}])
         acc.add_delta([{"index": 0, "function": {"arguments": '{"question":"api"}'}}])
         acc.mark_complete()
 
@@ -172,7 +172,7 @@ class TestAssembleStreamingResponse:
         msg = result["choices"][0]["message"]
         assert msg["role"] == "assistant"
         assert len(msg["tool_calls"]) == 1
-        assert msg["tool_calls"][0]["function"]["name"] == "__context_engine_recall"
+        assert msg["tool_calls"][0]["function"]["name"] == "__archolith_recall"
         assert result["choices"][0]["finish_reason"] == "tool_calls"
 
 
@@ -260,7 +260,7 @@ class TestStreamWithRecallDetection:
         recall_result = None
         capture = None
 
-        async for line, result, cap in stream_with_recall_detection(resp, "__context_engine_recall"):
+        async for line, result, cap in stream_with_recall_detection(resp, "__archolith_recall"):
             if result is not None:
                 recall_result = result
             if cap is not None:
@@ -276,10 +276,10 @@ class TestStreamWithRecallDetection:
 
     @pytest.mark.asyncio
     async def test_recall_tool_call_detected(self, mock_streaming_response):
-        """When the model calls __context_engine_recall, should be detected."""
+        """When the model calls __archolith_recall, should be detected."""
         sse_lines = [
             'data: {"id":"c1","model":"test","choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}',
-            'data: {"id":"c1","model":"test","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"__context_engine_recall","arguments":""}}]},"finish_reason":null}]}',
+            'data: {"id":"c1","model":"test","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"__archolith_recall","arguments":""}}]},"finish_reason":null}]}',
             'data: {"id":"c1","model":"test","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"question\\":"}}]},"finish_reason":null}]}',
             'data: {"id":"c1","model":"test","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"api key\\"}"}}]},"finish_reason":null}]}',
             'data: {"id":"c1","model":"test","choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
@@ -288,14 +288,14 @@ class TestStreamWithRecallDetection:
         resp = await mock_streaming_response(sse_lines)
 
         recall_result = None
-        async for line, result, cap in stream_with_recall_detection(resp, "__context_engine_recall"):
+        async for line, result, cap in stream_with_recall_detection(resp, "__archolith_recall"):
             if result is not None and result.is_recall:
                 recall_result = result
                 break
 
         assert recall_result is not None
         assert recall_result.is_recall
-        assert recall_result.accumulator.first_tool_name == "__context_engine_recall"
+        assert recall_result.accumulator.first_tool_name == "__archolith_recall"
         tc = recall_result.accumulator.tool_calls[0]
         assert tc["id"] == "call_1"
         assert json.loads(tc["function"]["arguments"]) == {"question": "api key"}
@@ -314,7 +314,7 @@ class TestStreamWithRecallDetection:
 
         yielded_lines = []
         recall_result = None
-        async for line, result, cap in stream_with_recall_detection(resp, "__context_engine_recall"):
+        async for line, result, cap in stream_with_recall_detection(resp, "__archolith_recall"):
             if result is not None:
                 recall_result = result
             if line:
@@ -330,7 +330,7 @@ class TestStreamWithRecallDetection:
 
         yielded_lines = []
         capture = None
-        async for line, result, cap in stream_with_recall_detection(resp, "__context_engine_recall"):
+        async for line, result, cap in stream_with_recall_detection(resp, "__archolith_recall"):
             if cap is not None:
                 capture = cap
             if line:
@@ -490,7 +490,7 @@ class TestStreamingRecallInterception:
                     "model": "test",
                     "messages": [{"role": "user", "content": "Hello"}],
                     "stream": True,
-                    "tools": [{"type": "function", "function": {"name": "__context_engine_recall", "parameters": {"type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]}}}],
+                    "tools": [{"type": "function", "function": {"name": "__archolith_recall", "parameters": {"type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]}}}],
                 },
             ) as resp:
                 assert resp.status_code == 200
@@ -511,7 +511,7 @@ class TestStreamingRecallInterception:
 
     @pytest.mark.asyncio
     async def test_streaming_recall_interception_full_flow(self):
-        """E2E: model calls __context_engine_recall in stream → proxy intercepts →
+        """E2E: model calls __archolith_recall in stream → proxy intercepts →
         executes recall → re-sends non-streaming → converts response to SSE →
         client receives final content.
 
@@ -532,7 +532,7 @@ class TestStreamingRecallInterception:
 
             app = create_app()
 
-            # First streaming response: model calls __context_engine_recall
+            # First streaming response: model calls __archolith_recall
             recall_sse_lines = self._make_sse_lines({
                 "id": "chatcmpl-1",
                 "model": "test",
@@ -546,7 +546,7 @@ class TestStreamingRecallInterception:
                             "id": "call_recall_1",
                             "type": "function",
                             "function": {
-                                "name": "__context_engine_recall",
+                                "name": "__archolith_recall",
                                 "arguments": '{"question":"api key setup"}',
                             },
                         }],
@@ -596,7 +596,7 @@ class TestStreamingRecallInterception:
                         # Verify recall tool was stripped from tools
                         tools = body.get("tools", [])
                         tool_names = [t.get("function", {}).get("name") for t in tools]
-                        assert "__context_engine_recall" not in tool_names, (
+                        assert "__archolith_recall" not in tool_names, (
                             "Recall tool should be stripped from re-send tools"
                         )
                         # Verify tool result message is appended

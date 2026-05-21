@@ -304,7 +304,7 @@ class TestBuildToolResultMessage:
 
 class TestRecallToolConstants:
     def test_tool_name_prefix(self):
-        assert RECALL_TOOL_NAME.startswith("__context_engine_")
+        assert RECALL_TOOL_NAME.startswith("__archolith_")
 
     def test_tool_definition_has_required_fields(self):
         assert RECALL_TOOL_DEFINITION["type"] == "function"

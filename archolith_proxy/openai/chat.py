@@ -391,7 +391,7 @@ async def _handle_streaming(
        sees tokens as they arrive from upstream. ResponseCapture runs
        in parallel to accumulate chunks for post-hoc extraction.
     2b. If recall tool is injected: buffer-and-decide — detect if the
-       model calls __context_engine_recall in the stream, intercept,
+       model calls __archolith_recall in the stream, intercept,
        execute recall, re-send non-streaming, then convert the second
        response to SSE format and relay to client.
 
