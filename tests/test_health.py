@@ -9,14 +9,14 @@ async def test_health_returns_ok(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"
-    assert "neo4j" in data
+    assert "graph" in data
 
 
 @pytest.mark.asyncio
-async def test_health_neo4j_not_configured(client):
+async def test_health_graph_not_configured(client):
     resp = await client.get("/health")
     data = resp.json()
-    assert data["neo4j"] == "not_configured"
+    assert data["graph"] == "not_configured"
 
 
 @pytest.mark.asyncio

@@ -305,25 +305,28 @@ def create_app() -> FastAPI:
     async def readiness() -> dict:
         """Readiness probe — is the service ready to handle requests?
 
-        Checks upstream connectivity and Neo4j status. Returns 503
-        when upstream is unreachable or Neo4j is disconnected, but
+        Checks graph backend and upstream connectivity. Returns 503
+        when upstream is unreachable or graph is disconnected, but
         the process stays alive (liveness unaffected).
         """
         ready = True
         reasons = []
 
-        # Check Neo4j
-        neo4j_status = "not_configured"
+        # Check graph backend (works for both Neo4j and LadybugDB)
+        graph_status = "not_configured"
         if is_graph_ready():
-            from src.graph.driver import get_driver
             try:
-                driver = await get_driver()
-                await driver.verify_connectivity()
-                neo4j_status = "connected"
+                backend = get_backend()
+                connected = await backend.verify_connectivity()
+                graph_status = "connected" if connected else "disconnected"
+                if not connected:
+                    ready = False
+                    reasons.append("graph_disconnected")
+                    record_metric("neo4j_errors")
             except Exception:
-                neo4j_status = "disconnected"
+                graph_status = "disconnected"
                 ready = False
-                reasons.append("neo4j_disconnected")
+                reasons.append("graph_disconnected")
                 record_metric("neo4j_errors")
 
         # Check upstream (lightweight, with timeout)
@@ -348,7 +351,7 @@ def create_app() -> FastAPI:
 
         result = {
             "status": "ready" if ready else "not_ready",
-            "neo4j": neo4j_status,
+            "graph": graph_status,
             "upstream": upstream_status,
             "version": "0.1.0",
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
@@ -363,15 +366,14 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> dict:
         """Legacy health endpoint (compatibility). Delegates to readiness."""
-        neo4j_status = "not_configured"
+        graph_status = "not_configured"
         if is_graph_ready():
-            from src.graph.driver import get_driver
             try:
-                driver = await get_driver()
-                await driver.verify_connectivity()
-                neo4j_status = "connected"
+                backend = get_backend()
+                connected = await backend.verify_connectivity()
+                graph_status = "connected" if connected else "disconnected"
             except Exception:
-                neo4j_status = "disconnected"
+                graph_status = "disconnected"
                 record_metric("neo4j_errors")
 
         upstream_status = "unknown"
@@ -388,7 +390,7 @@ def create_app() -> FastAPI:
 
         return {
             "status": "ok",
-            "neo4j": neo4j_status,
+            "graph": graph_status,
             "upstream": upstream_status,
             "version": "0.1.0",
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
