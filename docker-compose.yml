@@ -1,7 +1,7 @@
 version: "3.8"
 
 services:
-  context-engine:
+  archolith-proxy:
     build: .
     ports:
       - "9800:9800"

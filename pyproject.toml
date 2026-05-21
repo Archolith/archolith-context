@@ -1,8 +1,26 @@
 [project]
-name = "cth-context-engine"
+name = "archolith-proxy"
 version = "0.1.0"
-description = "OpenAI-compatible proxy that replaces linear conversation replay with graph-assembled context for AI coding agents"
+description = "Self-hosted context intelligence proxy for LLMs — extracts knowledge, compresses context, remembers everything"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [
+    {name = "Charles Harvey"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://archolith.dev"
+Repository = "https://github.com/archolith/archolith-proxy"
+Documentation = "https://github.com/archolith/archolith-proxy#readme"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
