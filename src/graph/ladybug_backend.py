@@ -1,19 +1,20 @@
 """LadybugDB graph backend — embedded columnar graph database (formerly Kuzu).
 
 Implements the GraphBackend protocol using ladybug.Database + ladybug.AsyncConnection.
-Uses explicit schema mode with STRING-typed timestamp columns to avoid LadybugDB's
-Cypher TIMESTAMP cast limitations.
+Uses explicit schema mode with native TIMESTAMP columns and current_timestamp() for
+temporal operations. Interval arithmetic (current_timestamp() - s.last_active > to_hours(N))
+powers TTL expiry without Python-side date math.
 
-Cypher dialect differences handled:
-- MERGE ON CREATE/MATCH SET with PK columns → read-then-write fallback
-- TIMESTAMP → stored as ISO-8601 STRING (converted at application level)
-- $name params → validated to work in MATCH/MERGE WHERE and property maps
+Cypher dialect notes:
+- MERGE ON CREATE/ON MATCH SET → supported natively
+- TIMESTAMP → native type, UTC-aware, ISO-8601 constructor
+- current_timestamp() → server-side UTC timestamp
+- to_hours($n) → creates INTERVAL from integer for temporal arithmetic
 - DETACH DELETE and UNWIND → supported natively
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import uuid4
 
 import structlog
@@ -34,8 +35,8 @@ CREATE NODE TABLE Session(
     session_id STRING PRIMARY KEY,
     fingerprint STRING,
     goal STRING,
-    created_at STRING,
-    last_active STRING,
+    created_at TIMESTAMP,
+    last_active TIMESTAMP,
     ttl_hours INT64,
     status STRING,
     turn_number INT64
@@ -46,9 +47,9 @@ CREATE NODE TABLE Fact(
     session_id STRING,
     content STRING,
     fact_type STRING,
-    valid_from STRING,
-    valid_until STRING,
-    invalidated_at STRING,
+    valid_from TIMESTAMP,
+    valid_until TIMESTAMP,
+    invalidated_at TIMESTAMP,
     confidence DOUBLE,
     source_turn INT64,
     embedding DOUBLE[]
@@ -83,8 +84,8 @@ class LadybugBackend:
     """LadybugDB (embedded columnar graph) implementation of GraphBackend.
 
     Uses an in-process, file-backed database. No external server needed.
-    Timestamps stored as ISO-8601 STRING (LadybugDB TIMESTAMP casting
-    requires special handling we avoid at this layer).
+    Temporal columns use native TIMESTAMP type with current_timestamp() for
+    writes and interval arithmetic for TTL expiry.
 
     Args:
         db_path: Path to the LadybugDB database file (e.g. './data/context.lbug').
@@ -161,10 +162,6 @@ class LadybugBackend:
     def is_ready(self) -> bool:
         return self._ready and self._db is not None
 
-    @staticmethod
-    def _now() -> str:
-        return datetime.now(timezone.utc).isoformat()
-
     def _check_ready(self) -> None:
         if not self._ready or not self._aconn:
             raise RuntimeError("LadybugDB backend not connected")
@@ -184,6 +181,7 @@ class LadybugBackend:
             for idx, name in enumerate(col_names):
                 if idx < len(row):
                     val = row[idx]
+                    # Convert native datetime/timedelta to ISO string for JSON compat
                     if hasattr(val, "isoformat"):
                         val = val.isoformat()
                     d[name] = val
@@ -206,11 +204,12 @@ class LadybugBackend:
             """
             CREATE (s:Session {
                 session_id: $session_id, fingerprint: $fingerprint,
-                goal: NULL, created_at: $now, last_active: $now,
+                goal: NULL, created_at: current_timestamp(),
+                last_active: current_timestamp(),
                 ttl_hours: 24, status: 'active', turn_number: 0
             }) RETURN s
             """,
-            {"session_id": session_id, "fingerprint": fingerprint, "now": self._now()},
+            {"session_id": session_id, "fingerprint": fingerprint},
         )
         return rows[0] if rows else {}
 
@@ -232,9 +231,9 @@ class LadybugBackend:
         await self._execute(
             """
             MATCH (s:Session {session_id: $session_id})
-            SET s.last_active = $now, s.turn_number = s.turn_number + 1
+            SET s.last_active = current_timestamp(), s.turn_number = s.turn_number + 1
             """,
-            {"session_id": session_id, "now": self._now()},
+            {"session_id": session_id},
         )
 
     async def get_turn_number(self, session_id: str) -> int:
@@ -289,7 +288,7 @@ class LadybugBackend:
             CREATE (f:Fact {
                 fact_id: $fact_id, session_id: $session_id,
                 content: $content, fact_type: $fact_type,
-                valid_from: $now, valid_until: NULL,
+                valid_from: current_timestamp(), valid_until: NULL,
                 invalidated_at: NULL, confidence: $confidence,
                 source_turn: $source_turn, embedding: $embedding
             })
@@ -297,8 +296,7 @@ class LadybugBackend:
             {
                 "fact_id": fact_id, "session_id": session_id,
                 "content": content, "fact_type": fact_type,
-                "now": self._now(), "confidence": confidence,
-                "source_turn": source_turn,
+                "confidence": confidence, "source_turn": source_turn,
                 "embedding": embedding if embedding is not None else [],
             },
         )
@@ -307,7 +305,6 @@ class LadybugBackend:
     async def store_facts_batch(self, session_id: str, facts: list[dict], source_turn: int) -> list[str]:
         if not facts:
             return []
-        now = self._now()
         fact_ids = []
         params_list = []
         for fact in facts:
@@ -319,7 +316,7 @@ class LadybugBackend:
                 "fact_type": fact.get("fact_type", "observation"),
                 "confidence": fact.get("confidence", 0.5),
                 "embedding": fact.get("embedding") or [],
-                "now": now, "source_turn": source_turn,
+                "source_turn": source_turn,
             })
         await self._execute(
             """
@@ -327,7 +324,7 @@ class LadybugBackend:
             CREATE (f:Fact {
                 fact_id: p.fact_id, session_id: p.session_id,
                 content: p.content, fact_type: p.fact_type,
-                valid_from: p.now, valid_until: NULL,
+                valid_from: current_timestamp(), valid_until: NULL,
                 invalidated_at: NULL, confidence: p.confidence,
                 source_turn: p.source_turn, embedding: p.embedding
             })
@@ -342,10 +339,10 @@ class LadybugBackend:
         rows = await self._execute(
             """
             MATCH (f:Fact) WHERE f.fact_id IN $fact_ids AND f.valid_until IS NULL
-            SET f.valid_until = $now, f.invalidated_at = $now
+            SET f.valid_until = current_timestamp(), f.invalidated_at = current_timestamp()
             RETURN count(f) AS invalidated
             """,
-            {"fact_ids": fact_ids, "now": self._now()},
+            {"fact_ids": fact_ids},
         )
         return rows[0]["invalidated"] if rows else 0
 
@@ -468,6 +465,9 @@ class LadybugBackend:
         )
 
     async def create_touches(self, session_id: str, file_path: str, status: str, turn: int) -> None:
+        # Read-then-write: File PK is synthetic (file_id), lookup is by natural key
+        # (path+session_id). MERGE ON CREATE SET could provide file_id, but untested
+        # with LadybugDB's explicit-schema PK requirements — kept as read-then-write.
         existing = await self._execute(
             "MATCH (f:File {path: $path, session_id: $session_id}) RETURN f.file_id",
             {"path": file_path, "session_id": session_id},
@@ -565,21 +565,19 @@ class LadybugBackend:
     async def expire_sessions(self) -> int:
         """Mark active sessions past their TTL as expired.
 
-        LadybugDB stores timestamps as ISO-8601 strings, so we compute the
-        cutoff in Python and use string comparison (ISO-8601 sorts correctly).
+        Uses native TIMESTAMP arithmetic: current_timestamp() - s.last_active
+        produces an INTERVAL, compared against to_hours(ttl_hours).
         """
         from src.config import get_settings
         settings = get_settings()
-        from datetime import timedelta
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=settings.session_ttl_hours)).isoformat()
         rows = await self._execute(
             """
             MATCH (s:Session {status: 'active'})
-            WHERE s.last_active < $cutoff
+            WHERE current_timestamp() - s.last_active > to_hours($ttl_hours)
             SET s.status = 'expired'
             RETURN count(s) AS expired
             """,
-            {"cutoff": cutoff},
+            {"ttl_hours": settings.session_ttl_hours},
         )
         count = rows[0]["expired"] if rows else 0
         if count:
