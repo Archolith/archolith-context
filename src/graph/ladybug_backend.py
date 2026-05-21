@@ -117,6 +117,8 @@ class LadybugBackend:
             self._db, max_concurrent_queries=self._max_concurrent
         )
         self._ready = True
+        # Create tables on first connect (matches Neo4j connect() calling ensure_indexes())
+        await self.ensure_schema()
         logger.info("ladybug_connected", path=self._db_path, max_concurrent=self._max_concurrent)
 
     async def close(self) -> None:
@@ -589,6 +591,7 @@ class LadybugBackend:
             """
             MATCH (s:Session {status: 'expired'})
             WITH s MATCH (s)-[r*0..]-(n)
+            WHERE n.session_id = s.session_id
             DETACH DELETE n
             RETURN count(DISTINCT s) AS deleted
             """
