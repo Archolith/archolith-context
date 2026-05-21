@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.config import get_settings
 from src.graph.driver import close_driver, init_driver, ensure_indexes
+from src.metrics import get_metrics, record_metric, record_start_time
 from src.logging_config import configure_logging
 from src.openai.router import router as openai_router
 from src.trace.router import router as trace_router
@@ -25,23 +26,7 @@ configure_logging()
 
 logger = structlog.get_logger()
 
-# --- In-memory metrics (process-level, reset on restart) ---
-_metrics: dict = {
-    "start_time": 0.0,
-    "total_requests": 0,
-    "assembly_modes": {"cold_start": 0, "graph": 0, "fallback": 0, "passthrough": 0, "skipped_low_tokens": 0, "skipped_low_savings": 0},
-    "extraction_successes": 0,
-    "extraction_failures": 0,
-    "upstream_errors": 0,
-    "neo4j_errors": 0,
-    "token_savings_estimated": 0,
-    "total_input_tokens_seen": 0,
-    "compaction_applied": 0,
-    "promotions_attempted": 0,
-    "promotions_succeeded": 0,
-    "promotions_failed": 0,
-    "promotions_skipped": 0,
-}
+
 
 
 def _load_memory_engines(settings, registry) -> None:
@@ -114,7 +99,7 @@ async def _init_neo4j_with_retry(settings, max_retries: int = 3, backoff_base: f
 async def lifespan(app: FastAPI):
     """Initialize resources on startup, cleanup on shutdown."""
     settings = get_settings()
-    _metrics["start_time"] = time.time()
+    record_start_time()
 
     # Fail-fast: warn about missing required keys
     proxy_missing = settings.check_required_for_proxy()
@@ -219,7 +204,7 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def request_logging_middleware(request: Request, call_next):
         start = time.monotonic()
-        _metrics["total_requests"] += 1
+        record_metric("total_requests")
 
         # Bind request-level context that the handler may enrich
         structlog.contextvars.clear_contextvars()
@@ -268,7 +253,7 @@ def create_app() -> FastAPI:
                 neo4j_status = "connected"
             except Exception:
                 neo4j_status = "disconnected"
-                _metrics["neo4j_errors"] += 1
+                record_metric("neo4j_errors")
 
         # Check upstream (lightweight, with timeout)
         upstream_status = "unknown"
@@ -288,7 +273,7 @@ def create_app() -> FastAPI:
             "neo4j": neo4j_status,
             "upstream": upstream_status,
             "version": "0.1.0",
-            "uptime_s": round(time.time() - _metrics["start_time"], 0) if _metrics["start_time"] else 0,
+            "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
         }
 
     # --- Metrics endpoint ---
@@ -304,17 +289,17 @@ def create_app() -> FastAPI:
                 pass
 
         # Derived rates
-        total_extractions = _metrics["extraction_successes"] + _metrics["extraction_failures"]
+        total_extractions = get_metrics()["extraction_successes"] + get_metrics()["extraction_failures"]
         extraction_success_rate = (
-            round(_metrics["extraction_successes"] / total_extractions, 4)
+            round(get_metrics()["extraction_successes"] / total_extractions, 4)
             if total_extractions > 0 else 0.0
         )
         avg_token_savings = (
-            round(_metrics["token_savings_estimated"] / _metrics["total_requests"])
-            if _metrics["total_requests"] > 0 else 0
+            round(get_metrics()["token_savings_estimated"] / get_metrics()["total_requests"])
+            if get_metrics()["total_requests"] > 0 else 0
         )
-        total_input = _metrics["total_input_tokens_seen"]
-        total_savings = _metrics["token_savings_estimated"]
+        total_input = get_metrics()["total_input_tokens_seen"]
+        total_savings = get_metrics()["token_savings_estimated"]
         token_savings_rate = (
             round(total_savings / total_input, 4)
             if total_input > 0 else 0.0
@@ -324,22 +309,22 @@ def create_app() -> FastAPI:
             "proxy": "cth.context-engine",
             "version": "0.1.0",
             "neo4j_ready": getattr(app.state, "neo4j_ready", False),
-            "total_requests": _metrics["total_requests"],
-            "assembly_modes": dict(_metrics["assembly_modes"]),
-            "extraction_successes": _metrics["extraction_successes"],
-            "extraction_failures": _metrics["extraction_failures"],
+            "total_requests": get_metrics()["total_requests"],
+            "assembly_modes": dict(get_metrics()["assembly_modes"]),
+            "extraction_successes": get_metrics()["extraction_successes"],
+            "extraction_failures": get_metrics()["extraction_failures"],
             "extraction_success_rate": extraction_success_rate,
-            "upstream_errors": _metrics["upstream_errors"],
-            "neo4j_errors": _metrics["neo4j_errors"],
+            "upstream_errors": get_metrics()["upstream_errors"],
+            "neo4j_errors": get_metrics()["neo4j_errors"],
             "active_sessions": active_sessions,
-            "token_savings_estimated": _metrics["token_savings_estimated"],
+            "token_savings_estimated": get_metrics()["token_savings_estimated"],
             "avg_token_savings_per_request": avg_token_savings,
             "token_savings_rate": token_savings_rate,
-            "total_input_tokens_seen": _metrics["total_input_tokens_seen"],
-            "compaction_applied": _metrics["compaction_applied"],
+            "total_input_tokens_seen": get_metrics()["total_input_tokens_seen"],
+            "compaction_applied": get_metrics()["compaction_applied"],
             "trace_records": getattr(app.state, "trace_store", get_trace_store()).total_traces,
             "trace_sessions": getattr(app.state, "trace_store", get_trace_store()).session_count,
-            "uptime_s": round(time.time() - _metrics["start_time"], 0) if _metrics["start_time"] else 0,
+            "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
         }
 
     # --- Sessions admin endpoints ---

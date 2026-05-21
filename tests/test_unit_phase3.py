@@ -14,7 +14,7 @@ from src.assembler.context import (
     _score_fact,
     _expand_with_context_window,
 )
-from src.openai.chat import _rewrite_messages
+from src.proxy.rewrite import rewrite_messages as _rewrite_messages
 from src.models.dtos import AssembledContext
 
 

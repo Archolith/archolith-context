@@ -18,7 +18,8 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from src.main import create_app, _metrics
+from src.main import create_app
+from src.metrics import get_metrics
 
 
 # --- Shared mock infrastructure ---
@@ -484,8 +485,9 @@ class TestMetricsDerivedRates:
     @pytest.mark.asyncio
     async def test_metrics_rate_calculation(self):
         """Derived rates should be correctly computed from raw counters."""
-        from src.main import _metrics
+        from src.metrics import get_metrics
 
+        _metrics = get_metrics()
         # Simulate some activity
         old_successes = _metrics["extraction_successes"]
         old_failures = _metrics["extraction_failures"]

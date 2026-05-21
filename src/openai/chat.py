@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 
 import httpx
@@ -21,15 +20,18 @@ from src.graph import decisions as decisions_repo
 from src.graph import edges as edges_repo
 from src.graph import facts as facts_repo
 from src.graph import session as session_repo
+from src.metrics import get_metrics, record_assembly_mode, record_metric
 from src.models.graph_nodes import FactType, FileStatus
 from src.openai.errors import make_error_response
 from src.openai.schemas import ChatCompletionRequest
+from src.proxy.rewrite import estimate_input_tokens, rewrite_messages, strip_reasoning
 from src.proxy.session import resolve_session
 from src.proxy.live import (
     broadcast_request, broadcast_assembly, broadcast_response,
     broadcast_extraction, broadcast_session_event, broadcast_recall,
 )
 from src.proxy.streaming import ResponseCapture, stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _non_streaming_to_sse
+from src.proxy.upstream import RETRYABLE_STATUS_CODES, upstream_request_with_retry
 from src.trace.builder import TraceBuilder
 from src.trace.store import get_trace_store
 
@@ -37,181 +39,12 @@ logger = structlog.get_logger()
 
 router = APIRouter()
 
-# Transient status codes eligible for retry
-_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-
-# Pattern for stripping model reasoning/thinking blocks before extraction
-_REASONING_PATTERN = re.compile(
-    r'<(?:thinking|reasoning|inner_monologue)>.*?</(?:thinking|reasoning|inner_monologue)>',
-    re.DOTALL,
-)
-
-
-def _strip_reasoning(text: str) -> str:
-    """Strip model reasoning blocks before extraction.
-
-    Models that emit <thinking>/<reasoning> blocks include internal scaffolding
-    (tentative reasoning, abandoned approaches, self-corrections) that isn't useful
-    as facts. Stripping prevents noise in the extraction pipeline.
-    """
-    return _REASONING_PATTERN.sub('', text).strip()
-
-
-def _estimate_input_tokens(messages: list[dict]) -> int:
-    """Estimate total input tokens using tiktoken cl100k_base with 10% margin + 500 floor."""
-    import tiktoken
-    enc = tiktoken.get_encoding("cl100k_base")
-    total_tokens = 0
-    for msg in messages:
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            # Multi-part content
-            for part in content:
-                if isinstance(part, dict):
-                    total_tokens += len(enc.encode(part.get("text", "")))
-        elif isinstance(content, str):
-            total_tokens += len(enc.encode(content))
-    with_margin = int(total_tokens * 1.10)
-    return max(with_margin, 500)
-
-
-def _rewrite_messages(
-    original_messages: list[dict],
-    assembled_context: "AssembledContext",
-    coherence_tail_size: int,
-    max_tail_messages: int = 20,
-) -> list[dict]:
-    """Rewrite the messages array: merge graph context into system prompt + coherence tail.
-
-    Strategy:
-    1. Merge graph-assembled context INTO the original system message
-       (NVIDIA API rejects multiple consecutive system messages)
-    2. Keep the last N messages as the "coherence tail" (recent context the model needs)
-    3. Discard the middle messages (replaced by graph context)
-
-    This reduces a 100K+ token linear history to ~15-20K of curated context.
-    """
-    if not assembled_context or not assembled_context.graph_context:
-        return original_messages
-
-    result = []
-
-    # 1. Merge graph context into the original system message
-    system_msg = None
-    rest = []
-    for msg in original_messages:
-        if msg.get("role") == "system" and system_msg is None:
-            system_msg = msg.copy()
-        else:
-            rest.append(msg)
-
-    # Build the combined system message: original + graph context
-    graph_content = "\n\n".join(
-        m.get("content", "") for m in assembled_context.graph_context
-    )
-    if system_msg:
-        system_msg["content"] = system_msg.get("content", "") + "\n\n" + graph_content
-        result.append(system_msg)
-    else:
-        # No original system message — graph context becomes the system message
-        result.append({"role": "system", "content": graph_content})
-
-    # 2. Keep the coherence tail — use smart_tail to preserve tool-call integrity
-    from src.assembler.tail import smart_tail
-    tail = smart_tail(rest, base_size=coherence_tail_size, max_size=max_tail_messages)
-
-    # 3. Ensure role alternation: after system messages, the first non-system
-    # message must be 'user'. Strip any leading assistant/tool messages.
-    while tail and tail[0].get("role") not in ("user",):
-        tail = tail[1:]
-
-    # 4. Validate alternation: merge any consecutive duplicate roles
-    validated_tail = []
-    for msg in tail:
-        if validated_tail:
-            prev_role = validated_tail[-1].get("role")
-            curr_role = msg.get("role")
-            if prev_role == "user" and curr_role == "user":
-                prev_content = validated_tail[-1].get("content", "")
-                curr_content = msg.get("content", "")
-                if isinstance(prev_content, str) and isinstance(curr_content, str):
-                    validated_tail[-1]["content"] = prev_content + "\n\n" + curr_content
-                    continue
-            if prev_role == "assistant" and curr_role == "assistant":
-                prev_content = validated_tail[-1].get("content", "")
-                curr_content = msg.get("content", "")
-                if isinstance(prev_content, str) and isinstance(curr_content, str):
-                    validated_tail[-1]["content"] = prev_content + "\n\n" + curr_content
-                    continue
-        validated_tail.append(msg)
-
-    result.extend(validated_tail)
-
-    return result
-
-
-def _record_assembly_mode(mode: str) -> None:
-    """Record assembly mode in process-level metrics."""
-    from src.main import _metrics
-    if mode in _metrics["assembly_modes"]:
-        _metrics["assembly_modes"][mode] += 1
-
-
-async def _upstream_request_with_retry(
-    client: httpx.AsyncClient,
-    method: str,
-    url: str,
-    headers: dict,
-    content: bytes,
-    max_retries: int = 3,
-    backoff_base: float = 0.5,
-) -> httpx.Response:
-    """Send request to upstream with exponential backoff on transient errors."""
-    from src.main import _metrics
-    last_exc = None
-    for attempt in range(max_retries):
-        try:
-            resp = await client.post(url, headers=headers, content=content)
-            if resp.status_code not in _RETRYABLE_STATUS_CODES:
-                return resp
-            # Retryable status code
-            if attempt < max_retries - 1:
-                delay = backoff_base * (2 ** attempt)
-                logger.warning(
-                    "upstream_retryable_error",
-                    status=resp.status_code,
-                    attempt=attempt + 1,
-                    max_retries=max_retries,
-                    delay_s=delay,
-                )
-                await asyncio.sleep(delay)
-            else:
-                return resp  # Last attempt, return whatever we got
-        except (httpx.TimeoutException, httpx.ConnectError) as e:
-            last_exc = e
-            if attempt < max_retries - 1:
-                delay = backoff_base * (2 ** attempt)
-                logger.warning(
-                    "upstream_connection_retry",
-                    attempt=attempt + 1,
-                    max_retries=max_retries,
-                    delay_s=delay,
-                    error=str(e),
-                )
-                await asyncio.sleep(delay)
-            else:
-                _metrics["upstream_errors"] += 1
-                raise
-    # Should not reach here, but just in case
-    _metrics["upstream_errors"] += 1
-    raise last_exc or httpx.ConnectError("All retry attempts exhausted")
 
 
 @router.post("/chat/completions")
 async def chat_completions(request: Request, background_tasks: BackgroundTasks) -> Response:
     """Accept OpenAI chat completion requests, forward to upstream,
     resolve session, assemble context, and trigger async fact extraction."""
-    from src.main import _metrics
     settings = get_settings()
 
     # Start trace builder for observability
@@ -280,7 +113,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             )
         except Exception as e:
             logger.warning("session_resolution_failed", error=str(e))
-            _metrics["neo4j_errors"] += 1
+            record_metric("neo4j_errors", 1)
 
     # Fetch current session goal for extraction context
     session_goal = None
@@ -298,8 +131,8 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     rewritten_tokens = 0
     savings = 0
     savings_ratio = 0.0
-    input_tokens = _estimate_input_tokens(body.get("messages", []))
-    _metrics["total_input_tokens_seen"] += input_tokens
+    input_tokens = estimate_input_tokens(body.get("messages", []))
+    record_metric("total_input_tokens_seen", input_tokens)
 
     # Trace: record request arrival
     trace_builder.set_request(
@@ -351,7 +184,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             if assembled:
                 original_count = len(body.get("messages", []))
                 original_messages = body["messages"][:]  # Save for compaction re-rewrite
-                body["messages"] = _rewrite_messages(
+                body["messages"] = rewrite_messages(
                     body.get("messages", []),
                     assembled,
                     settings.coherence_tail_size,
@@ -364,9 +197,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 trace_builder.set_rewritten_messages(body.get("messages", []))
 
                 # Estimate token savings
-                rewritten_tokens = _estimate_input_tokens(body["messages"])
+                rewritten_tokens = estimate_input_tokens(body["messages"])
                 savings = max(0, input_tokens - rewritten_tokens)
-                _metrics["token_savings_estimated"] += savings
+                record_metric("token_savings_estimated", savings)
 
                 # Savings-ratio gate: revert to passthrough if rewriting
                 # doesn't save meaningful tokens. Short/moderate conversations
@@ -421,13 +254,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                                 # Replace graph context with compacted version
                                 assembled.system_message["content"] = compacted
                                 # Re-rewrite with compacted context
-                                body["messages"] = _rewrite_messages(
+                                body["messages"] = rewrite_messages(
                                     original_messages,
                                     assembled,
                                     settings.coherence_tail_size,
                                     max_tail_messages=settings.max_tail_messages,
                                 )
-                                rewritten_tokens = _estimate_input_tokens(body["messages"])
+                                rewritten_tokens = estimate_input_tokens(body["messages"])
                                 savings = max(0, input_tokens - rewritten_tokens)
                                 logger.info(
                                     "context_compaction_applied",
@@ -436,7 +269,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                                     rewritten_tokens=rewritten_tokens,
                                     budget=settings.context_token_budget,
                                 )
-                                _metrics["compaction_applied"] += 1
+                                record_metric("compaction_applied", 1)
                         except Exception as e:
                             logger.warning(
                                 "context_compaction_failed",
@@ -474,7 +307,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             logger.warning("context_assembly_failed", session_id=session_id, error=str(e), exc_info=True)
             assembly_mode = "fallback"
             trace_builder.set_fallback_reason(str(e)[:200])
-            _metrics["neo4j_errors"] += 1
+            record_metric("neo4j_errors", 1)
             # Fall through to passthrough — assembly failure must not block requests
 
     # Trace: record assembly result
@@ -490,7 +323,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         savings_ratio=savings_ratio,
     )
 
-    _record_assembly_mode(assembly_mode)
+    record_assembly_mode(assembly_mode)
 
     # Live stream: broadcast assembly result
     await broadcast_assembly(
@@ -570,7 +403,6 @@ async def _handle_streaming(
     retry is impossible — the client has already consumed partial output.
     Mid-stream errors result in a broken stream.
     """
-    from src.main import _metrics
     settings = get_settings()
     capture_holder = {"capture": None}
 
@@ -601,7 +433,7 @@ async def _handle_streaming(
                 resp = await stream_ctx.__aenter__()
 
                 # Check status before committing to stream
-                if resp.status_code in _RETRYABLE_STATUS_CODES:
+                if resp.status_code in RETRYABLE_STATUS_CODES:
                     # Read the small error body so we can close cleanly
                     await resp.aread()
                     # Close this attempt — context will be re-opened on next iteration
@@ -624,7 +456,7 @@ async def _handle_streaming(
                         continue
                     else:
                         # Final attempt failed — yield error SSE event to client
-                        _metrics["upstream_errors"] += 1
+                        record_metric("upstream_errors", 1)
                         error = json.dumps(
                             {"error": {"message": f"Upstream returned {resp.status_code} after {max_retries} retries", "type": "upstream_error"}}
                         )
@@ -633,7 +465,7 @@ async def _handle_streaming(
 
                 # Non-retryable error (e.g. 400, 401) — relay and stop
                 if resp.status_code >= 400:
-                    _metrics["upstream_errors"] += 1
+                    record_metric("upstream_errors", 1)
                     error_body = await resp.aread()
                     try:
                         await stream_ctx.__aexit__(None, None, None)
@@ -672,14 +504,14 @@ async def _handle_streaming(
                     await asyncio.sleep(delay)
                     continue
                 else:
-                    _metrics["upstream_errors"] += 1
+                    record_metric("upstream_errors", 1)
                     error = json.dumps(
                         {"error": {"message": f"Upstream connection failed after {max_retries} retries: {e}", "type": "upstream_error"}}
                     )
                     yield f"data: {error}\n\n"
                     return
         else:
-            _metrics["upstream_errors"] += 1
+            record_metric("upstream_errors", 1)
             error = json.dumps(
                 {"error": {"message": "All streaming connection attempts exhausted", "type": "upstream_error"}}
             )
@@ -720,7 +552,7 @@ async def _handle_streaming(
                         "streaming_recall_tool_call_intercepted",
                         session_id=session_id, turn=turn_number,
                     )
-                    _metrics["recall_tool_calls"] = _metrics.get("recall_tool_calls", 0) + 1
+                    get_metrics()["recall_tool_calls"] = get_metrics().get("recall_tool_calls", 0) + 1
 
                     # Extract the complete tool call from the accumulator
                     tool_calls = recall_result_obj.accumulator.tool_calls
@@ -805,15 +637,14 @@ async def _handle_streaming(
                             }).encode("utf-8")
 
                             try:
-                                second_resp = await _upstream_request_with_retry(
+                                second_resp = await upstream_request_with_retry(
                                     client=request.app.state.http_client,
-                                    method="POST",
                                     url=url,
                                     headers=headers,
                                     content=resend_body,
                                 )
                             except (httpx.TimeoutException, httpx.ConnectError) as e:
-                                _metrics["upstream_errors"] += 1
+                                record_metric("upstream_errors", 1)
                                 error = json.dumps(
                                     {"error": {"message": f"Upstream error during streaming recall re-send: {e}", "type": "upstream_error"}}
                                 )
@@ -821,7 +652,7 @@ async def _handle_streaming(
                                 return
 
                             if second_resp.status_code >= 400:
-                                _metrics["upstream_errors"] += 1
+                                record_metric("upstream_errors", 1)
                                 error_body = second_resp.text
                                 yield f"data: {error_body}\n\n"
                                 return
@@ -833,7 +664,7 @@ async def _handle_streaming(
                             if second_recall_tc:
                                 # Handle one more recall (max 2 per turn to prevent loops)
                                 logger.info("streaming_recall_second_call", session_id=session_id, turn=turn_number)
-                                _metrics["recall_tool_calls"] = _metrics.get("recall_tool_calls", 0) + 1
+                                get_metrics()["recall_tool_calls"] = get_metrics().get("recall_tool_calls", 0) + 1
 
                                 second_func = second_recall_tc.get("function", {})
                                 try:
@@ -883,19 +714,18 @@ async def _handle_streaming(
                                     }).encode("utf-8")
 
                                     try:
-                                        third_resp = await _upstream_request_with_retry(
+                                        third_resp = await upstream_request_with_retry(
                                             client=request.app.state.http_client,
-                                            method="POST",
-                                            url=url,
+                                                    url=url,
                                             headers=headers,
                                             content=third_body,
                                         )
                                         if third_resp.status_code < 400:
                                             second_data = third_resp.json()
                                         else:
-                                            _metrics["upstream_errors"] += 1
+                                            record_metric("upstream_errors", 1)
                                     except (httpx.TimeoutException, httpx.ConnectError):
-                                        _metrics["upstream_errors"] += 1
+                                        record_metric("upstream_errors", 1)
 
                             # Strip recall tool from the final response
                             strip_recall_from_response(second_data)
@@ -921,7 +751,7 @@ async def _handle_streaming(
                         yield line + "\n\n"
 
         except Exception as e:
-            _metrics["upstream_errors"] += 1
+            record_metric("upstream_errors", 1)
             logger.error("streaming_error", error=str(e), exc_info=True)
             error = json.dumps(
                 {"error": {"message": f"Internal proxy error: {e}", "type": "server_error"}}
@@ -1014,13 +844,11 @@ async def _handle_non_streaming(
     trace_builder: TraceBuilder | None = None,
 ) -> Response:
     """Handle non-streaming request with retry, recall interception, and extraction."""
-    from src.main import _metrics
     settings = get_settings()
 
     try:
-        resp = await _upstream_request_with_retry(
+        resp = await upstream_request_with_retry(
             client=request.app.state.http_client,
-            method="POST",
             url=url,
             headers=headers,
             content=body,
@@ -1028,10 +856,10 @@ async def _handle_non_streaming(
             backoff_base=settings.upstream_retry_backoff_base_s,
         )
     except httpx.TimeoutException:
-        _metrics["upstream_errors"] += 1
+        record_metric("upstream_errors", 1)
         return make_error_response(504, "Upstream request timed out", "upstream_timeout", code="timeout")
     except httpx.ConnectError as e:
-        _metrics["upstream_errors"] += 1
+        record_metric("upstream_errors", 1)
         return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
 
     # Trace: record upstream response (non-streaming)
@@ -1064,7 +892,7 @@ async def _handle_non_streaming(
                     session_id=session_id,
                     turn=turn_number,
                 )
-                _metrics["recall_tool_calls"] = _metrics.get("recall_tool_calls", 0) + 1
+                get_metrics()["recall_tool_calls"] = get_metrics().get("recall_tool_calls", 0) + 1
 
                 # Parse the question from the tool call
                 func = tool_call.get("function", {})
@@ -1130,9 +958,8 @@ async def _handle_non_streaming(
                     }).encode("utf-8")
 
                     try:
-                        second_resp = await _upstream_request_with_retry(
+                        second_resp = await upstream_request_with_retry(
                             client=request.app.state.http_client,
-                            method="POST",
                             url=url,
                             headers=headers,
                             content=resend_body,
@@ -1170,10 +997,10 @@ async def _handle_non_streaming(
                             background=background_tasks,
                         )
                     except httpx.TimeoutException:
-                        _metrics["upstream_errors"] += 1
+                        record_metric("upstream_errors", 1)
                         return make_error_response(504, "Upstream request timed out during recall re-send", "upstream_timeout", code="timeout")
                     except httpx.ConnectError as e:
-                        _metrics["upstream_errors"] += 1
+                        record_metric("upstream_errors", 1)
                         return make_error_response(502, f"Upstream connection failed during recall re-send: {e}", "upstream_error")
                 else:
                     # Model called recall with empty question — return original response
@@ -1263,7 +1090,6 @@ async def _run_extraction(
     facts are stored without embeddings (assembler falls back to recency-only
     retrieval).
     """
-    from src.main import _metrics
     from src.proxy.locks import get_session_lock
 
     lock = get_session_lock(session_id)
@@ -1291,7 +1117,7 @@ async def _run_extraction(
             return
 
         # Strip reasoning blocks from the response before extraction
-        response_text = _strip_reasoning(response_text)
+        response_text = strip_reasoning(response_text)
 
         # Extract tool results from messages — structured serialization with tool names
         tool_results_parts = []
@@ -1325,7 +1151,7 @@ async def _run_extraction(
 
         if not result or not result.facts:
             logger.info("extraction_empty", session_id=session_id, turn=turn_number)
-            _metrics["extraction_successes"] += 1
+            record_metric("extraction_successes", 1)
             return
 
         # Deduplicate: fetch existing active facts and filter duplicates
@@ -1400,7 +1226,7 @@ async def _run_extraction(
         # Log active fact count for monitoring
         active_count = await facts_repo.get_active_fact_count(session_id)
         embedding_count = sum(1 for e in embeddings if e is not None)
-        _metrics["extraction_successes"] += 1
+        record_metric("extraction_successes", 1)
         logger.info(
             "extraction_stored",
             session_id=session_id,
@@ -1432,7 +1258,7 @@ async def _run_extraction(
             )
 
     except Exception as e:
-        _metrics["extraction_failures"] += 1
+        record_metric("extraction_failures", 1)
         logger.warning("extraction_task_failed", session_id=session_id, turn=turn_number, error=str(e), exc_info=True)
     finally:
         if acquired:

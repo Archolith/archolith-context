@@ -15,7 +15,8 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from src.main import create_app, _metrics
+from src.main import create_app
+from src.metrics import get_metrics
 from src.proxy.streaming import (
     ResponseCapture,
     StreamingToolCallAccumulator,

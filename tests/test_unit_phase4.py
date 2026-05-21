@@ -96,7 +96,8 @@ class TestMetricsTracking:
 
     def test_initial_metrics_state(self):
         """Metrics should start at zero."""
-        from src.main import _metrics
+        from src.metrics import get_metrics
+        _metrics = get_metrics()
         # Reset for clean state
         _metrics["total_requests"] = 0
         _metrics["extraction_successes"] = 0
@@ -112,19 +113,19 @@ class TestMetricsTracking:
 
     def test_assembly_mode_tracking(self):
         """Assembly mode recording should increment the right counter."""
-        from src.main import _metrics
-        from src.openai.chat import _record_assembly_mode
+        from src.metrics import get_metrics, record_assembly_mode
 
+        _metrics = get_metrics()
         # Reset
         for k in _metrics["assembly_modes"]:
             _metrics["assembly_modes"][k] = 0
 
-        _record_assembly_mode("graph")
-        _record_assembly_mode("graph")
-        _record_assembly_mode("passthrough")
-        _record_assembly_mode("skipped_low_tokens")
-        _record_assembly_mode("skipped_low_savings")
-        _record_assembly_mode("skipped_low_savings")
+        record_assembly_mode("graph")
+        record_assembly_mode("graph")
+        record_assembly_mode("passthrough")
+        record_assembly_mode("skipped_low_tokens")
+        record_assembly_mode("skipped_low_savings")
+        record_assembly_mode("skipped_low_savings")
 
         assert _metrics["assembly_modes"]["graph"] == 2
         assert _metrics["assembly_modes"]["passthrough"] == 1
@@ -139,15 +140,15 @@ class TestRetryableStatusCodes:
 
     def test_retryable_codes(self):
         """Verify the set of retryable status codes."""
-        from src.openai.chat import _RETRYABLE_STATUS_CODES
-        assert 429 in _RETRYABLE_STATUS_CODES
-        assert 500 in _RETRYABLE_STATUS_CODES
-        assert 502 in _RETRYABLE_STATUS_CODES
-        assert 503 in _RETRYABLE_STATUS_CODES
-        assert 504 in _RETRYABLE_STATUS_CODES
+        from src.proxy.upstream import RETRYABLE_STATUS_CODES
+        assert 429 in RETRYABLE_STATUS_CODES
+        assert 500 in RETRYABLE_STATUS_CODES
+        assert 502 in RETRYABLE_STATUS_CODES
+        assert 503 in RETRYABLE_STATUS_CODES
+        assert 504 in RETRYABLE_STATUS_CODES
         # 400 and 401 should NOT be retryable
-        assert 400 not in _RETRYABLE_STATUS_CODES
-        assert 401 not in _RETRYABLE_STATUS_CODES
+        assert 400 not in RETRYABLE_STATUS_CODES
+        assert 401 not in RETRYABLE_STATUS_CODES
 
 
 class TestGracefulDegradation:
@@ -217,17 +218,17 @@ class TestTokenEstimation:
 
     def test_estimate_input_tokens_simple(self):
         """Simple message array should estimate tokens."""
-        from src.openai.chat import _estimate_input_tokens
+        from src.proxy.rewrite import estimate_input_tokens
         messages = [
             {"role": "system", "content": "You are helpful."},
             {"role": "user", "content": "Hello"},
         ]
-        tokens = _estimate_input_tokens(messages)
+        tokens = estimate_input_tokens(messages)
         assert tokens > 0
 
     def test_estimate_input_tokens_multipart(self):
         """Multi-part content messages should estimate tokens."""
-        from src.openai.chat import _estimate_input_tokens
+        from src.proxy.rewrite import estimate_input_tokens
         messages = [
             {
                 "role": "user",
@@ -237,11 +238,11 @@ class TestTokenEstimation:
                 ],
             }
         ]
-        tokens = _estimate_input_tokens(messages)
+        tokens = estimate_input_tokens(messages)
         assert tokens > 0
 
     def test_estimate_input_tokens_empty(self):
         """Empty messages should return minimum 1."""
-        from src.openai.chat import _estimate_input_tokens
-        tokens = _estimate_input_tokens([])
+        from src.proxy.rewrite import estimate_input_tokens
+        tokens = estimate_input_tokens([])
         assert tokens >= 1
