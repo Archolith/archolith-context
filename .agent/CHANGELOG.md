@@ -1,5 +1,16 @@
 # Changelog — cth.context-engine
 
+## 2026-05-20 — Graph Backend Adapter & LadybugDB (Phases 0-5)
+
+- **Phase 0A — Cypher consolidation**: All inline Cypher moved from `trace/router.py` (5 blocks) and `assembler/context.py` (2 blocks) into `src/graph/`. Created `decisions.py` with `store_decision` / `get_decisions`. Added `get_facts_filtered`, `get_supersession_chain`, `get_invalidated_facts` to `facts.py`. Moved `list_active_sessions` / `get_session_stats` from `cleanup.py` to `session.py`.
+- **Phase 0B — Module extraction**: Extracted `src/metrics.py`, `src/proxy/rewrite.py`, `src/proxy/upstream.py` from `chat.py` (1455→1280 lines). Added `find_matching_fact_ids` to protocol. Fixed `_run_extraction` to call `store_facts_batch`. Extracted `src/proxy/recall.py` for unified recall interception.
+- **Phase 1 — GraphBackend protocol**: Created `src/graph/protocol.py` (29 methods, `@runtime_checkable`) and `src/graph/backend.py` (singleton: `init_backend`/`get_backend`/`close_backend`/`is_graph_ready`).
+- **Phase 2 — Neo4j adapter**: Created `src/graph/neo4j_backend.py` wrapping existing graph modules. Lifespan uses `init_backend(Neo4jBackend())`.
+- **Phase 3 — LadybugDB adapter**: Created `src/graph/ladybug_backend.py` with explicit schema (Session/Fact/File/Decision + edges). STRING-typed timestamps. Fixed result-shape unwrap in `_execute()`. 12/12 tests pass.
+- **Phase 4 — Caller rewiring**: All 5 caller files (`proxy/session.py`, `assembler/context.py`, `trace/router.py`, `proxy/tool_injection.py`, `openai/chat.py`) migrated from direct module imports to `get_backend()`. All 8+ `neo4j_ready` checks replaced with `is_graph_ready()`. Added `graph_backend`/`ladybug_db_path` config.
+- **Phase 5 — In-memory fixes**: `TraceStore` got `max_sessions` cap (1000) with LRU eviction. Hourly background cleanup loop wires `expire_sessions()`, `delete_expired_sessions()`, and `cleanup_stale_locks()`.
+- **Test status**: 392/392 core tests pass (excluding 22 deferred streaming recall tests). LadybugDB: 12/12.
+
 ## 2026-05-13 — Observability Trace Contract Remediation
 
 - **AssembledContext DTO extended**: Added `files_selected` and `decisions_selected` fields (`list[dict]`, default empty) to `AssembledContext` in `src/models/dtos.py`
