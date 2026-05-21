@@ -14,7 +14,7 @@ Verify that API keys, authorization tokens, and sensitive environment variables 
 | Check | Method / Command | Evidence / Notes | Pass / Fail |
 | :--- | :--- | :--- | :--- |
 | **Log Inspection** | Grep stdout/stderr and logs/ for `sk-` or other API key/token patterns | | |
-| **Database Inspection** | Run Cypher query: `MATCH (f:Fact) WHERE f.content CONTAINS 'sk-' OR f.content CONTAINS 'key' RETURN f` | | |
+| **Database Inspection** | Query graph backend for secrets in stored facts. Neo4j: `MATCH (f:Fact) WHERE f.content CONTAINS 'sk-' RETURN f`. LadybugDB: query via `/trace/graph/{session}/facts` and grep results. | | |
 | **Error Sanitization** | Simulate upstream 401/403/429/500 responses. Check if proxy response headers/body sanitize the API keys | | |
 | **Trace Store Inspection** | Verify trace JSON payloads on disk/in-memory do not contain plain credentials | | |
 
@@ -40,13 +40,13 @@ Verify that administrative and inspection endpoints are protected against unauth
 
 Assert that session labels isolate multi-tenant/multi-session environments and verify the label-guard logic.
 
-- [ ] **Label Scoping:** Verify that all Cypher queries generated or executed in `repository.py` strictly specify the `:ContextSession` label.
+- [ ] **Session Scoping:** Verify that all graph queries (Neo4j via `repository.py`, LadybugDB via `ladybug_backend.py`) filter by `session_id`. No query should return facts from other sessions.
 - [ ] **Cross-session Isolation Test:**
-  1. Spin up Session A with a unique system prompt/context (e.g., "Designing a React button component").
-  2. Spin up Session B with a completely different context (e.g., "Configuring a PostgreSQL pool in Rust").
+  1. Send a multi-turn conversation through the proxy as Session A (e.g., "Designing a React button component").
+  2. Send a different conversation as Session B (e.g., "Configuring a PostgreSQL pool in Rust").
   3. Query `GET /trace/graph/{Session_B}/facts`.
   4. **Verification:** Confirm that 0% of Session A's facts are present in Session B's context or fact set.
-- [ ] **Label-Guard Hardening:** Verify that a query combining both `:Memory` and `:ContextSession` nodes (e.g., bypass attempt) is blocked or correctly sanitized by `_validate_cypher` without bypassing validation.
+- [ ] **Query Sanitization (Neo4j only):** Verify that `_validate_cypher()` in `repository.py` blocks injection attempts. LadybugDB uses parameterized queries via its Python API and is not vulnerable to string injection.
 
 ---
 

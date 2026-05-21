@@ -34,6 +34,7 @@ Test registration, health checks, and CRUD behavior of configured memory engines
 
 - **Configured Engine Type:** `<e.g., cth_mcp_memory / mem0 / zep / generic_http>`
 
+- [ ] **Prerequisites:** Promotion requires `PROMOTION_ENABLED=true` (currently `false` by default). Set it before running this section; reset after.
 - [ ] **Config Validation:** Verify that `MemoryEngineConfig` fields are validated and reject empty base URLs.
 - [ ] **Capabilities Check:** Verify the adapter reports capabilities correctly (e.g. `supports_batch`, `supports_search`).
 - [ ] **Dry-Run Compliance:** Set `PROMOTION_DRY_RUN=true`. Run a session that triggers fact promotions.

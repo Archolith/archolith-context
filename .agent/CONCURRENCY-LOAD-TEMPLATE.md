@@ -32,14 +32,14 @@ Monitor the proxy process RSS memory over a long-running test simulation (e.g., 
   * **Result Check:** Confirm the proxy blocks Turn N+1 assembly until Turn N extraction writes are committed or timeout occurs, preventing the model from receiving stale context.
 - [ ] **Deadlock Verification:** Run 5 concurrent clients hitting the same session ID. Verify all requests complete without deadlocks.
 - [ ] **TTL / Clean-up Execution:** Run `cleanup.py` tasks (`expire_sessions` and `delete_expired_sessions`). Verify that:
-  1. Expired sessions are correctly marked and purged from Neo4j.
+  1. Expired sessions are correctly marked and purged from the graph backend.
   2. Active sessions are completely untouched.
 
 ---
 
 ## 3. Database Connection Pooling
 
-- [ ] **Neo4j Connection Pool Leak:** Run 100 concurrent read/write queries. Check Neo4j active connection count. Verify connections are returned to the pool.
+- [ ] **Graph Backend Connection Pool / Handle Leak:** Neo4j: Run 100 concurrent read/write queries; check active connection count and verify connections are returned to the pool. LadybugDB: Verify that `LADYBUG_MAX_CONCURRENT` semaphore limits are respected and not exhausted under load; confirm database handles are released after each query batch.
 - [ ] **HTTP Client Reuse:** Verify that only a single instance of `httpx.AsyncClient` is created for upstream calls and reused across all requests, rather than initiating a new client per request.
 
 ---
