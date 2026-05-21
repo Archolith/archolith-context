@@ -95,16 +95,14 @@ async def resolve_session(
 
     fingerprint = compute_fingerprint(system_msg, first_user_msg)
 
-    # Look up existing session
-    existing = await get_backend().find_session_by_fingerprint(fingerprint)
-    if existing:
-        session_id = existing["session_id"]
-        await get_backend().touch_session(session_id)
-        return session_id, False
+    # Atomic find-or-create: MERGE avoids the lookup-then-create race when
+    # two concurrent first-turn requests arrive with the same fingerprint.
+    session_data, is_new = await get_backend().find_or_create_by_fingerprint(fingerprint)
+    session_id = session_data.get("session_id", "")
 
-    # Create new session
-    import uuid
-    session_id = uuid.uuid4().hex[:16]
-    await get_backend().create_session(session_id, fingerprint=fingerprint)
-    logger.info("session_created", session_id=session_id, fingerprint=fingerprint)
-    return session_id, True
+    if is_new:
+        logger.info("session_created", session_id=session_id, fingerprint=fingerprint)
+    else:
+        await get_backend().touch_session(session_id)
+
+    return session_id, is_new

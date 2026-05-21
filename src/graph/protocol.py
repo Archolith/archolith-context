@@ -62,6 +62,15 @@ class GraphBackend(Protocol):
         """Look up a session by fingerprint. Returns None if not found."""
         ...
 
+    async def find_or_create_by_fingerprint(
+        self, fingerprint: str
+    ) -> tuple[dict, bool]:
+        """Atomically find or create a session by fingerprint.
+
+        Uses MERGE to avoid lookup-then-create races. Returns (session_data, is_new).
+        """
+        ...
+
     async def touch_session(self, session_id: str) -> None:
         """Update last_active and increment turn_number."""
         ...

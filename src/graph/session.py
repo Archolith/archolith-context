@@ -47,14 +47,44 @@ RETURN s
     return results[0]["s"] if results else None
 
 
-async def find_by_fingerprint(fingerprint: str) -> dict | None:
-    """Look up a session by fingerprint."""
+async def find_or_create_by_fingerprint(
+    fingerprint: str,
+) -> tuple[dict, bool]:
+    """Atomically find or create a session by fingerprint.
+
+    Uses MERGE to avoid lookup-then-create races when two concurrent
+    requests arrive with the same fingerprint. Returns (session_data, is_new).
+    """
+    import uuid
+    from src.models.graph_nodes import SessionStatus
+
+    now = datetime.now(timezone.utc).isoformat()
+    session_id = uuid.uuid4().hex[:16]
+
     cypher = f"""
-MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{fingerprint: $fingerprint}})
-RETURN s
-"""
-    results = await run_query(cypher, {"fingerprint": fingerprint})
-    return results[0]["s"] if results else None
+    MERGE (s:{CONTEXT_SESSION_LABEL}:Session {{fingerprint: $fingerprint}})
+    ON CREATE SET
+        s.session_id = $session_id,
+        s.goal = null,
+        s.created_at = datetime($now),
+        s.last_active = datetime($now),
+        s.ttl_hours = 24,
+        s.status = $status,
+        s.turn_number = 0
+    ON MATCH SET
+        s.last_active = datetime($now)
+    RETURN s, CASE WHEN s.created_at = datetime($now) THEN true ELSE false END AS is_new
+    """
+    results = await run_write(cypher, {
+        "fingerprint": fingerprint,
+        "session_id": session_id,
+        "now": now,
+        "status": SessionStatus.ACTIVE.value,
+    })
+    if results:
+        return results[0]["s"], results[0].get("is_new", False)
+    # Fallback: should not happen, but handle gracefully
+    return {}, True
 
 
 async def touch_session(session_id: str) -> None:

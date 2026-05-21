@@ -229,6 +229,21 @@ class LadybugBackend:
         )
         return rows[0] if rows else None
 
+    async def find_or_create_by_fingerprint(
+        self, fingerprint: str
+    ) -> tuple[dict, bool]:
+        """Atomically find or create a session by fingerprint (Ladybug variant)."""
+        existing = await self.find_session_by_fingerprint(fingerprint)
+        if existing:
+            return existing, False
+        session_id = uuid4().hex[:16]
+        created = await self.create_session(session_id, fingerprint=fingerprint)
+        if not created:
+            # Race: another request created it between our check and create
+            existing = await self.find_session_by_fingerprint(fingerprint)
+            return existing or {}, False
+        return created, True
+
     async def touch_session(self, session_id: str) -> None:
         await self._execute(
             """

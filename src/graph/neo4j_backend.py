@@ -77,6 +77,11 @@ class Neo4jBackend:
     async def find_session_by_fingerprint(self, fingerprint: str) -> dict | None:
         return await _session.find_by_fingerprint(fingerprint)
 
+    async def find_or_create_by_fingerprint(
+        self, fingerprint: str
+    ) -> tuple[dict, bool]:
+        return await _session.find_or_create_by_fingerprint(fingerprint)
+
     async def touch_session(self, session_id: str) -> None:
         await _session.touch_session(session_id)
 
