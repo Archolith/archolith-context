@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 import structlog
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +21,7 @@ from src.logging_config import configure_logging
 from src.openai.router import router as openai_router
 from src.trace.router import router as trace_router
 from src.trace.store import get_trace_store
+from src.admin import require_admin_token
 
 # Configure structured JSON logging before first use
 configure_logging()
@@ -267,9 +268,10 @@ def create_app() -> FastAPI:
         )
         return response
 
-    # Mount routes
+    # Mount routes — openai_router is unauthenticated (proxy surface)
     app.include_router(openai_router)
-    app.include_router(trace_router)
+    # trace_router is an operator surface — protect with admin token
+    app.include_router(trace_router, dependencies=[Depends(require_admin_token)])
 
     # Dashboard static files (serve /dashboard/ -> src/static/)
     import os
@@ -372,7 +374,7 @@ def create_app() -> FastAPI:
 
     # --- Sessions admin endpoints ---
     @app.get("/sessions")
-    async def list_sessions() -> dict:
+    async def list_sessions(admin: None = Depends(require_admin_token)) -> dict:
         """List all active sessions (admin endpoint)."""
         if not is_graph_ready():
             return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
@@ -385,7 +387,7 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=503, content={"error": f"Neo4j error: {e}"})
 
     @app.get("/sessions/{session_id}")
-    async def get_session(session_id: str) -> dict:
+    async def get_session(session_id: str, admin: None = Depends(require_admin_token)) -> dict:
         """Get session details (admin endpoint)."""
         if not is_graph_ready():
             return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
@@ -402,7 +404,7 @@ def create_app() -> FastAPI:
     # --- Memory engine & promotion admin endpoints ---
 
     @app.get("/memory-engines")
-    async def list_memory_engines() -> dict:
+    async def list_memory_engines(admin: None = Depends(require_admin_token)) -> dict:
         """List all configured memory engines and their health."""
         from src.memory.registry import get_registry
 
@@ -417,7 +419,7 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/memory-engines/{engine_id}")
-    async def get_memory_engine(engine_id: str) -> dict:
+    async def get_memory_engine(engine_id: str, admin: None = Depends(require_admin_token)) -> dict:
         """Get details and health for a specific memory engine."""
         from src.memory.registry import get_registry
 
@@ -445,7 +447,7 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/promotions")
-    async def list_promotions() -> dict:
+    async def list_promotions(admin: None = Depends(require_admin_token)) -> dict:
         """List promotion history and stats."""
         svc = getattr(app.state, "promotion_service", None)
         if svc is None:
@@ -456,7 +458,7 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/promotions/retry/{promotion_id}")
-    async def retry_promotion(promotion_id: str) -> dict:
+    async def retry_promotion(promotion_id: str, admin: None = Depends(require_admin_token)) -> dict:
         """Retry a failed promotion by its promotion_id (finds it in audit trail)."""
         svc = getattr(app.state, "promotion_service", None)
         if svc is None:
@@ -479,7 +481,17 @@ def create_app() -> FastAPI:
         Clients connect and receive JSON events for every request, assembly,
         response, extraction, and recall event that flows through the proxy.
         Slow clients are disconnected after 256 queued events.
+
+        When ADMIN_TOKEN is set, clients must provide it via query param
+        ?token=<value> or the connection is closed.
         """
+        settings = get_settings()
+        if settings.admin_token:
+            token = websocket.query_params.get("token", "")
+            if token != settings.admin_token:
+                await websocket.close(code=4001, reason="Invalid admin token")
+                return
+
         await websocket.accept()
         live_stream = getattr(app.state, "live_stream", None)
         if not live_stream:

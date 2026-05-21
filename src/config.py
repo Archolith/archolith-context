@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     promotion_min_confidence: float = 0.9
     promotion_dry_run: bool = False  # If True, generate records but don't write
 
+    # Admin/operator token for protecting non-proxy surfaces
+    # When empty (default), admin endpoints are open (localhost-only assumption).
+    # When set, all operator endpoints require X-Admin-Token or Authorization: Bearer matching this value.
+    admin_token: str = ""
+
     @property
     def upstream_api_url(self) -> str:
         """Full upstream API base URL (ensures no trailing slash issues)."""
