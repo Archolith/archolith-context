@@ -286,9 +286,83 @@ def create_app() -> FastAPI:
     async def root_redirect():
         return RedirectResponse(url="/dashboard/dashboard.html")
 
-    # --- Health endpoint ---
+    # --- Health endpoints (liveness + readiness + legacy) ---
+
+    @app.get("/live")
+    async def liveness() -> dict:
+        """Liveness probe — is the process alive?
+
+        Always returns 200 while the process is running. Does NOT
+        check upstream or Neo4j connectivity. Use /ready for that.
+        """
+        return {
+            "status": "alive",
+            "version": "0.1.0",
+            "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
+        }
+
+    @app.get("/ready")
+    async def readiness() -> dict:
+        """Readiness probe — is the service ready to handle requests?
+
+        Checks upstream connectivity and Neo4j status. Returns 503
+        when upstream is unreachable or Neo4j is disconnected, but
+        the process stays alive (liveness unaffected).
+        """
+        ready = True
+        reasons = []
+
+        # Check Neo4j
+        neo4j_status = "not_configured"
+        if is_graph_ready():
+            from src.graph.driver import get_driver
+            try:
+                driver = await get_driver()
+                await driver.verify_connectivity()
+                neo4j_status = "connected"
+            except Exception:
+                neo4j_status = "disconnected"
+                ready = False
+                reasons.append("neo4j_disconnected")
+                record_metric("neo4j_errors")
+
+        # Check upstream (lightweight, with timeout)
+        upstream_status = "unknown"
+        try:
+            settings = get_settings()
+            resp = await app.state.http_client.get(
+                f"{settings.upstream_api_url}/models",
+                headers={"Authorization": f"Bearer {settings.upstream_api_key}"},
+                timeout=3.0,
+            )
+            if resp.status_code < 500:
+                upstream_status = "ok"
+            else:
+                upstream_status = "degraded"
+                ready = False
+                reasons.append(f"upstream_{resp.status_code}")
+        except Exception:
+            upstream_status = "unreachable"
+            ready = False
+            reasons.append("upstream_unreachable")
+
+        result = {
+            "status": "ready" if ready else "not_ready",
+            "neo4j": neo4j_status,
+            "upstream": upstream_status,
+            "version": "0.1.0",
+            "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
+        }
+        if reasons:
+            result["reasons"] = reasons
+
+        if not ready:
+            return JSONResponse(status_code=503, content=result)
+        return result
+
     @app.get("/health")
     async def health() -> dict:
+        """Legacy health endpoint (compatibility). Delegates to readiness."""
         neo4j_status = "not_configured"
         if is_graph_ready():
             from src.graph.driver import get_driver
@@ -300,7 +374,6 @@ def create_app() -> FastAPI:
                 neo4j_status = "disconnected"
                 record_metric("neo4j_errors")
 
-        # Check upstream (lightweight, with timeout)
         upstream_status = "unknown"
         try:
             settings = get_settings()

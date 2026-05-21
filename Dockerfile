@@ -27,6 +27,6 @@ ENV SESSION_NEO4J_USER=neo4j
 EXPOSE 9800
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import httpx; r = httpx.get('http://localhost:9800/health'); assert r.status_code == 200" || exit 1
+    CMD python -c "import httpx; r = httpx.get('http://localhost:9800/live'); assert r.status_code == 200" || exit 1
 
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "9800", "--log-level", "info"]
