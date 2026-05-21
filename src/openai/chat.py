@@ -1158,7 +1158,8 @@ async def _run_extraction(
                 "confidence": fact.get("confidence", 0.5),
                 "embedding": embeddings[i] if i < len(embeddings) else None,
             })
-        await get_backend().store_facts_batch(
+        # Capture new fact IDs for SUPERSEDES edge creation after invalidation
+        new_fact_ids = await get_backend().store_facts_batch(
             session_id=session_id,
             facts=enriched_facts,
             source_turn=turn_number,
@@ -1195,6 +1196,26 @@ async def _run_extraction(
                         turn=turn_number,
                         descriptions=len(result.invalidated_fact_ids),
                         matched_ids=len(matched_ids),
+                    )
+
+                    # Create SUPERSEDES edges from each new fact to each
+                    # invalidated fact so /trace/graph/{sid}/invalidations
+                    # has real chain data for the explorer.
+                    for new_fid in new_fact_ids:
+                        for old_fid in matched_ids:
+                            try:
+                                await get_backend().create_supersedes(old_fid, new_fid)
+                            except Exception as e:
+                                logger.warning(
+                                    "supersedes_edge_failed",
+                                    old_id=old_fid, new_id=new_fid, error=str(e),
+                                )
+                    logger.debug(
+                        "supersedes_edges_created",
+                        session_id=session_id,
+                        new_facts=len(new_fact_ids),
+                        invalidated=len(matched_ids),
+                        edges=len(new_fact_ids) * len(matched_ids),
                     )
 
         # Log active fact count for monitoring

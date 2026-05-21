@@ -66,19 +66,56 @@ async def store_facts_batch(
     facts: list[dict],
     source_turn: int,
 ) -> list[str]:
-    """Store multiple facts in a single transaction."""
-    fact_ids = []
+    """Store multiple facts in a single transaction using UNWIND.
+
+    This replaces the previous per-fact loop with a true batch write.
+    All facts are created atomically in one Neo4j transaction.
+    """
+    if not facts:
+        return []
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Build the fact rows for UNWIND
+    rows = []
     for fact in facts:
-        fid = await store_fact(
-            session_id=session_id,
-            content=fact.get("content", ""),
-            fact_type=FactType(fact.get("fact_type", "observation")),
-            source_turn=source_turn,
-            confidence=fact.get("confidence", 0.5),
-            embedding=fact.get("embedding"),
-        )
-        fact_ids.append(fid)
-    return fact_ids
+        fact_id = uuid4().hex[:16]
+        embedding = fact.get("embedding")
+        rows.append({
+            "fact_id": fact_id,
+            "content": fact.get("content", ""),
+            "fact_type": fact.get("fact_type", "observation"),
+            "confidence": fact.get("confidence", 0.5),
+            "embedding": embedding,
+        })
+
+    cypher = f"""
+    UNWIND $rows AS row
+    CREATE (f:{CONTEXT_SESSION_LABEL}:Fact {{
+        fact_id: row.fact_id,
+        session_id: $session_id,
+        content: row.content,
+        fact_type: row.fact_type,
+        valid_from: datetime($now),
+        valid_until: null,
+        invalidated_at: null,
+        confidence: row.confidence,
+        source_turn: $source_turn,
+        embedding: row.embedding
+    }})
+    RETURN f.fact_id AS fact_id
+    """
+
+    results = await run_write(cypher, {
+        "rows": rows,
+        "session_id": session_id,
+        "source_turn": source_turn,
+        "now": now,
+    })
+
+    # Return fact_ids in the same order as input
+    result_ids = [r["fact_id"] for r in results]
+    return result_ids if result_ids else [row["fact_id"] for row in rows]
 
 
 async def invalidate_facts(fact_ids: list[str]) -> int:
