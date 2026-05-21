@@ -177,3 +177,117 @@ async def get_active_fact_count(session_id: str) -> int:
     """
     results = await run_query(cypher, {"session_id": session_id})
     return results[0]["cnt"] if results else 0
+
+
+async def get_facts_filtered(
+    session_id: str,
+    fact_type: str | None = None,
+    min_confidence: float | None = None,
+    from_turn: int | None = None,
+    to_turn: int | None = None,
+    include_invalidated: bool = False,
+    limit: int = 100,
+) -> list[dict]:
+    """Get facts for a session with optional filtering.
+
+    Args:
+        session_id: The session to query.
+        fact_type: Filter by fact type (observation, preference, procedure, etc.).
+        min_confidence: Minimum confidence threshold (0.0-1.0).
+        from_turn: Minimum source turn (inclusive).
+        to_turn: Maximum source turn (inclusive).
+        include_invalidated: Include facts that have been superseded (default False).
+        limit: Max facts to return (default 100).
+    """
+    conditions = []
+    if not include_invalidated:
+        conditions.append("f.valid_until IS NULL")
+    if fact_type:
+        conditions.append("f.fact_type = $fact_type")
+    if min_confidence is not None:
+        conditions.append("f.confidence >= $min_confidence")
+    if from_turn is not None:
+        conditions.append("f.source_turn >= $from_turn")
+    if to_turn is not None:
+        conditions.append("f.source_turn <= $to_turn")
+
+    where_clause = ""
+    if conditions:
+        where_clause = "WHERE " + " AND ".join(conditions)
+
+    cypher = f"""
+        MATCH (f:{CONTEXT_SESSION_LABEL}:Fact {{session_id: $session_id}})
+        {where_clause}
+        RETURN f ORDER BY f.source_turn ASC LIMIT $limit
+    """
+
+    params: dict = {"session_id": session_id, "limit": limit}
+    if fact_type:
+        params["fact_type"] = fact_type
+    if min_confidence is not None:
+        params["min_confidence"] = min_confidence
+    if from_turn is not None:
+        params["from_turn"] = from_turn
+    if to_turn is not None:
+        params["to_turn"] = to_turn
+
+    results = await run_query(cypher, params)
+    return [r["f"] for r in results]
+
+
+async def get_supersession_chain(session_id: str) -> list[dict]:
+    """Get SUPERSEDES chains showing how facts evolved over a session.
+
+    Returns facts that superseded others, grouped by which fact
+    superseded them. This reveals how knowledge evolved over the session.
+    """
+    cypher = f"""
+        MATCH (new:{CONTEXT_SESSION_LABEL}:Fact {{session_id: $session_id}})
+              -[:SUPERSEDES]->(old:{CONTEXT_SESSION_LABEL}:Fact {{session_id: $session_id}})
+        RETURN new.fact_id AS new_id, new.content AS new_content,
+               new.source_turn AS new_turn, new.fact_type AS new_type,
+               old.fact_id AS old_id, old.content AS old_content,
+               old.source_turn AS old_turn, old.fact_type AS old_type
+        ORDER BY new.source_turn ASC
+    """
+    results = await run_query(cypher, {"session_id": session_id})
+    return [
+        {
+            "superseding_fact": {
+                "fact_id": r["new_id"],
+                "content": r["new_content"],
+                "source_turn": r["new_turn"],
+                "fact_type": r["new_type"],
+            },
+            "superseded_fact": {
+                "fact_id": r["old_id"],
+                "content": r["old_content"],
+                "source_turn": r["old_turn"],
+                "fact_type": r["old_type"],
+            },
+        }
+        for r in results
+    ]
+
+
+async def get_invalidated_facts(session_id: str) -> list[dict]:
+    """Get facts that have been invalidated (valid_until set) for a session."""
+    cypher = f"""
+        MATCH (f:{CONTEXT_SESSION_LABEL}:Fact {{session_id: $session_id}})
+        WHERE f.valid_until IS NOT NULL
+        RETURN f.fact_id AS fact_id, f.content AS content,
+               f.source_turn AS source_turn, f.fact_type AS fact_type,
+               f.invalidated_at AS invalidated_at
+        ORDER BY f.source_turn ASC
+    """
+    results = await run_query(cypher, {"session_id": session_id})
+    return [
+        {
+            "fact_id": r["fact_id"],
+            "content": r["content"],
+            "source_turn": r["source_turn"],
+            "fact_type": r["fact_type"],
+            "invalidated_at": str(r["invalidated_at"]) if r.get("invalidated_at") else None,
+        }
+        for r in results
+    ]

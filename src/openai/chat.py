@@ -17,6 +17,7 @@ from src.assembler.context import assemble_context
 from src.config import get_settings
 from src.extractor.client import extract_facts
 from src.graph import cleanup as cleanup_repo
+from src.graph import decisions as decisions_repo
 from src.graph import edges as edges_repo
 from src.graph import facts as facts_repo
 from src.graph import session as session_repo
@@ -1370,7 +1371,7 @@ async def _run_extraction(
 
         # Store decisions
         for decision in result.decisions:
-            await edges_repo.store_decision(
+            await decisions_repo.store_decision(
                 session_id=session_id,
                 summary=decision.get("summary", ""),
                 rationale=decision.get("rationale"),

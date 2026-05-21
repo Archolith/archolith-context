@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
 
 import structlog
 
-from src.graph.repository import CONTEXT_SESSION_LABEL, run_write
+from src.graph.repository import CONTEXT_SESSION_LABEL, run_query, run_write
 from src.models.graph_nodes import FileStatus
 
 logger = structlog.get_logger()
@@ -65,33 +64,12 @@ async def create_supersedes(old_fact_id: str, new_fact_id: str) -> None:
     await run_write(cypher, {"old_id": old_fact_id, "new_id": new_fact_id})
 
 
-async def store_decision(
-    session_id: str,
-    summary: str,
-    rationale: str | None,
-    turn: int,
-) -> str:
-    """Store a decision node and link to session."""
-    decision_id = uuid4().hex[:16]
+async def get_touched_files(session_id: str) -> list[dict]:
+    """Get all files touched in a session via TOUCHES edges."""
     cypher = f"""
-    CREATE (d:{CONTEXT_SESSION_LABEL}:Decision {{
-        decision_id: $decision_id,
-        session_id: $session_id,
-        summary: $summary,
-        rationale: $rationale,
-        turn: $turn,
-        superseded_by: null
-    }})
-    WITH d
-MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
-MERGE (d)-[:BELONGS_TO]->(s)
-    RETURN d.decision_id
-    """
-    results = await run_write(cypher, {
-        "decision_id": decision_id,
-        "session_id": session_id,
-        "summary": summary,
-        "rationale": rationale,
-        "turn": turn,
-    })
-    return results[0]["d.decision_id"] if results else decision_id
+MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})-[:TOUCHES]->(f:{CONTEXT_SESSION_LABEL}:File)
+RETURN f.path AS path, f.status AS status, f.last_modified_turn AS last_modified_turn, f.last_read_turn AS last_read_turn
+ORDER BY f.last_modified_turn DESC, f.last_read_turn DESC
+"""
+    results = await run_query(cypher, {"session_id": session_id})
+    return results

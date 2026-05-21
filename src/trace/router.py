@@ -105,49 +105,17 @@ async def graph_facts(
         return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
 
     try:
-        from src.graph.repository import CONTEXT_SESSION_LABEL, run_query
+        from src.graph import facts as facts_repo
 
-        valid_filter = "" if include_invalidated else "WHERE f.valid_until IS NULL"
-        type_filter = "AND f.fact_type = $fact_type" if fact_type else ""
-        confidence_filter = "AND f.confidence >= $min_confidence" if min_confidence is not None else ""
-        from_turn_filter = "AND f.source_turn >= $from_turn" if from_turn is not None else ""
-        to_turn_filter = "AND f.source_turn <= $to_turn" if to_turn is not None else ""
-
-        # Build WHERE clause — handle initial WHERE vs AND
-        conditions = []
-        if not include_invalidated:
-            conditions.append("f.valid_until IS NULL")
-        if fact_type:
-            conditions.append("f.fact_type = $fact_type")
-        if min_confidence is not None:
-            conditions.append("f.confidence >= $min_confidence")
-        if from_turn is not None:
-            conditions.append("f.source_turn >= $from_turn")
-        if to_turn is not None:
-            conditions.append("f.source_turn <= $to_turn")
-
-        where_clause = ""
-        if conditions:
-            where_clause = "WHERE " + " AND ".join(conditions)
-
-        cypher = f"""
-            MATCH (f:{CONTEXT_SESSION_LABEL}:Fact {{session_id: $session_id}})
-            {where_clause}
-            RETURN f ORDER BY f.source_turn ASC LIMIT $limit
-        """
-
-        params: dict = {"session_id": session_id, "limit": limit}
-        if fact_type:
-            params["fact_type"] = fact_type
-        if min_confidence is not None:
-            params["min_confidence"] = min_confidence
-        if from_turn is not None:
-            params["from_turn"] = from_turn
-        if to_turn is not None:
-            params["to_turn"] = to_turn
-
-        results = await run_query(cypher, params)
-        facts = [r["f"] for r in results]
+        facts = await facts_repo.get_facts_filtered(
+            session_id=session_id,
+            fact_type=fact_type,
+            min_confidence=min_confidence,
+            from_turn=from_turn,
+            to_turn=to_turn,
+            include_invalidated=include_invalidated,
+            limit=limit,
+        )
         return {"session_id": session_id, "facts": facts, "count": len(facts)}
     except Exception as e:
         logger.warning("graph_facts_query_failed", session_id=session_id, error=str(e))
@@ -165,58 +133,10 @@ async def graph_invalidation_chains(request: Request, session_id: str) -> dict:
         return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
 
     try:
-        from src.graph.repository import CONTEXT_SESSION_LABEL, run_query
+        from src.graph import facts as facts_repo
 
-        # Find SUPERSEDES chains
-        cypher = f"""
-            MATCH (new:{CONTEXT_SESSION_LABEL}:Fact {{session_id: $session_id}})
-                  -[:SUPERSEDES]->(old:{CONTEXT_SESSION_LABEL}:Fact {{session_id: $session_id}})
-            RETURN new.fact_id AS new_id, new.content AS new_content,
-                   new.source_turn AS new_turn, new.fact_type AS new_type,
-                   old.fact_id AS old_id, old.content AS old_content,
-                   old.source_turn AS old_turn, old.fact_type AS old_type
-            ORDER BY new.source_turn ASC
-        """
-        results = await run_query(cypher, {"session_id": session_id})
-
-        chains = []
-        for r in results:
-            chains.append({
-                "superseding_fact": {
-                    "fact_id": r["new_id"],
-                    "content": r["new_content"],
-                    "source_turn": r["new_turn"],
-                    "fact_type": r["new_type"],
-                },
-                "superseded_fact": {
-                    "fact_id": r["old_id"],
-                    "content": r["old_content"],
-                    "source_turn": r["old_turn"],
-                    "fact_type": r["old_type"],
-                },
-            })
-
-        # Also find invalidated facts without explicit SUPERSEDES edges
-        invalidated_cypher = f"""
-            MATCH (f:{CONTEXT_SESSION_LABEL}:Fact {{session_id: $session_id}})
-            WHERE f.valid_until IS NOT NULL
-            RETURN f.fact_id AS fact_id, f.content AS content,
-                   f.source_turn AS source_turn, f.fact_type AS fact_type,
-                   f.invalidated_at AS invalidated_at
-            ORDER BY f.source_turn ASC
-        """
-        inv_results = await run_query(invalidated_cypher, {"session_id": session_id})
-
-        invalidated = [
-            {
-                "fact_id": r["fact_id"],
-                "content": r["content"],
-                "source_turn": r["source_turn"],
-                "fact_type": r["fact_type"],
-                "invalidated_at": str(r["invalidated_at"]) if r.get("invalidated_at") else None,
-            }
-            for r in inv_results
-        ]
+        chains = await facts_repo.get_supersession_chain(session_id)
+        invalidated = await facts_repo.get_invalidated_facts(session_id)
 
         return {
             "session_id": session_id,
@@ -237,17 +157,9 @@ async def graph_touched_files(request: Request, session_id: str) -> dict:
         return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
 
     try:
-        from src.graph.repository import CONTEXT_SESSION_LABEL, run_query
+        from src.graph import edges as edges_repo
 
-        cypher = f"""
-            MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
-                  -[:TOUCHES]->(f:{CONTEXT_SESSION_LABEL}:File)
-            RETURN f.path AS path, f.status AS status,
-                   f.last_read_turn AS last_read_turn,
-                   f.last_modified_turn AS last_modified_turn
-            ORDER BY f.path ASC
-        """
-        results = await run_query(cypher, {"session_id": session_id})
+        results = await edges_repo.get_touched_files(session_id)
         files = [
             {
                 "path": r["path"],
@@ -270,26 +182,9 @@ async def graph_decisions(request: Request, session_id: str) -> dict:
         return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
 
     try:
-        from src.graph.repository import CONTEXT_SESSION_LABEL, run_query
+        from src.graph import decisions as decisions_repo
 
-        cypher = f"""
-            MATCH (d:{CONTEXT_SESSION_LABEL}:Decision {{session_id: $session_id}})
-            RETURN d.decision_id AS decision_id, d.summary AS summary,
-                   d.rationale AS rationale, d.turn AS turn,
-                   d.superseded_by AS superseded_by
-            ORDER BY d.turn ASC
-        """
-        results = await run_query(cypher, {"session_id": session_id})
-        decisions = [
-            {
-                "decision_id": r["decision_id"],
-                "summary": r["summary"],
-                "rationale": r.get("rationale"),
-                "turn": r["turn"],
-                "superseded_by": r.get("superseded_by"),
-            }
-            for r in results
-        ]
+        decisions = await decisions_repo.get_decisions(session_id, include_superseded=True)
         return {"session_id": session_id, "decisions": decisions, "count": len(decisions)}
     except Exception as e:
         logger.warning("graph_decisions_query_failed", session_id=session_id, error=str(e))

@@ -25,7 +25,7 @@ from src.config import get_settings
 from src.graph import facts as facts_repo
 from src.graph import session as session_repo
 from src.graph import edges as edges_repo
-from src.graph import cleanup as cleanup_repo
+
 from src.models.dtos import AssembledContext
 from src.models.graph_nodes import FactType
 
@@ -548,26 +548,10 @@ def _evict_embedding_cache() -> None:
 
 async def _get_touched_files(session_id: str) -> list[dict]:
     """Get all files touched in a session."""
-    from src.graph.repository import run_query, CONTEXT_SESSION_LABEL
-
-    cypher = f"""
-MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})-[:TOUCHES]->(f:{CONTEXT_SESSION_LABEL}:File)
-RETURN f.path AS path, f.status AS status, f.last_modified_turn AS last_modified_turn, f.last_read_turn AS last_read_turn
-ORDER BY f.last_modified_turn DESC, f.last_read_turn DESC
-"""
-    results = await run_query(cypher, {"session_id": session_id})
-    return results
+    return await edges_repo.get_touched_files(session_id)
 
 
 async def _get_decisions(session_id: str) -> list[dict]:
     """Get all decisions for a session (non-superseded)."""
-    from src.graph.repository import run_query, CONTEXT_SESSION_LABEL
-
-    cypher = f"""
-MATCH (d:{CONTEXT_SESSION_LABEL}:Decision {{session_id: $session_id}})
-WHERE d.superseded_by IS NULL
-RETURN d.summary AS summary, d.rationale AS rationale, d.turn AS turn
-ORDER BY d.turn DESC
-"""
-    results = await run_query(cypher, {"session_id": session_id})
-    return results
+    from src.graph import decisions as decisions_repo
+    return await decisions_repo.get_decisions(session_id, include_superseded=False)

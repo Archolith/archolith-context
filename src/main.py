@@ -297,7 +297,7 @@ def create_app() -> FastAPI:
         active_sessions = 0
         if getattr(app.state, "neo4j_ready", False):
             try:
-                from src.graph.cleanup import list_active_sessions
+                from src.graph.session import list_active_sessions
                 sessions = await list_active_sessions()
                 active_sessions = len(sessions)
             except Exception:
@@ -349,7 +349,7 @@ def create_app() -> FastAPI:
         if not getattr(app.state, "neo4j_ready", False):
             return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
         try:
-            from src.graph.cleanup import list_active_sessions
+            from src.graph.session import list_active_sessions
             sessions = await list_active_sessions()
             return {"sessions": sessions, "count": len(sessions)}
         except Exception as e:
@@ -362,7 +362,7 @@ def create_app() -> FastAPI:
         if not getattr(app.state, "neo4j_ready", False):
             return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
         try:
-            from src.graph.cleanup import get_session_stats
+            from src.graph.session import get_session_stats
             stats = await get_session_stats(session_id)
             if not stats:
                 return JSONResponse(status_code=404, content={"error": f"Session {session_id} not found"})
