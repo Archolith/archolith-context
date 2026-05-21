@@ -7,6 +7,8 @@
   - `RESILIENCE-CHAOS-TEMPLATE.md`: Focuses on downstream outage simulation, timeouts, latency handling, and WAL crash recovery.
   - `CONCURRENCY-LOAD-TEMPLATE.md`: Focuses on memory profiling, cache evictions, turn-locking, and connection pool leaks.
   - `MEMORY-ALIGNMENT-TEMPLATE.md`: Focuses on fact promotion generalizability, adapter CRUD compatibility, and context drift.
+- **Repository Hygiene & Tracking**: Tracked previously untracked templates (`BENCHMARK-AUDIT-TEMPLATE.md`, `CONTEXT-QUALITY-TEMPLATE.md`, `PRODUCT-READINESS-TEMPLATE.md`), baseline audits (`2026-05-21-gpt4omini-16turn-baseline.md`, `2026-05-21-context-quality-gpt4omini-baseline.md`), benchmark orchestration scripts (`scripts/benchmark_parallel.py`), and python package lock (`uv.lock`). Updated `.gitignore` to prevent tracking of local LadybugDB binaries/logs (`data/`, `*.lbug*`) and transient benchmark outputs (`scripts/*.json`, `audit_results.json`).
+
 
 ## 2026-05-20 — Graph Backend Adapter & LadybugDB (Phases 0-5)
 
