@@ -34,7 +34,7 @@ class Adapter(MemoryAdapterBase):
     Expected engine config:
     - base_url: Cognee service URL (e.g. "http://localhost:8000" for local, or cloud URL)
     - api_key_env: env var name for COGNEE_API_KEY
-    - extra["dataset"]: dataset name (default: "context-engine")
+    - extra["dataset"]: dataset name (default: "archolith-proxy")
     """
 
     def __init__(self, config: MemoryEngineConfig) -> None:

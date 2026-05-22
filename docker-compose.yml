@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   archolith-proxy:
     build: .
@@ -9,18 +7,16 @@ services:
       # Required — override these in .env or at runtime
       - UPSTREAM_API_KEY=${UPSTREAM_API_KEY:-}
       - EXTRACTOR_API_KEY=${EXTRACTOR_API_KEY:-}
-      - SESSION_NEO4J_PASSWORD=password
       # Upstream and extraction endpoints
       - UPSTREAM_BASE_URL=${UPSTREAM_BASE_URL:-https://api.deepseek.com/v1}
       - EXTRACTOR_BASE_URL=${EXTRACTOR_BASE_URL:-https://api.openai.com/v1}
       - EXTRACTOR_MODEL=${EXTRACTOR_MODEL:-gpt-4.1-mini}
-      # Neo4j connection (uses the neo4j service below)
-      - SESSION_NEO4J_URI=bolt://neo4j:7687
-      - SESSION_NEO4J_DATABASE=neo4j
-      - SESSION_NEO4J_USER=neo4j
-    depends_on:
-      neo4j:
-        condition: service_healthy
+      # Graph backend: LadybugDB (embedded, zero-infra default)
+      - GRAPH_BACKEND=ladybug
+      - LADYBUG_DB_PATH=/app/data/context.lbug
+      - LADYBUG_MAX_CONCURRENT=8
+    volumes:
+      - archolith_data:/app/data
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:9800/live'); assert r.status_code == 200"]
       interval: 30s
@@ -29,11 +25,14 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # Optional: Neo4j graph backend (use instead of LadybugDB for production workloads)
+  # Enable with: docker compose --profile neo4j up
   neo4j:
+    profiles: ["neo4j"]
     image: neo4j:5-community
     ports:
-      - "7474:7474"  # HTTP browser
-      - "7687:7687"  # Bolt
+      - "7474:7474"
+      - "7687:7687"
     environment:
       - NEO4J_AUTH=neo4j/password
       - NEO4J_PLUGINS=["apoc"]
@@ -49,5 +48,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  archolith_data:
   neo4j_data:
   neo4j_logs:

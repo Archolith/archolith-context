@@ -25,7 +25,7 @@ logger = structlog.get_logger()
 
 
 class Adapter(MemoryAdapterBase):
-    """Promotes facts into cth.mcp.memory via its HTTP REST API.
+    """Promotes facts into archolith-memory via its HTTP REST API.
 
     Expected engine config:
     - base_url: e.g. "http://localhost:8200"
@@ -60,7 +60,7 @@ class Adapter(MemoryAdapterBase):
         """Validate that the engine config has what we need."""
         problems: list[str] = []
         if not self.config.base_url:
-            problems.append("base_url is required for cth_mcp_memory adapter")
+            problems.append("base_url is required for archolith_memory adapter")
         if not self.config.base_url.startswith(("http://", "https://")):
             problems.append(f"base_url must be http/https, got: {self.config.base_url}")
         return problems
@@ -69,7 +69,7 @@ class Adapter(MemoryAdapterBase):
         return EngineCapabilities(
             promote_fact=True,
             promote_batch=True,
-            dedupe_lookup=False,  # cth.mcp.memory handles dedupe internally
+            dedupe_lookup=False,  # archolith-memory handles dedupe internally
             list_by_source=True,
             update_promoted=False,
             delete_promoted=False,
@@ -165,7 +165,7 @@ class Adapter(MemoryAdapterBase):
     # --- Internal ---
 
     def _build_add_memory_payload(self, promotion: PromotionRecord) -> dict:
-        """Translate a canonical PromotionRecord into cth.mcp.memory's add_memory payload."""
+        """Translate a canonical PromotionRecord into archolith-memory's add_memory payload."""
         return {
             "text": promotion.content,
             "source": "archolith-proxy-promotion",

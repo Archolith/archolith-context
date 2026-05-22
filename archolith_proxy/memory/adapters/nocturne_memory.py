@@ -36,7 +36,7 @@ class Adapter(MemoryAdapterBase):
     - base_url: e.g. "http://localhost:8233"
     - api_key_env: env var name for API_TOKEN
     - extra["domain"]: URI domain for promoted memories (default: "promoted")
-    - extra["parent_uri"]: parent node URI (default: "promoted://context-engine")
+    - extra["parent_uri"]: parent node URI (default: "promoted://archolith-proxy")
     """
 
     def __init__(self, config: MemoryEngineConfig) -> None:

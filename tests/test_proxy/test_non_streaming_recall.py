@@ -130,11 +130,14 @@ class TestBuildResendMessages:
 
         result = build_resend_messages(original, model_msg, tool_call, recall_text)
 
-        # Should have: original + model_msg (with recall stripped) + tool result
+        # Should have: original + model_msg (with recall tool_call retained) + tool result
         assert len(result) == 3
         assert result[0]["role"] == "user"
-        # Model message should have tool_calls removed (only recall was there)
-        assert "tool_calls" not in result[1] or result[1].get("tool_calls") is None or len(result[1].get("tool_calls", [])) == 0
+        # Model message retains the recall tool_call so the tool result has a
+        # matching tool_call_id (required by OpenAI API to avoid 400).
+        assert result[1]["role"] == "assistant"
+        assert len(result[1].get("tool_calls", [])) == 1
+        assert result[1]["tool_calls"][0]["function"]["name"] == "__archolith_recall"
         assert result[2]["role"] == "tool"
 
     def test_preserves_non_recall_tool_calls(self):
@@ -160,10 +163,12 @@ class TestBuildResendMessages:
 
         result = build_resend_messages(original, model_msg, tool_call, recall_text)
 
-        # Model message should still have the read_file tool call
+        # Model message retains ALL tool_calls (including recall) so the tool
+        # result message has a matching tool_call_id in the conversation history.
         remaining_calls = result[1].get("tool_calls", [])
-        assert len(remaining_calls) == 1
+        assert len(remaining_calls) == 2
         assert remaining_calls[0]["function"]["name"] == "read_file"
+        assert remaining_calls[1]["function"]["name"] == "__archolith_recall"
 
 
 # --- handle_non_streaming_recall tests ---

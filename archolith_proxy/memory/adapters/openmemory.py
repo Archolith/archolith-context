@@ -34,7 +34,7 @@ class Adapter(MemoryAdapterBase):
     Expected engine config:
     - base_url: e.g. "http://localhost:8080"
     - api_key_env: env var name for API key (if auth enabled)
-    - extra["user_id"]: user ID for OpenMemory's per-user scoping (default: "context-engine")
+    - extra["user_id"]: user ID for OpenMemory's per-user scoping (default: "archolith-proxy")
     """
 
     def __init__(self, config: MemoryEngineConfig) -> None:

@@ -601,7 +601,7 @@ class TestRegistryAdapterTypes:
     def test_all_adapter_types_registered(self):
         from archolith_proxy.memory.registry import _ADAPTER_TYPES
         expected = {
-            "cth_mcp_memory", "mem0", "zep", "generic_http",
+            "archolith_memory", "mem0", "zep", "generic_http",
             "basic_memory", "claude_mem", "cognee", "openmemory", "nocturne_memory",
         }
         assert set(_ADAPTER_TYPES.keys()) == expected

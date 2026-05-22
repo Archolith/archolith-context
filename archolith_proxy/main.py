@@ -52,19 +52,19 @@ def _load_memory_engines(settings, registry) -> None:
         except json.JSONDecodeError as e:
             logger.warning("memory_engines_json_parse_error", error=str(e))
     else:
-        # Fallback: auto-register cth-memory from legacy settings if promotion is enabled
+        # Fallback: auto-register archolith-memory from legacy settings if promotion is enabled
         if settings.memory_api_url:
             registry.register(
                 MemoryEngineConfig(
-                    id="cth-memory",
-                    type="cth_mcp_memory",
+                    id="archolith-memory",
+                    type="archolith_memory",
                     enabled=True,
                     priority=10,
                     base_url=settings.memory_api_url,
                     api_key_env="MEMORY_API_KEY",
                 )
             )
-            logger.info("memory_engine_auto_registered", engine_id="cth-memory", base_url=settings.memory_api_url)
+            logger.info("memory_engine_auto_registered", engine_id="archolith-memory", base_url=settings.memory_api_url)
 
 
 async def _init_neo4j_with_retry(settings, max_retries: int = 3, backoff_base: float = 1.0) -> bool:

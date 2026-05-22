@@ -1,7 +1,7 @@
 """Memory engine registration and outbound promotion adapters.
 
-This package implements the promotion boundary between the context-engine
-proxy's session-local curation and durable external memory systems. The proxy
+This package implements the promotion boundary between the archolith-proxy's
+session-local curation and durable external memory systems. The proxy
 decides *what* is worth promoting; adapters decide *how* to write it.
 """
 

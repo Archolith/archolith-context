@@ -104,7 +104,7 @@ class MemoryEngineConfig(BaseModel):
     """
 
     id: str
-    type: str  # Adapter type: "cth_mcp_memory", "mem0", "zep", "generic_http"
+    type: str  # Adapter type: "archolith_memory", "mem0", "zep", "generic_http"
     enabled: bool = True
     priority: int = 0  # Higher = preferred default
     base_url: str = ""

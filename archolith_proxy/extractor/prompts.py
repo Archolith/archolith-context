@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-SYSTEM_PROMPT = """You are a fact extraction assistant for a coding session context engine.
+SYSTEM_PROMPT = """You are a fact extraction assistant for the Archolith context compression proxy.
 Your job is to analyze an AI assistant's response and the user's request from a coding
 session, and extract structured facts that will be useful for future context assembly.
 
