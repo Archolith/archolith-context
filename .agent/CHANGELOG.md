@@ -1,5 +1,20 @@
 # Changelog — cth.context-engine
 
+## 2026-05-22 — Caller Compatibility Test Plan
+
+- **Compatibility plan added**: Created `.agent/plans/archolith-caller-compat-plan.md` to define how `archolith-proxy` should be tested against major callers before making public compatibility claims
+- **Caller matrix scoped**: Split callers into reference OpenAI SDK clients, OpenAI-compatible coding harnesses, and first-party clients (`Claude Code`, `Codex`) with per-caller pass/setup/adapter/policy/client-blocked statuses
+- **Policy guardrails captured**: Documented the rule that API/commercial auth is the only safe compatibility lane for first-party provider clients unless broader approval is obtained
+- **Budgeted execution order**: Defined zero-token pre-flight gates, shared smoke scenarios, and a strict caller order so compatibility can be proven without burning unnecessary model spend
+
+## 2026-05-22 — Root Open-Source Documentation Set
+
+- **Root docs created**: Added repository-root `README.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md`, and `LICENSE` to support the open-source release path for `archolith-proxy`
+- **README grounded in repo state**: Documented the proxy-first product positioning, OpenAI-compatible quick start, session model, recall tool, graph backends, and the committed `2026-05-21` benchmark audit rather than stale placeholder numbers
+- **Architecture captured**: Added a repository-root architecture walkthrough covering request lifecycle, context assembly, smart tail rewriting, hidden recall interception, graph backend choices, observability surfaces, and current config caveats
+- **Contribution path documented**: Added local setup, `uv` workflow, test/lint commands, and PR expectations aligned with the current Python/FastAPI stack
+- **License surfaced**: Added Apache 2.0 license text at the repo root with `2026 Charles Harvey` copyright
+
 ## 2026-05-21 — Security, Resilience, Concurrency, and Memory Alignment Audit Templates
 
 - **Audit Templates Added**: Created four new template files inside `.agent/` directory to structure ongoing system audits:

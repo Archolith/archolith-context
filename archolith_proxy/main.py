@@ -447,6 +447,49 @@ def create_app() -> FastAPI:
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
         }
 
+    # --- Runtime config admin endpoints ---
+
+    TUNABLE_FIELDS = {
+        "context_token_budget", "coherence_tail_size", "max_tail_messages",
+        "cold_start_turns", "cold_start_token_threshold",
+        "assembly_min_savings_ratio", "assembly_min_input_tokens",
+        "assembly_latency_budget_ms", "session_ttl_hours",
+        "embedding_enabled", "compaction_enabled", "query_rewrite_enabled",
+        "session_recall_tool_enabled",
+    }
+
+    @app.get("/admin/config")
+    async def get_config(admin: None = Depends(require_admin_token)) -> dict:
+        """Return current runtime-tunable configuration."""
+        settings = get_settings()
+        return {k: getattr(settings, k) for k in sorted(TUNABLE_FIELDS)}
+
+    @app.patch("/admin/config")
+    @app.post("/admin/config")
+    async def update_config(request: Request, admin: None = Depends(require_admin_token)) -> dict:
+        """Update runtime-tunable configuration fields.
+
+        Accepts a JSON object with one or more tunable fields. Changes take
+        effect immediately for subsequent requests (no restart needed).
+        """
+        body = await request.json()
+        settings = get_settings()
+        updated = {}
+        rejected = {}
+        for key, value in body.items():
+            if key not in TUNABLE_FIELDS:
+                rejected[key] = "not a tunable field"
+                continue
+            expected_type = type(getattr(settings, key))
+            try:
+                coerced = expected_type(value)
+                setattr(settings, key, coerced)
+                updated[key] = coerced
+                logger.info("config_updated", field=key, value=coerced)
+            except (ValueError, TypeError) as e:
+                rejected[key] = f"invalid value: {e}"
+        return {"updated": updated, "rejected": rejected}
+
     # --- Sessions admin endpoints ---
     @app.get("/sessions")
     async def list_sessions(admin: None = Depends(require_admin_token)) -> dict:
