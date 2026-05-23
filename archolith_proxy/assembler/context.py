@@ -24,6 +24,7 @@ import structlog
 from archolith_proxy.config import get_settings
 from archolith_proxy.graph.backend import get_backend
 
+from archolith_proxy.assembler.compress import compress_facts_batch
 from archolith_proxy.assembler.intent import (
     TurnIntent, classify_intent, DOMAIN_TO_FACT_TYPES,
 )
@@ -230,11 +231,14 @@ def _format_session_overview(
 def _format_relevant_facts(
     facts: list[dict],
     turn_number: int,
-) -> str:
-    """Format the per-turn relevant facts section.
+) -> tuple[str, float]:
+    """Format the per-turn relevant facts section with compression.
 
-    This section changes every turn as different facts are relevant.
+    Compresses each fact to its densest usable form at render time.
     Sorted by priority, then confidence, then recency.
+
+    Returns:
+        Tuple of (formatted_text, compression_ratio).
     """
     parts = ["=== RELEVANT CONTEXT ==="]
     parts.append("")
@@ -249,8 +253,10 @@ def _format_relevant_facts(
         reverse=True,
     )
 
+    compression_ratio = 1.0
     if sorted_facts:
-        for f in sorted_facts:
+        compressed, compression_ratio = compress_facts_batch(sorted_facts)
+        for f in compressed:
             content = f.get("content", "")
             fact_type = f.get("fact_type", "observation")
             turn = f.get("source_turn", "?")
@@ -259,7 +265,7 @@ def _format_relevant_facts(
         parts.append("(no facts above relevance threshold)")
 
     parts.append("")
-    return "\n".join(parts)
+    return "\n".join(parts), compression_ratio
 
 
 def _format_context_block(
@@ -269,22 +275,23 @@ def _format_context_block(
     decisions: list[dict],
     turn_number: int,
     active_fact_count: int = 0,
-) -> str:
+) -> tuple[str, float]:
     """Format graph data into a structured context block with two tiers.
 
     Tier 1 — Session Overview (stable, cacheable):
     Session goal, files touched, decisions, fact count.
 
     Tier 2 — Relevant Facts (per-turn, query-dependent):
-    Budgeted facts sorted by relevance.
+    Budgeted facts sorted by relevance, compressed at render time.
 
-    The overview section comes first to benefit from prompt caching
-    (stable prefix across turns). The facts section follows.
+    Returns:
+        Tuple of (formatted_block, compression_ratio).
     """
     overview = _format_session_overview(goal, files, decisions, turn_number, active_fact_count)
-    facts_section = _format_relevant_facts(facts, turn_number)
+    facts_section, compression_ratio = _format_relevant_facts(facts, turn_number)
 
-    return overview + "\n" + facts_section + f"[End of session context — current turn: {turn_number}]"
+    block = overview + "\n" + facts_section + f"[End of session context — current turn: {turn_number}]"
+    return block, compression_ratio
 
 
 def _budget_facts(
@@ -536,8 +543,8 @@ async def assemble_context(
         intent=intent,
     )
 
-    # Format the context block with two tiers (overview + relevant facts)
-    context_text = _format_context_block(
+    # Format the context block with two tiers (overview + compressed facts)
+    context_text, compression_ratio = _format_context_block(
         goal=goal,
         facts=budgeted_facts,
         files=files,
@@ -564,6 +571,7 @@ async def assemble_context(
         session_id=session_id,
         files_selected=files,
         decisions_selected=decisions,
+        compression_ratio=compression_ratio,
     )
 
     logger.info(
@@ -578,6 +586,7 @@ async def assemble_context(
         decisions=len(decisions),
         token_estimate=context_tokens,
         budget=settings.context_token_budget,
+        compression_ratio=round(compression_ratio, 2),
     )
 
     return result

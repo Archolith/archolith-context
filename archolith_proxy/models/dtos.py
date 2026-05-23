@@ -18,6 +18,7 @@ class AssembledContext(BaseModel):
     session_id: str = ""
     files_selected: list[dict] = Field(default_factory=list)
     decisions_selected: list[dict] = Field(default_factory=list)
+    compression_ratio: float = 1.0
 
 
 class ExtractionResult(BaseModel):
@@ -93,6 +94,9 @@ class TurnTrace(BaseModel):
     invalidations_attempted: int = 0
     invalidations_matched: int = 0
     extracted_facts: list[dict] = Field(default_factory=list)
+
+    # Compression
+    compression_ratio: float = 1.0
 
     # Recall
     recall_used: bool = False

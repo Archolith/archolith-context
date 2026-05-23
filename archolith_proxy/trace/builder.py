@@ -71,6 +71,7 @@ class TraceBuilder:
         rewritten_tokens: int = 0,
         savings_tokens: int = 0,
         savings_ratio: float = 0.0,
+        compression_ratio: float = 1.0,
     ) -> None:
         self._data["assembly_mode"] = mode
         self._data["assembly_reason"] = reason
@@ -81,6 +82,7 @@ class TraceBuilder:
         self._data["rewritten_tokens"] = rewritten_tokens
         self._data["savings_tokens"] = savings_tokens
         self._data["savings_ratio"] = savings_ratio
+        self._data["compression_ratio"] = compression_ratio
 
     def set_response(
         self,

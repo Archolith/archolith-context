@@ -28,6 +28,7 @@ from archolith_proxy.proxy.live import (
 )
 from archolith_proxy.proxy.streaming import ResponseCapture, stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _non_streaming_to_sse
 from archolith_proxy.proxy.upstream import RETRYABLE_STATUS_CODES, upstream_request_with_retry
+from archolith_proxy.rtk import filter_request_body
 from archolith_proxy.trace.builder import TraceBuilder
 from archolith_proxy.trace.store import get_trace_store
 
@@ -317,6 +318,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         rewritten_tokens=rewritten_tokens,
         savings_tokens=savings,
         savings_ratio=savings_ratio,
+        compression_ratio=assembled.compression_ratio if assembled else 1.0,
     )
 
     record_assembly_mode(assembly_mode)
@@ -347,6 +349,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         body = inject_recall_tool(body)
         recall_injected = True
 
+    body = filter_request_body(body, enabled=settings.rtk_enabled)
     request_body = json.dumps(body).encode("utf-8")
 
     if req.stream:
@@ -616,11 +619,12 @@ async def _handle_streaming(
                             strip_recall_tool(body_dict)
 
                             # Re-send as non-streaming for reliable interception
-                            resend_body = json.dumps({
+                            resend_payload = filter_request_body({
                                 **body_dict,
                                 "stream": False,
                                 "messages": resend_messages,
-                            }).encode("utf-8")
+                            }, enabled=settings.rtk_enabled)
+                            resend_body = json.dumps(resend_payload).encode("utf-8")
 
                             try:
                                 second_resp = await upstream_request_with_retry(
@@ -685,11 +689,12 @@ async def _handle_streaming(
                                         second_recall_tc.get("id", "recall_1"), second_recall_text,
                                     ))
 
-                                    third_body = json.dumps({
+                                    third_payload = filter_request_body({
                                         **body_dict,
                                         "stream": False,
                                         "messages": third_messages,
-                                    }).encode("utf-8")
+                                    }, enabled=settings.rtk_enabled)
+                                    third_body = json.dumps(third_payload).encode("utf-8")
 
                                     try:
                                         third_resp = await upstream_request_with_retry(
