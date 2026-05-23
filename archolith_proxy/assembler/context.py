@@ -357,12 +357,17 @@ async def assemble_context(
     """
     settings = get_settings()
 
-    # Cold start check: don't assemble until we have enough graph data
-    if turn_number < settings.cold_start_turns and input_token_estimate < settings.cold_start_token_threshold:
+    # Cold start check: don't assemble until we have enough real user turns.
+    # Agentic clients (OpenCode, Claude Code) send multiple API requests per
+    # user turn (one per tool-call round trip), so the backend's request
+    # counter inflates quickly. Count actual user-role messages instead.
+    user_turn_count = sum(1 for m in (messages or []) if m.get("role") == "user")
+    if user_turn_count < settings.cold_start_turns and input_token_estimate < settings.cold_start_token_threshold:
         logger.debug(
             "cold_start_passthrough",
             session_id=session_id,
             turn=turn_number,
+            user_turns=user_turn_count,
             estimated_tokens=input_token_estimate,
             threshold_turns=settings.cold_start_turns,
             threshold_tokens=settings.cold_start_token_threshold,
