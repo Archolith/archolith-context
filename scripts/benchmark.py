@@ -185,6 +185,18 @@ def set_proxy_budget(client: httpx.Client, proxy_url: str, budget: int) -> bool:
         return False
 
 
+def snapshot_proxy_config(client: httpx.Client, proxy_url: str) -> dict:
+    """Capture the proxy's full runtime config for experiment recording."""
+    base = _proxy_base(proxy_url)
+    try:
+        resp = client.get(f"{base}/admin/config", timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return {}
+
+
 def estimate_tokens(text: str | None) -> int:
     if not text:
         return 1
@@ -493,6 +505,107 @@ def run_benchmark(
     }
 
 
+def run_experiment(
+    experiment_name: str,
+    scenarios: list,
+    budgets: list,
+    proxy_url: str,
+    direct_url: str,
+    model: str,
+    output_dir: Path,
+    resume: bool,
+    api_key: str,
+    max_turns: int | None = None,
+    proxy_config_overrides: dict | None = None,
+) -> Path:
+    """Run a named experiment: apply config overrides, run benchmarks, save with metadata.
+
+    Returns the experiment directory path.
+    """
+    experiment_dir = output_dir / "experiments" / experiment_name
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+
+    with httpx.Client() as client:
+        # Apply config overrides if provided
+        if proxy_config_overrides:
+            base = _proxy_base(proxy_url)
+            resp = client.post(
+                f"{base}/admin/config",
+                json=proxy_config_overrides,
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                print(f"  Config overrides applied: {result.get('updated', {})}")
+                if result.get("rejected"):
+                    print(f"  WARNING: rejected overrides: {result['rejected']}")
+            else:
+                print(f"  WARNING: Failed to apply config overrides: {resp.status_code}")
+
+        # Snapshot the active proxy config
+        config_snapshot = snapshot_proxy_config(client, proxy_url)
+
+    # Save experiment metadata
+    metadata = {
+        "experiment": experiment_name,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "proxy_url": proxy_url,
+        "direct_url": direct_url,
+        "model": model,
+        "budgets": budgets,
+        "scenarios": [s.name for s in scenarios],
+        "proxy_config": config_snapshot,
+        "config_overrides": proxy_config_overrides or {},
+    }
+    with open(experiment_dir / "experiment.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+    print(f"  Experiment metadata saved to {experiment_dir / 'experiment.json'}")
+
+    # Run all scenarios × budgets
+    all_results = []
+    for scenario in scenarios:
+        for budget in budgets:
+            print(f"\n{'#'*70}")
+            print(f"  [{experiment_name}] Running: {scenario.name} @ budget={budget or 'default'}")
+            print(f"{'#'*70}")
+
+            data = run_benchmark(
+                scenario, max_turns, proxy_url, direct_url, model,
+                budget, experiment_dir, resume, api_key=api_key,
+            )
+            data["experiment"] = experiment_name
+            data["proxy_config"] = config_snapshot
+            print_summary(data)
+            save_results(data, experiment_dir)
+            all_results.append(data)
+
+    # Save experiment summary
+    summary_rows = []
+    for data in all_results:
+        s = data["summary"]
+        q = data.get("quality", {})
+        summary_rows.append({
+            "scenario": data["scenario"],
+            "budget": data["budget"],
+            "turns": data["turns_run"],
+            "savings_ratio": s["overall_savings_ratio"],
+            "direct_tokens": s["total_direct_input_tokens"],
+            "proxy_tokens": s["total_proxy_input_tokens"],
+            "savings_tokens": s["total_savings_tokens"],
+            "avg_proxy_recall": q.get("avg_proxy_recall"),
+            "avg_direct_recall": q.get("avg_direct_recall"),
+            "recall_preservation": q.get("recall_preservation"),
+        })
+
+    metadata["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    metadata["results_summary"] = summary_rows
+    with open(experiment_dir / "experiment.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    print(f"\n  Experiment '{experiment_name}' complete — {len(all_results)} runs saved to {experiment_dir}")
+    return experiment_dir
+
+
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
@@ -608,6 +721,10 @@ def main():
                         help="Resume from last checkpoint if available")
     parser.add_argument("--api-key", default=None,
                         help="API key for upstream (overrides UPSTREAM_API_KEY from .env)")
+    parser.add_argument("--experiment", type=str, default=None,
+                        help="Named experiment — snapshots proxy config, saves to experiments/<name>/")
+    parser.add_argument("--config", type=str, default=None,
+                        help="JSON proxy config overrides (e.g., '{\"coherence_tail_size\": 5}')")
     args = parser.parse_args()
 
     if args.list:
@@ -654,6 +771,40 @@ def main():
         except Exception as e:
             print(f"ERROR: Can't reach proxy: {e}", file=sys.stderr)
             sys.exit(1)
+
+    # Parse config overrides
+    config_overrides = None
+    if args.config:
+        try:
+            config_overrides = json.loads(args.config)
+        except json.JSONDecodeError as e:
+            print(f"ERROR: Invalid --config JSON: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # Experiment mode: tagged run with config snapshot
+    if args.experiment:
+        run_experiment(
+            experiment_name=args.experiment,
+            scenarios=scenarios,
+            budgets=budgets,
+            proxy_url=args.proxy,
+            direct_url=args.direct,
+            model=args.model,
+            output_dir=args.output_dir,
+            resume=args.resume,
+            api_key=api_key,
+            max_turns=args.turns,
+            proxy_config_overrides=config_overrides,
+        )
+        return
+
+    # Apply config overrides in non-experiment mode too
+    if config_overrides:
+        with httpx.Client() as c:
+            base = _proxy_base(args.proxy)
+            resp = c.post(f"{base}/admin/config", json=config_overrides, timeout=5)
+            if resp.status_code == 200:
+                print(f"  Config overrides applied: {resp.json().get('updated', {})}")
 
     # Run the matrix
     all_results = []
