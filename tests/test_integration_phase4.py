@@ -18,8 +18,11 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from archolith_proxy.config import reset_settings
 from archolith_proxy.main import create_app
 from archolith_proxy.metrics import get_metrics
+from archolith_proxy.models.dtos import AssembledContext, ExtractionResult
+from archolith_proxy.trace.store import get_trace_store, reset_trace_store
 
 
 # --- Shared mock infrastructure ---
@@ -431,6 +434,83 @@ class TestStreamingRetry:
             real_settings.upstream_retry_backoff_base_s = original_backoff
 
 
+class TestTraceAccounting:
+    """Test that trace accounting matches the actual outbound payload."""
+
+    def setup_method(self):
+        reset_settings()
+        reset_trace_store()
+
+    @pytest.mark.asyncio
+    async def test_skipped_low_tokens_trace_matches_passthrough_payload(self, monkeypatch):
+        monkeypatch.setenv("UPSTREAM_API_KEY", "sk-test")
+        reset_settings()
+        reset_trace_store()
+
+        app = create_app()
+        captured: dict[str, dict] = {}
+        original_messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Turn 1"},
+            {"role": "assistant", "content": "Response 1"},
+            {"role": "user", "content": "Turn 2"},
+            {"role": "assistant", "content": "Response 2"},
+            {"role": "user", "content": "Turn 3"},
+        ]
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            captured["body"] = json.loads(request.content.decode())
+            return httpx.Response(200, json=MOCK_RESPONSE)
+
+        mock_transport = httpx.MockTransport(mock_handler)
+        assembled = AssembledContext(
+            system_message={"role": "system", "content": "graph context"},
+            graph_context=[{"role": "system", "content": "graph context"}],
+            coherence_tail=[],
+            token_estimate=500,
+            facts_retrieved=3,
+            session_id="session-trace",
+        )
+
+        with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+             patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+             patch("archolith_proxy.openai.chat.get_backend") as mock_get_backend, \
+             patch("archolith_proxy.proxy.locks.wait_for_prior_extraction", new_callable=AsyncMock), \
+             patch("archolith_proxy.openai.chat.assemble_context", new_callable=AsyncMock, return_value=assembled), \
+             patch("archolith_proxy.openai.chat.extract_facts", new_callable=AsyncMock, return_value=None):
+
+            mock_backend = AsyncMock()
+            mock_backend.get_turn_number.return_value = 3
+            mock_backend.find_session_by_id.return_value = {"goal": "Preserve full replay for short sessions"}
+            mock_get_backend.return_value = mock_backend
+            mock_resolve.return_value = ("session-trace", False)
+
+            async with app.router.lifespan_context(app):
+                app.state.http_client = httpx.AsyncClient(transport=mock_transport)
+                app.state.extractor_client = httpx.AsyncClient(transport=mock_transport)
+                transport = ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                    resp = await ac.post(
+                        "/v1/chat/completions",
+                        json={"model": "test-model", "messages": original_messages},
+                    )
+                    assert resp.status_code == 200
+
+                await asyncio.sleep(0)
+
+        assert captured["body"]["messages"] == original_messages
+
+        turns = await get_trace_store().get_session_turns("session-trace")
+        assert turns
+        trace = turns[-1]
+        assert trace.assembly_mode == "skipped_low_tokens"
+        assert trace.savings_tokens == 0
+        assert trace.rewritten_tokens == trace.input_tokens
+        assert trace.rewritten_messages == trace.original_messages
+
+
 def _build_sse_chunks(text: str, model: str = "test-model") -> str:
     """Build SSE stream from text content."""
     lines = []
@@ -631,3 +711,163 @@ class TestRequestLoggingMiddleware:
                 assert resp.status_code == 200
                 # After the request, context vars should be cleared
                 # (middleware clears at start of next request)
+
+
+class TestExtractionPipeline:
+    """Test extraction input shaping and metrics semantics."""
+
+    @pytest.mark.asyncio
+    async def test_run_extraction_prefers_recent_tool_results(self):
+        """The extractor should keep newest tool outputs within the prompt budget."""
+        from archolith_proxy.openai.chat import _run_extraction
+
+        captured: dict[str, str | None] = {}
+
+        async def fake_extract_facts(**kwargs):
+            captured["tool_results"] = kwargs.get("tool_results")
+            return ExtractionResult(
+                facts=[{
+                    "content": "The cold start gate now uses user_turn_count as the sole activation check.",
+                    "fact_type": "tool_result",
+                    "confidence": 1.0,
+                }],
+                files_touched=["archolith_proxy/assembler/context.py"],
+                decisions=[],
+                invalidated_fact_ids=[],
+                turn_number=7,
+            )
+
+        mock_backend = AsyncMock()
+        mock_backend.get_active_facts.return_value = []
+        mock_backend.store_facts_batch.return_value = ["fact-1"]
+        mock_backend.get_active_fact_count.return_value = 1
+
+        messages = [
+            {"role": "user", "content": "Explain the current cold start gate."},
+            {"role": "tool", "name": "read_file", "content": "OLD_TOOL\n" + ("x" * 5000)},
+            {
+                "role": "tool",
+                "name": "read_file",
+                "content": "<path>archolith_proxy/assembler/context.py</path>\nRECENT_TOOL: user_turn_count is the only cold-start gate.",
+            },
+        ]
+
+        with patch("archolith_proxy.openai.chat.extract_facts", side_effect=fake_extract_facts), \
+             patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+             patch("archolith_proxy.openai.chat._compute_fact_embeddings", new=AsyncMock(return_value=[[0.1, 0.2, 0.3]])):
+            await _run_extraction(
+                client=AsyncMock(),
+                session_id="session-extract",
+                turn_number=7,
+                messages=messages,
+                response_text="The code now counts only user messages before activating graph assembly.",
+            )
+
+        tool_results = captured["tool_results"] or ""
+        assert "RECENT_TOOL" in tool_results
+        assert "user_turn_count is the only cold-start gate" in tool_results
+
+    @pytest.mark.asyncio
+    async def test_run_extraction_empty_counts_as_empty_not_success(self):
+        """Zero-fact parses should not increment extraction_successes."""
+        from archolith_proxy.openai.chat import _run_extraction
+
+        metrics = get_metrics()
+        old_successes = metrics["extraction_successes"]
+        old_empties = metrics["extraction_empties"]
+        old_failures = metrics["extraction_failures"]
+        metrics["extraction_successes"] = 0
+        metrics["extraction_empties"] = 0
+        metrics["extraction_failures"] = 0
+
+        try:
+            with patch(
+                "archolith_proxy.openai.chat.extract_facts",
+                new=AsyncMock(
+                    return_value=ExtractionResult(
+                        facts=[],
+                        files_touched=[],
+                        decisions=[],
+                        invalidated_fact_ids=[],
+                        turn_number=3,
+                    )
+                ),
+            ), patch("archolith_proxy.openai.chat.get_backend", return_value=AsyncMock()):
+                await _run_extraction(
+                    client=AsyncMock(),
+                    session_id="session-empty",
+                    turn_number=3,
+                    messages=[{"role": "user", "content": "Summarize the turn."}],
+                    response_text="I checked the file and have nothing else to add.",
+                )
+
+            assert metrics["extraction_successes"] == 0
+            assert metrics["extraction_empties"] == 1
+            assert metrics["extraction_failures"] == 0
+        finally:
+            metrics["extraction_successes"] = old_successes
+            metrics["extraction_empties"] = old_empties
+            metrics["extraction_failures"] = old_failures
+
+    @pytest.mark.asyncio
+    async def test_streaming_trace_records_extraction_before_store(self):
+        """Streaming traces should include extraction data and response summary."""
+        app = create_app()
+        reset_trace_store()
+        sse_content = _build_sse_chunks("Hello world from upstream")
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            return httpx.Response(
+                200,
+                content=sse_content.encode(),
+                headers={"Content-Type": "text/event-stream"},
+            )
+
+        mock_transport = httpx.MockTransport(mock_handler)
+        mock_backend = AsyncMock()
+        mock_backend.get_turn_number.return_value = 5
+        mock_backend.find_session_by_id.return_value = {"goal": "Explain the cold start gate"}
+
+        async def fake_run_extraction(**kwargs):
+            trace_builder = kwargs["trace_builder"]
+            trace_builder.set_extraction(
+                facts_stored=2,
+                duplicates_skipped=0,
+                extraction_latency_ms=12.0,
+                extracted_facts=[{"content": "Recent fact", "type": "tool_result"}],
+            )
+
+        with patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+             patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+             patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+             patch("archolith_proxy.openai.chat.assemble_context", new_callable=AsyncMock, return_value=None), \
+             patch("archolith_proxy.proxy.locks.wait_for_prior_extraction", new_callable=AsyncMock), \
+             patch("archolith_proxy.openai.chat._run_extraction", side_effect=fake_run_extraction):
+            mock_resolve.return_value = ("session-stream-trace", False)
+
+            async with app.router.lifespan_context(app):
+                app.state.http_client = httpx.AsyncClient(transport=mock_transport)
+                app.state.extractor_client = AsyncMock()
+                app.state.neo4j_ready = True
+                transport = ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                    resp = await ac.post(
+                        "/v1/chat/completions",
+                        json={
+                            "model": "test-model",
+                            "messages": [{"role": "user", "content": "Hello"}],
+                            "stream": True,
+                        },
+                    )
+                    assert resp.status_code == 200
+                    assert '"content": "Hello "' in resp.text
+                    assert "[DONE]" in resp.text
+
+        turns = await get_trace_store().get_session_turns("session-stream-trace")
+        assert turns
+        trace = turns[-1]
+        assert trace.facts_stored == 2
+        assert trace.extracted_facts == [{"content": "Recent fact", "type": "tool_result"}]
+        assert trace.upstream_response_summary.strip() == "Hello world from upstream"

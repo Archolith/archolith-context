@@ -635,6 +635,7 @@ class TestStreamingRecallInterception:
 
                     mock_backend = AsyncMock()
                     mock_backend.get_turn_number.return_value = 1
+                    mock_backend.find_session_by_id.return_value = None
                     mock_backend.get_active_facts.return_value = []
                     mock_backend.get_active_fact_count.return_value = 0
                     mock_backend.find_matching_fact_ids.return_value = []

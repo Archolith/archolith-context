@@ -24,6 +24,7 @@ import httpx
 import structlog
 
 from archolith_proxy.metrics import get_metrics, record_metric
+from archolith_proxy.rtk import filter_request_body
 
 logger = structlog.get_logger()
 
@@ -140,10 +141,12 @@ async def resend_with_recall(
         build_tool_result_message,
     )
     from archolith_proxy.proxy.upstream import upstream_request_with_retry
+    from archolith_proxy.config import get_settings
 
     # Track recall metadata across rounds
     tracked_questions: list[str] = list(recall_questions or [])
     tracked_facts: list[int] = list(facts_returned_counts or [])
+    settings = get_settings()
 
     # Strip the recall tool from the tools array for the re-send
     body_dict = json.loads(original_body)
@@ -157,6 +160,7 @@ async def resend_with_recall(
             "stream": False,
             "messages": current_messages,
         }
+        resend_payload = filter_request_body(resend_payload, enabled=settings.rtk_enabled)
         # Debug: log the message structure being sent for the resend
         msg_summary = []
         for m in current_messages:

@@ -409,7 +409,11 @@ def create_app() -> FastAPI:
                 pass
 
         # Derived rates
-        total_extractions = get_metrics()["extraction_successes"] + get_metrics()["extraction_failures"]
+        total_extractions = (
+            get_metrics()["extraction_successes"]
+            + get_metrics()["extraction_failures"]
+            + get_metrics()["extraction_empties"]
+        )
         extraction_success_rate = (
             round(get_metrics()["extraction_successes"] / total_extractions, 4)
             if total_extractions > 0 else 0.0
@@ -445,6 +449,7 @@ def create_app() -> FastAPI:
             "assembly_modes": dict(get_metrics()["assembly_modes"]),
             "user_turns_by_session": user_turns_by_session,
             "extraction_successes": get_metrics()["extraction_successes"],
+            "extraction_empties": get_metrics()["extraction_empties"],
             "extraction_failures": get_metrics()["extraction_failures"],
             "extraction_success_rate": extraction_success_rate,
             "upstream_errors": get_metrics()["upstream_errors"],

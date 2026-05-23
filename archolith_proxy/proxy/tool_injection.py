@@ -277,7 +277,7 @@ async def handle_recall_tool_call(
         return "No relevant facts found for this query."
 
     # Format results
-    result_text = _format_relevant_facts(budgeted, turn_number)
+    result_text, _compression_ratio = _format_relevant_facts(budgeted, turn_number)
 
     logger.info(
         "recall_tool_handled",

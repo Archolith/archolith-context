@@ -109,6 +109,44 @@ class TestExecuteRecall:
         assert result is None
 
 
+class TestHandleRecallToolCallFormatting:
+    """Test real formatting behavior of the recall tool handler."""
+
+    @pytest.mark.asyncio
+    async def test_handle_recall_tool_call_returns_string_content(self):
+        from types import SimpleNamespace
+
+        from archolith_proxy.proxy.tool_injection import handle_recall_tool_call
+
+        mock_backend = AsyncMock()
+        mock_backend.get_active_facts.return_value = [
+            {
+                "content": "API key lives in .env at the project root.",
+                "fact_type": "observation",
+                "confidence": 0.9,
+                "source_turn": 1,
+            }
+        ]
+        settings = SimpleNamespace(
+            query_rewrite_enabled=False,
+            embedding_enabled=False,
+            embedding_api_key="",
+        )
+
+        with patch("archolith_proxy.config.get_settings", return_value=settings), \
+             patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
+            result = await handle_recall_tool_call(
+                http_client=AsyncMock(),
+                session_id="session-1",
+                question="Where is the API key?",
+                turn_number=2,
+            )
+
+        assert isinstance(result, str)
+        assert "RELEVANT CONTEXT" in result
+        assert "API key lives in .env" in result
+
+
 # --- build_resend_messages tests ---
 
 class TestBuildResendMessages:

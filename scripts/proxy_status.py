@@ -108,7 +108,7 @@ def cmd_metrics() -> None:
     user_turns = d.get("user_turns_by_session", {})
     if user_turns:
         print(_c(CYAN, f"  user_turns     ") + "  ".join(
-            f"{sid[:8]}…={v}" for sid, v in user_turns.items()
+            f"{sid[:8]}={v}" for sid, v in user_turns.items()
         ))
     else:
         print(_c(CYAN, f"  user_turns     ") + "(no sessions)")
@@ -116,6 +116,12 @@ def cmd_metrics() -> None:
     errs = d.get("upstream_errors", 0)
     err_str = _c(RED, str(errs)) if errs else str(errs)
     print(_c(CYAN, f"  upstream_errors") + f" {err_str}")
+
+    successes = d.get("extraction_successes", 0)
+    empties = d.get("extraction_empties", 0)
+    failures = d.get("extraction_failures", 0)
+    extraction_str = f"stored={successes}  empty={empties}  failed={failures}"
+    print(_c(CYAN, f"  extractions    ") + extraction_str)
 
     savings_rate = d.get("token_savings_rate", 0)
     savings_str = f"{savings_rate*100:.1f}%  ({d.get('token_savings_estimated', 0):,} tokens saved)"

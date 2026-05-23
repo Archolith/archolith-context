@@ -63,7 +63,7 @@ def rewrite_messages(
     This preserves the conversational flow the model needs while compressing
     the expensive assistant responses in the middle of long conversations.
     """
-    if not assembled_context or not assembled_context.graph_context:
+    if not assembled_context or not getattr(assembled_context, "graph_context", None):
         return original_messages
 
     # Split: system message, non-system messages
@@ -83,9 +83,13 @@ def rewrite_messages(
 
     # Build the session overview from graph context (goal, files, decisions)
     # but NOT the flat fact list — facts get woven into per-turn summaries
-    graph_content = "\n\n".join(
-        m.get("content", "") for m in assembled_context.graph_context
-    )
+    system_context = getattr(assembled_context, "system_message", None) or {}
+    graph_context = getattr(assembled_context, "graph_context", None) or []
+    graph_content = system_context.get("content", "") if isinstance(system_context, dict) else ""
+    if not graph_content:
+        graph_content = "\n\n".join(
+            m.get("content", "") for m in graph_context if isinstance(m, dict)
+        )
 
     # Build result: system message with session overview
     result = []

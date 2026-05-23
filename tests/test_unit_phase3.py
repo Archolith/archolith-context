@@ -288,6 +288,30 @@ class TestRewriteMessages:
         assert "assembled context" in result[0]["content"]
         assert result[0]["role"] == "system"
 
+    def test_prefers_system_message_content_when_graph_context_is_stale(self):
+        """Rewriting should use the current system_message content.
+
+        The compaction path mutates AssembledContext.system_message before
+        re-running rewrite_messages(). If rewrite_messages() reads stale
+        graph_context content instead, the compacted payload never reaches
+        the upstream request.
+        """
+        original = [
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write code"},
+        ]
+        assembled = AssembledContext(
+            system_message={"role": "system", "content": "compacted context"},
+            graph_context=[{"role": "system", "content": "stale pre-compaction context"}],
+            coherence_tail=[],
+            token_estimate=100,
+            facts_retrieved=5,
+            session_id="test",
+        )
+        result = _rewrite_messages(original, assembled, coherence_tail_size=3)
+        assert "compacted context" in result[0]["content"]
+        assert "stale pre-compaction context" not in result[0]["content"]
+
     def test_small_message_count(self):
         """When messages are fewer than tail size, all are kept."""
         original = [

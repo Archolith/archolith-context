@@ -33,6 +33,25 @@ MAX_BUFFER_SIZE = 512 * 1024
 DECISION_TIMEOUT_S = 5.0
 
 
+def _flatten_content(content: object) -> str:
+    """Flatten OpenAI-style content blocks into plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            parts.append(_flatten_content(item))
+        return "\n".join(part for part in parts if part)
+    if isinstance(content, dict):
+        text = content.get("text")
+        if isinstance(text, str):
+            return text
+        nested = content.get("content")
+        if nested is not None:
+            return _flatten_content(nested)
+    return ""
+
+
 class ResponseCapture:
     """Captures streaming response content into a buffer for extraction.
 
@@ -104,7 +123,7 @@ class ResponseCapture:
                     # Non-streaming format: message.content
                     if not delta:
                         message = choices[0].get("message", {})
-                        content = message.get("content")
+                        content = _flatten_content(message.get("content"))
                         if content:
                             texts.append(content)
             except (json.JSONDecodeError, IndexError, KeyError):
@@ -122,7 +141,7 @@ class ResponseCapture:
         choices = response_data.get("choices", [])
         if choices:
             message = choices[0].get("message", {})
-            self._direct_text = message.get("content") or ""
+            self._direct_text = _flatten_content(message.get("content"))
             fr = choices[0].get("finish_reason")
             if fr:
                 self._finish_reason = fr

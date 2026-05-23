@@ -301,9 +301,9 @@ async def qa_extract(request: Request) -> dict:
     if session_id and is_graph_ready():
         try:
             from archolith_proxy.extractor.dedup import deduplicate_facts
-            from archolith_proxy.graph.facts import get_active_facts
+            from archolith_proxy.graph.backend import get_backend
 
-            existing_facts = await get_active_facts(session_id, limit=200)
+            existing_facts = await get_backend().get_active_facts(session_id, limit=200)
             before_count = len(result.facts)
             kept_facts = deduplicate_facts(result.facts, existing_facts)
             skipped_count = before_count - len(kept_facts)
@@ -322,9 +322,9 @@ async def qa_extract(request: Request) -> dict:
     invalidation_info = None
     if session_id and is_graph_ready() and result.invalidated_fact_ids:
         try:
-            from archolith_proxy.graph.facts import find_matching_fact_ids
+            from archolith_proxy.graph.backend import get_backend
 
-            matched_ids = await find_matching_fact_ids(session_id, result.invalidated_fact_ids)
+            matched_ids = await get_backend().find_matching_fact_ids(session_id, result.invalidated_fact_ids)
             invalidation_info = {
                 "invalidation_descriptions": result.invalidated_fact_ids,
                 "matched_fact_ids": matched_ids,

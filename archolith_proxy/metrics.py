@@ -22,6 +22,7 @@ _metrics: dict = {
         "skipped_low_savings": 0,
     },
     "extraction_successes": 0,
+    "extraction_empties": 0,
     "extraction_failures": 0,
     "upstream_errors": 0,
     "neo4j_errors": 0,

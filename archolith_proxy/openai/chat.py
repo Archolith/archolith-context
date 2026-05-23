@@ -37,6 +37,66 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
+def _normalize_message_content(content: object) -> str:
+    """Flatten OpenAI-style message content into plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            text = _normalize_message_content(item)
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        text = content.get("text")
+        if isinstance(text, str):
+            return text
+        nested = content.get("content")
+        if nested is not None:
+            return _normalize_message_content(nested)
+    return ""
+
+
+def _extract_response_text(response_data: dict) -> str:
+    """Extract assistant text from a non-streaming chat completion response."""
+    choices = response_data.get("choices", [])
+    if not choices:
+        return ""
+    message = choices[0].get("message", {})
+    return _normalize_message_content(message.get("content"))
+
+
+def _collect_recent_tool_results(messages: list[dict], max_chars: int = 4000) -> str | None:
+    """Serialize the newest tool results first within the extraction budget."""
+    recent_entries: list[str] = []
+    used = 0
+
+    for msg in reversed(messages):
+        if msg.get("role") != "tool":
+            continue
+
+        content = _normalize_message_content(msg.get("content")).strip()
+        if not content:
+            continue
+
+        tool_name = msg.get("name", "unknown_tool")
+        entry = f"Tool [{tool_name}]:\n{content}"
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        if len(entry) > remaining:
+            entry = entry[:remaining]
+        recent_entries.append(entry)
+        used += len(entry)
+
+    if not recent_entries:
+        return None
+
+    recent_entries.reverse()
+    return "\n\n".join(recent_entries)
+
+
 
 @router.post("/chat/completions")
 async def chat_completions(request: Request, background_tasks: BackgroundTasks) -> Response:
@@ -193,13 +253,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 rewritten_count = len(body["messages"])
                 assembly_mode = "graph"
 
-                # Trace: capture rewritten messages
-                trace_builder.set_rewritten_messages(body.get("messages", []))
-
                 # Estimate token savings
                 rewritten_tokens = estimate_input_tokens(body["messages"])
                 savings = max(0, input_tokens - rewritten_tokens)
-                record_metric("token_savings_estimated", savings)
 
                 # Savings-ratio gate: revert to passthrough if rewriting
                 # doesn't save meaningful tokens. Short/moderate conversations
@@ -216,6 +272,10 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                         savings_ratio=round(savings_ratio, 3),
                     )
                     body["messages"] = original_messages
+                    rewritten_count = original_count
+                    rewritten_tokens = input_tokens
+                    savings = 0
+                    savings_ratio = 0.0
                     assembly_mode = "skipped_low_tokens"
                 elif savings_ratio < settings.assembly_min_savings_ratio:
                     # Rewriting barely saves anything — keep full history
@@ -229,6 +289,10 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                         input_tokens=input_tokens,
                     )
                     body["messages"] = original_messages
+                    rewritten_count = original_count
+                    rewritten_tokens = input_tokens
+                    savings = 0
+                    savings_ratio = 0.0
                     assembly_mode = "skipped_low_savings"
                 else:
                     # Savings justify rewriting — proceed with compaction check
@@ -253,6 +317,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                             if compacted:
                                 # Replace graph context with compacted version
                                 assembled.system_message["content"] = compacted
+                                if assembled.graph_context:
+                                    assembled.graph_context[0] = {
+                                        **assembled.graph_context[0],
+                                        "content": compacted,
+                                    }
+                                else:
+                                    assembled.graph_context = [{"role": "system", "content": compacted}]
                                 # Re-rewrite with compacted context
                                 body["messages"] = rewrite_messages(
                                     original_messages,
@@ -260,8 +331,10 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                                     settings.coherence_tail_size,
                                     max_tail_messages=settings.max_tail_messages,
                                 )
+                                rewritten_count = len(body["messages"])
                                 rewritten_tokens = estimate_input_tokens(body["messages"])
                                 savings = max(0, input_tokens - rewritten_tokens)
+                                savings_ratio = savings / max(input_tokens, 1)
                                 logger.info(
                                     "context_compaction_applied",
                                     session_id=session_id,
@@ -280,6 +353,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                             # Compaction failed — keep the oversized assembled context
                             # (better than passthrough, which would send full history)
 
+                    record_metric("token_savings_estimated", savings)
                     logger.info(
                         "messages_rewritten",
                         session_id=session_id,
@@ -300,6 +374,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                             latency_ms=round(assembly_latency_ms, 1),
                             budget_ms=settings.assembly_latency_budget_ms,
                         )
+
+                # Trace: capture the actual outbound messages after savings gates.
+                trace_builder.set_rewritten_messages(body.get("messages", []))
             else:
                 # assemble_context returned None = cold start
                 assembly_mode = "cold_start"
@@ -406,7 +483,7 @@ async def _handle_streaming(
     Mid-stream errors result in a broken stream.
     """
     settings = get_settings()
-    capture_holder = {"capture": None}
+    capture_holder = {"capture": None, "recall_intercepted": False}
 
     async def stream_generator():
         # --- Phase 1: Connection-level retry ---
@@ -752,40 +829,7 @@ async def _handle_streaming(
                     pass
 
         capture_holder["capture"] = capture
-
-        # Schedule extraction as a background task that runs after streaming completes
-        if session_id and not recall_intercepted:
-            async def post_stream_extraction():
-                cap = capture_holder.get("capture")
-                if cap and cap.get_full_text():
-                    await _run_extraction(
-                        client=request.app.state.extractor_client,
-                        session_id=session_id,
-                        turn_number=turn_number,
-                        messages=messages or [],
-                        response_text=cap.get_full_text(),
-                        truncated=cap.truncated,
-                        session_goal=session_goal,
-                        trace_builder=trace_builder,
-                        promotion_service=getattr(request.app.state, "promotion_service", None),
-                    )
-
-            background_tasks.add_task(post_stream_extraction)
-        elif session_id and recall_intercepted and capture and capture.get_full_text():
-            # For recall interception, schedule extraction for the final response
-            async def post_recall_stream_extraction():
-                await _run_extraction(
-                    client=request.app.state.extractor_client,
-                    session_id=session_id,
-                    turn_number=turn_number,
-                    messages=messages or [],
-                    response_text=capture.get_full_text(),
-                    truncated=capture.truncated,
-                    session_goal=session_goal,
-                    trace_builder=trace_builder,
-                    promotion_service=getattr(request.app.state, "promotion_service", None),
-                )
-            background_tasks.add_task(post_recall_stream_extraction)
+        capture_holder["recall_intercepted"] = recall_intercepted
 
     # Live stream: broadcast response event (streaming — runs after stream completes)
     async def _broadcast_streaming_response():
@@ -795,15 +839,42 @@ async def _handle_streaming(
         )
     background_tasks.add_task(_broadcast_streaming_response)
 
-    # Trace: store turn trace as background task (streaming path)
-    if trace_builder:
-        async def _store_trace_streaming():
+    async def _finalize_streaming_trace_and_extraction():
+        cap = capture_holder.get("capture")
+        response_text = cap.get_full_text() if cap else ""
+
+        if trace_builder:
+            trace_builder.set_response(
+                status=200,
+                latency_ms=0.0,
+                output_tokens=None,
+                response_summary=response_text,
+            )
+
+        if session_id and response_text:
+            try:
+                await _run_extraction(
+                    client=request.app.state.extractor_client,
+                    session_id=session_id,
+                    turn_number=turn_number,
+                    messages=messages or [],
+                    response_text=response_text,
+                    truncated=cap.truncated if cap else False,
+                    session_goal=session_goal,
+                    trace_builder=trace_builder,
+                    promotion_service=getattr(request.app.state, "promotion_service", None),
+                )
+            except Exception:
+                logger.warning("streaming_extraction_finalize_failed", exc_info=True)
+
+        if trace_builder:
             try:
                 trace = trace_builder.build()
                 await get_trace_store().record(trace)
             except Exception:
                 logger.warning("trace_store_failed_streaming", exc_info=True)
-        background_tasks.add_task(_store_trace_streaming)
+
+    background_tasks.add_task(_finalize_streaming_trace_and_extraction)
 
     return StreamingResponse(
         stream_generator(),
@@ -854,6 +925,7 @@ async def _handle_non_streaming(
     # This handles up to 2 recall rounds consistently with the streaming path.
     recall_result = None
     final_data = None
+    response_text = ""
     if recall_injected and session_id:
         try:
             from archolith_proxy.proxy.recall import handle_non_streaming_recall
@@ -895,15 +967,11 @@ async def _handle_non_streaming(
                         status=resp.status_code,
                         latency_ms=0.0,
                         output_tokens=None,
-                        response_summary="",
+                        response_summary=_extract_response_text(final_data),
                     )
 
                 # Schedule extraction for the final response
-                response_text = ""
-                final_choices = final_data.get("choices", [])
-                if final_choices:
-                    final_msg = final_choices[0].get("message", {})
-                    response_text = final_msg.get("content", "") or ""
+                response_text = _extract_response_text(final_data)
 
                 if session_id and response_text:
                     # Determine the messages that led to the final response
@@ -934,11 +1002,7 @@ async def _handle_non_streaming(
     if session_id and not (recall_result and recall_result.recall_used and final_data is not None):
         try:
             data = resp.json()
-            response_text = ""
-            choices = data.get("choices", [])
-            if choices:
-                msg = choices[0].get("message", {})
-                response_text = msg.get("content", "") or ""
+            response_text = _extract_response_text(data)
 
             if response_text:
                 background_tasks.add_task(
@@ -963,7 +1027,7 @@ async def _handle_non_streaming(
                 status=resp.status_code,
                 latency_ms=0.0,
                 output_tokens=None,
-                response_summary="",
+                response_summary=response_text,
             )
 
     # Build and return the response
@@ -1078,27 +1142,18 @@ async def _run_extraction(
         user_message = ""
         for msg in reversed(messages):
             if msg.get("role") == "user":
-                content = msg.get("content", "")
-                if isinstance(content, list):
-                    content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
-                user_message = content
+                user_message = _normalize_message_content(msg.get("content"))
                 break
 
+        response_text = _normalize_message_content(response_text)
         if not user_message and not response_text:
             return
 
         # Strip reasoning blocks from the response before extraction
         response_text = strip_reasoning(response_text)
 
-        # Extract tool results from messages — structured serialization with tool names
-        tool_results_parts = []
-        for msg in messages:
-            if msg.get("role") == "tool":
-                tool_name = msg.get("name", "unknown_tool")
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    tool_results_parts.append(f"Tool [{tool_name}]:\n{content[:2000]}")
-        tool_results = "\n\n".join(tool_results_parts) if tool_results_parts else None
+        # Serialize the newest tool results first so the current turn survives truncation.
+        tool_results = _collect_recent_tool_results(messages, max_chars=4000)
 
         extraction_start = time.monotonic()
         result = await extract_facts(
@@ -1106,7 +1161,7 @@ async def _run_extraction(
             turn_number=turn_number,
             user_message=user_message[:4000],
             assistant_response=response_text[:8000],
-            tool_results=tool_results[:4000] if tool_results else None,
+            tool_results=tool_results,
             session_goal=session_goal,
         )
         extraction_latency_ms = (time.monotonic() - extraction_start) * 1000
@@ -1120,9 +1175,18 @@ async def _run_extraction(
             except Exception as e:
                 logger.warning("session_goal_update_failed", session_id=session_id, error=str(e))
 
-        if not result or not result.facts:
+        if result is None:
+            record_metric("extraction_failures", 1)
+            logger.warning("extraction_result_missing", session_id=session_id, turn=turn_number)
+            if trace_builder:
+                trace_builder.set_extraction(extraction_latency_ms=extraction_latency_ms)
+            return
+
+        if not result.facts:
             logger.info("extraction_empty", session_id=session_id, turn=turn_number)
-            record_metric("extraction_successes", 1)
+            record_metric("extraction_empties", 1)
+            if trace_builder:
+                trace_builder.set_extraction(extraction_latency_ms=extraction_latency_ms)
             return
 
         # Deduplicate: fetch existing active facts and filter duplicates

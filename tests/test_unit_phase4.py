@@ -18,6 +18,7 @@ class TestConfigValidation:
         s = Settings(_env_file=None)  # Ignore .env file for test isolation
         assert s.proxy_port == 9800
         assert s.cold_start_turns == 3
+        assert s.rtk_enabled is False
         # upstream_base_url default is "https://api.deepseek.com/v1" but .env may override
 
     def test_invalid_upstream_url_raises(self):
@@ -101,12 +102,14 @@ class TestMetricsTracking:
         # Reset for clean state
         _metrics["total_requests"] = 0
         _metrics["extraction_successes"] = 0
+        _metrics["extraction_empties"] = 0
         _metrics["extraction_failures"] = 0
         _metrics["upstream_errors"] = 0
         _metrics["neo4j_errors"] = 0
 
         assert _metrics["total_requests"] == 0
         assert _metrics["extraction_successes"] == 0
+        assert _metrics["extraction_empties"] == 0
         assert _metrics["extraction_failures"] == 0
         assert _metrics["upstream_errors"] == 0
         assert _metrics["neo4j_errors"] == 0
@@ -178,6 +181,7 @@ class TestGracefulDegradation:
         assert "total_requests" in data
         assert "assembly_modes" in data
         assert "extraction_successes" in data
+        assert "extraction_empties" in data
         assert "graph_ready" in data
         assert "active_sessions" in data
         assert "uptime_s" in data
