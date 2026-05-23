@@ -1,5 +1,15 @@
 # Changelog — cth.context-engine
 
+## 2026-05-22 — Benchmark Suite, Experiment Framework, RTK Plan
+
+- **Benchmark suite** (`scripts/benchmark.py`): 5 scenarios (code_review, debugging, long_agent, ruler_recall, taskflow) with fact probes for recall measurement. Features: 429 retry with exponential backoff, checkpoint/resume, full response saving, markdown transcript generation, `--api-key` and `--resume` flags.
+- **Admin config API** (`archolith_proxy/main.py`): `GET/PATCH/POST /admin/config` for runtime-tunable settings (budget, tail size, thresholds) without proxy restarts. Whitelist-validated with type coercion.
+- **Experiment framework** (`scripts/benchmark.py` + `scripts/compare_experiments.py`): Named experiments snapshot proxy config alongside results for reproducible A/B tuning. `--experiment` and `--config` flags. Comparison script shows config diffs + per-scenario savings/recall/tokens side-by-side.
+- **Benchmarking workflow** (`.agent/workflows/benchmarking.md`): Full proxy pipeline trace, 6 known recall loss points with file:line refs, experiment workflow, tunable settings reference, result interpretation guide.
+- **RTK extraction plan** (`.agent/plans/archolith-rtk-extraction-plan.md`): Plan to extract the 3-layer token reduction system from reasonix TypeScript fork (output filters, shrink, context manager) and reimplement as `archolith-rtk` Python library.
+- **Multi-model benchmarks in progress**: Matrix runs (5 scenarios × 4 budgets) on z.ai GLM-5.1 (port 9800) and DeepSeek V3 (port 9801). Early results: z.ai preserves recall better (128%) at moderate savings; DeepSeek compresses more aggressively but loses recall at 4K budget.
+- **Recall analysis**: Identified 6 loss points — extraction truncation (8K char cap), numeric value extraction gaps, hardcoded 200-token overhead, coherence tail too small (3), linear recency bias, and DeepSeek output collapse at tight budgets.
+
 ## 2026-05-22 — Caller Compatibility Test Plan
 
 - **Compatibility plan added**: Created `.agent/plans/archolith-caller-compat-plan.md` to define how `archolith-proxy` should be tested against major callers before making public compatibility claims
