@@ -12,6 +12,7 @@ Read everything in this directory before starting work.
 | `data_models.md` | Entities, DTOs, enums, converters, repository reference |
 | `CHANGELOG.md` | Running log of changes, most recent first |
 | `workflows/code_conventions.md` | Language-specific style and formatting rules |
+| `workflows/benchmarking.md` | Benchmark suite, tuning experiments, recall analysis |
 | `BENCHMARK-AUDIT-TEMPLATE.md` | Template for benchmark/performance audit reports |
 | `PRODUCT-READINESS-TEMPLATE.md` | Template for product readiness audits (steps to viable product) |
 | `CONTEXT-QUALITY-TEMPLATE.md` | Template for context quality scorecards (recall, precision, extraction) |
