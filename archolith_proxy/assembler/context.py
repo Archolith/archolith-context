@@ -268,6 +268,12 @@ def _format_relevant_facts(
     return "\n".join(parts), compression_ratio
 
 
+_MODEL_HINT = (
+    "The following is curated session context from prior turns. "
+    "Use it to stay consistent with earlier work — do not re-derive what is already known."
+)
+
+
 def _format_context_block(
     goal: str | None,
     facts: list[dict],
@@ -276,13 +282,11 @@ def _format_context_block(
     turn_number: int,
     active_fact_count: int = 0,
 ) -> tuple[str, float]:
-    """Format graph data into a structured context block with two tiers.
+    """Format graph data into a structured context block with three parts.
 
-    Tier 1 — Session Overview (stable, cacheable):
-    Session goal, files touched, decisions, fact count.
-
-    Tier 2 — Relevant Facts (per-turn, query-dependent):
-    Budgeted facts sorted by relevance, compressed at render time.
+    1. Model hint — brief orientation (~30 tokens)
+    2. Session Overview (stable, cacheable): goal, files, decisions
+    3. Relevant Facts (per-turn): compressed, intent-scored
 
     Returns:
         Tuple of (formatted_block, compression_ratio).
@@ -290,7 +294,7 @@ def _format_context_block(
     overview = _format_session_overview(goal, files, decisions, turn_number, active_fact_count)
     facts_section, compression_ratio = _format_relevant_facts(facts, turn_number)
 
-    block = overview + "\n" + facts_section + f"[End of session context — current turn: {turn_number}]"
+    block = _MODEL_HINT + "\n\n" + overview + "\n" + facts_section + f"[End of session context — current turn: {turn_number}]"
     return block, compression_ratio
 
 
