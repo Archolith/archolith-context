@@ -38,7 +38,7 @@ class TestEstimateTokens:
 
 class TestFormatContextBlock:
     def test_minimal_block(self):
-        result = _format_context_block(
+        result, ratio = _format_context_block(
             goal=None,
             facts=[],
             files=[],
@@ -48,9 +48,10 @@ class TestFormatContextBlock:
         assert "SESSION OVERVIEW" in result
         assert "RELEVANT CONTEXT" in result
         assert "current turn: 5" in result
+        assert ratio == 1.0
 
     def test_with_goal(self):
-        result = _format_context_block(
+        result, _ = _format_context_block(
             goal="Build a REST API",
             facts=[],
             files=[],
@@ -65,7 +66,7 @@ class TestFormatContextBlock:
             {"content": "src/app.py has FastAPI routes", "fact_type": "file_state", "confidence": 0.9, "source_turn": 2},
             {"content": "Build fails with ImportError", "fact_type": "error", "confidence": 0.95, "source_turn": 3},
         ]
-        result = _format_context_block(
+        result, _ = _format_context_block(
             goal=None,
             facts=facts,
             files=[],
@@ -82,7 +83,7 @@ class TestFormatContextBlock:
             {"path": "src/app.py", "status": "modified"},
             {"path": "tests/test_app.py", "status": "created"},
         ]
-        result = _format_context_block(
+        result, _ = _format_context_block(
             goal=None,
             facts=[],
             files=files,
@@ -97,7 +98,7 @@ class TestFormatContextBlock:
         decisions = [
             {"summary": "Use FastAPI over Flask", "rationale": "Better async support", "turn": 2},
         ]
-        result = _format_context_block(
+        result, _ = _format_context_block(
             goal=None,
             facts=[],
             files=[],
@@ -113,7 +114,7 @@ class TestFormatContextBlock:
         facts = [
             {"content": "test fact", "fact_type": "observation", "confidence": 0.5, "source_turn": 1},
         ]
-        result = _format_context_block(
+        result, _ = _format_context_block(
             goal="Test goal",
             facts=facts,
             files=[{"path": "a.py", "status": "modified"}],
@@ -130,7 +131,7 @@ class TestFormatContextBlock:
             {"content": "fact 1", "fact_type": "observation", "confidence": 0.5, "source_turn": 1},
             {"content": "fact 2", "fact_type": "error", "confidence": 0.9, "source_turn": 2},
         ]
-        result = _format_context_block(
+        result, _ = _format_context_block(
             goal=None,
             facts=facts,
             files=[],
@@ -142,7 +143,7 @@ class TestFormatContextBlock:
 
     def test_no_facts_shows_placeholder(self):
         """When no facts are budgeted, show a placeholder."""
-        result = _format_context_block(
+        result, _ = _format_context_block(
             goal=None,
             facts=[],
             files=[],
@@ -168,11 +169,11 @@ class TestSessionOverview:
 class TestRelevantFacts:
     def test_facts_has_delimiter(self):
         facts = [{"content": "test", "fact_type": "observation", "source_turn": 1}]
-        result = _format_relevant_facts(facts, turn_number=2)
+        result, _ = _format_relevant_facts(facts, turn_number=2)
         assert "=== RELEVANT CONTEXT ===" in result
 
     def test_empty_facts_placeholder(self):
-        result = _format_relevant_facts([], turn_number=1)
+        result, _ = _format_relevant_facts([], turn_number=1)
         assert "no facts above relevance threshold" in result
 
 
@@ -264,9 +265,8 @@ class TestRewriteMessages:
         # Only ONE system message (NVIDIA rejects consecutive system messages)
         system_count = sum(1 for m in result if m["role"] == "system")
         assert system_count == 1
-        # Coherence tail: last 3 from rest = [user T2, assistant R2, user T3]
-        # After stripping leading non-user: same since T2 is user
-        assert len(result) == 1 + 3  # 1 merged system + 3 tail
+        # Middle (user T1, assistant R1) kept + coherence tail (user T2, assistant R2, user T3)
+        assert len(result) == 1 + 2 + 3  # 1 merged system + 2 middle + 3 tail
 
     def test_preserves_system_prompt(self):
         """The original system prompt should be preserved within the merged system message."""
@@ -403,6 +403,42 @@ class TestRewriteMessages:
         non_system = [m for m in result if m["role"] != "system"]
         assert non_system[0]["role"] == "user"
 
+    def test_preserves_tool_chains_in_middle(self):
+        """Tool_calls and tool results in the middle must stay paired."""
+        original = [
+            {"role": "system", "content": "System"},
+            {"role": "user", "content": "Read the file"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "file contents here"},
+            {"role": "assistant", "content": "Here is a long analysis " * 20},
+            {"role": "user", "content": "What did you find?"},
+            {"role": "assistant", "content": "I found X"},
+            {"role": "user", "content": "Tell me more"},
+        ]
+        assembled = AssembledContext(
+            system_message={"role": "system", "content": "ctx"},
+            graph_context=[{"role": "system", "content": "ctx"}],
+            coherence_tail=[],
+            token_estimate=500,
+            facts_retrieved=5,
+            session_id="test",
+        )
+        result = _rewrite_messages(original, assembled, coherence_tail_size=3)
+        # Tool chains in the middle should be preserved (not orphaned)
+        tool_call_ids = set()
+        tool_result_ids = set()
+        for msg in result:
+            if msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    tool_call_ids.add(tc["id"])
+            if msg.get("tool_call_id"):
+                tool_result_ids.add(msg["tool_call_id"])
+        # Every tool result should have a matching tool_call
+        assert tool_result_ids <= tool_call_ids, \
+            f"Orphaned tool results: {tool_result_ids - tool_call_ids}"
+
 
 class TestColdStartLogic:
     """Test that assemble_context returns None during cold start."""
@@ -431,39 +467,24 @@ class TestColdStartLogic:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_cold_start_bypass_on_large_input(self):
-        """Large input token count should bypass cold start even at turn 1.
+    async def test_cold_start_user_turn_count_is_sole_gate(self):
+        """User turn count is the sole gate — token threshold does NOT override.
 
-        This is a logic check: cold_start condition is
-        (turn < cold_start_turns AND tokens < threshold).
-        If tokens >= threshold, the AND fails and we proceed to assembly.
-
-        Since we can't connect to Neo4j in unit tests, we verify the
-        cold-start bypass logic directly by checking the condition.
+        Agentic sessions (OpenCode, Claude Code) generate huge token counts
+        within a single user turn via tool-use loops. Assembly must not fire
+        mid-loop just because tokens crossed a threshold.
         """
         from archolith_proxy.config import get_settings
         settings = get_settings()
 
-        # Turn 1, tokens > threshold: the cold-start gate should be OPEN
-        turn = 1
-        tokens = 25000  # Above the 20K default threshold
-        should_attempt_assembly = not (
-            turn < settings.cold_start_turns and tokens < settings.cold_start_token_threshold
-        )
-        assert should_attempt_assembly is True
-
-        # Turn 1, tokens < threshold: the cold-start gate should be CLOSED
-        tokens = 5000
-        should_attempt_assembly = not (
-            turn < settings.cold_start_turns and tokens < settings.cold_start_token_threshold
-        )
+        # 1 user turn, huge tokens: should still be cold_start
+        user_turns = 1
+        should_attempt_assembly = not (user_turns < settings.cold_start_turns)
         assert should_attempt_assembly is False
 
-        # Turn >= cold_start_turns: always attempt assembly regardless of token count
-        turn = 3
-        should_attempt_assembly = not (
-            turn < settings.cold_start_turns and tokens < settings.cold_start_token_threshold
-        )
+        # 3 user turns (>= threshold): should attempt assembly
+        user_turns = 3
+        should_attempt_assembly = not (user_turns < settings.cold_start_turns)
         assert should_attempt_assembly is True
 
 

@@ -175,6 +175,7 @@ class TraceStore:
                 total_duplicates_skipped=total_dups_skipped,
                 total_invalidations_attempted=total_invalidations,
                 total_recalls=total_recalls,
+                max_user_turns=max((t.user_turn_count for t in turns), default=0),
             )
 
     async def list_sessions(self) -> list[SessionTraceSummary]:
@@ -211,6 +212,7 @@ class TraceStore:
                     total_duplicates_skipped=sum(t.duplicates_skipped for t in turns),
                     total_invalidations_attempted=sum(t.invalidations_attempted for t in turns),
                     total_recalls=sum(1 for t in turns if t.recall_used),
+                    max_user_turns=max((t.user_turn_count for t in turns), default=0),
                 ))
             return summaries
 

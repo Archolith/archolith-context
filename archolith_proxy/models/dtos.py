@@ -61,6 +61,7 @@ class TurnTrace(BaseModel):
     stream: bool = False
     input_tokens: int = 0
     message_count: int = 0
+    user_turn_count: int = 0  # Number of role=user messages (not API calls)
 
     # Assembly
     assembly_mode: str = "passthrough"
@@ -129,3 +130,6 @@ class SessionTraceSummary(BaseModel):
     total_duplicates_skipped: int = 0
     total_invalidations_attempted: int = 0
     total_recalls: int = 0
+
+    # User turns (max across all recorded turns = current user turn count)
+    max_user_turns: int = 0

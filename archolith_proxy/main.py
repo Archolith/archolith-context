@@ -425,12 +425,25 @@ def create_app() -> FastAPI:
             if total_input > 0 else 0.0
         )
 
+        # Per-session user turn counts from trace store (cold_start gate progress)
+        trace_store = getattr(app.state, "trace_store", get_trace_store())
+        user_turns_by_session: dict[str, int] = {}
+        try:
+            for session_id, turns in trace_store._by_session.items():
+                if turns:
+                    user_turns_by_session[session_id] = max(
+                        (t.user_turn_count for t in turns), default=0
+                    )
+        except Exception:
+            pass
+
         return {
             "proxy": "archolith-proxy",
             "version": "0.1.0",
             "graph_ready": is_graph_ready(),
             "total_requests": get_metrics()["total_requests"],
             "assembly_modes": dict(get_metrics()["assembly_modes"]),
+            "user_turns_by_session": user_turns_by_session,
             "extraction_successes": get_metrics()["extraction_successes"],
             "extraction_failures": get_metrics()["extraction_failures"],
             "extraction_success_rate": extraction_success_rate,
@@ -442,8 +455,8 @@ def create_app() -> FastAPI:
             "token_savings_rate": token_savings_rate,
             "total_input_tokens_seen": get_metrics()["total_input_tokens_seen"],
             "compaction_applied": get_metrics()["compaction_applied"],
-            "trace_records": getattr(app.state, "trace_store", get_trace_store()).total_traces,
-            "trace_sessions": getattr(app.state, "trace_store", get_trace_store()).session_count,
+            "trace_records": trace_store.total_traces,
+            "trace_sessions": trace_store.session_count,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
         }
 
@@ -455,7 +468,7 @@ def create_app() -> FastAPI:
         "assembly_min_savings_ratio", "assembly_min_input_tokens",
         "assembly_latency_budget_ms", "session_ttl_hours",
         "embedding_enabled", "compaction_enabled", "query_rewrite_enabled",
-        "session_recall_tool_enabled",
+        "session_recall_tool_enabled", "rtk_enabled",
     }
 
     @app.get("/admin/config")

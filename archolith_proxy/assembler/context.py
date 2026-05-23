@@ -426,8 +426,12 @@ async def assemble_context(
     # Agentic clients (OpenCode, Claude Code) send multiple API requests per
     # user turn (one per tool-call round trip), so the backend's request
     # counter inflates quickly. Count actual user-role messages instead.
+    # User turn count is the PRIMARY gate — token threshold is secondary
+    # and only applies once we have enough user turns. Without this,
+    # a single user turn with large tool results (>threshold tokens)
+    # triggers assembly mid-tool-loop, destroying the tool context.
     user_turn_count = sum(1 for m in (messages or []) if m.get("role") == "user")
-    if user_turn_count < settings.cold_start_turns and input_token_estimate < settings.cold_start_token_threshold:
+    if user_turn_count < settings.cold_start_turns:
         logger.debug(
             "cold_start_passthrough",
             session_id=session_id,
@@ -435,7 +439,6 @@ async def assemble_context(
             user_turns=user_turn_count,
             estimated_tokens=input_token_estimate,
             threshold_turns=settings.cold_start_turns,
-            threshold_tokens=settings.cold_start_token_threshold,
         )
         return None
 

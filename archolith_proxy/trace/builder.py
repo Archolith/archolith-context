@@ -45,6 +45,7 @@ class TraceBuilder:
         stream: bool,
         input_tokens: int,
         message_count: int,
+        user_turn_count: int = 0,
     ) -> None:
         self._data["session_id"] = session_id
         self._data["turn_number"] = turn_number
@@ -52,6 +53,7 @@ class TraceBuilder:
         self._data["stream"] = stream
         self._data["input_tokens"] = input_tokens
         self._data["message_count"] = message_count
+        self._data["user_turn_count"] = user_turn_count
 
     def set_original_messages(self, messages: list[dict]) -> None:
         # Deep copy to avoid mutation issues; truncate very long messages

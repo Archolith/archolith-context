@@ -128,8 +128,10 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     rewritten_tokens = 0
     savings = 0
     savings_ratio = 0.0
-    input_tokens = estimate_input_tokens(body.get("messages", []))
+    messages = body.get("messages", [])
+    input_tokens = estimate_input_tokens(messages)
     record_metric("total_input_tokens_seen", input_tokens)
+    user_turn_count = sum(1 for m in messages if m.get("role") == "user")
 
     # Trace: record request arrival
     trace_builder.set_request(
@@ -138,7 +140,8 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         model=req.model,
         stream=req.stream,
         input_tokens=input_tokens,
-        message_count=len(body.get("messages", [])),
+        message_count=len(messages),
+        user_turn_count=user_turn_count,
     )
     trace_builder.set_original_messages(body.get("messages", []))
 
