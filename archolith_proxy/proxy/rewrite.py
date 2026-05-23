@@ -52,16 +52,21 @@ def rewrite_messages(
     coherence_tail_size: int,
     max_tail_messages: int = 20,
 ) -> list[dict]:
-    """Rewrite the messages array: preserve user messages, compress assistant responses.
+    """Rewrite the messages array: compress tool results, preserve assistant reasoning.
 
     Strategy:
-    1. Keep the original system message + session overview (goal, files, decisions)
-    2. For the middle (non-tail) portion: keep all user messages verbatim,
-       replace assistant responses with per-turn fact summaries from the graph
-    3. Keep the coherence tail (last N exchanges) completely intact
+    1. Keep the original system message + injected graph context (goal, facts, files)
+    2. For the middle (non-tail) portion:
+       - Tool results (file reads, search outputs): compress to a short preview.
+         These are the expensive blobs; extracted facts in the system message carry
+         the semantic content the model needs without re-reading.
+       - Assistant messages: keep intact. Compressing them removes intermediate
+         analysis and causes the model to re-read files to reconstruct its reasoning.
+       - User messages: keep intact verbatim.
+    3. Keep the coherence tail (last N exchanges) completely intact.
 
-    This preserves the conversational flow the model needs while compressing
-    the expensive assistant responses in the middle of long conversations.
+    Token savings come from compressing tool result blobs (5K-50K chars each),
+    not from compressing the model's reasoning (typically 100-1000 chars each).
     """
     if not assembled_context or not getattr(assembled_context, "graph_context", None):
         return original_messages
@@ -99,28 +104,48 @@ def rewrite_messages(
     else:
         result.append({"role": "system", "content": graph_content})
 
-    # Rewrite the middle: keep structure intact, only compress long assistant text.
-    # Tool results and tool_call chains are preserved — agentic sessions need
-    # file contents and tool outputs to avoid re-reading loops.
+    # Rewrite the middle — INVERTED compression target vs naive approach:
+    # Compress tool results (the expensive file/search blobs), keep assistant
+    # reasoning intact. This avoids the failure mode where the model loses its
+    # intermediate analysis and re-reads files it already processed.
     for msg in middle:
         role = msg.get("role")
-        if role == "assistant":
+        if role == "tool":
+            # Tool results are often the primary token cost, but not all tool results
+            # are safe to compress. File reads that the model may need to edit require
+            # exact line content. Only compress results from tools that return
+            # informational/search output, not file content the model may reference.
+            #
+            # Compressible: search, grep, list_directory, web_fetch, find — large
+            #   outputs where facts have been extracted to graph context.
+            # Preserved: read, glob, cat, head, tail, and unknown tools — the model
+            #   may need exact line numbers or content for edits.
+            tool_name = (msg.get("name") or "").lower()
             content = msg.get("content", "") or ""
-            has_tool_calls = bool(msg.get("tool_calls"))
-            if has_tool_calls:
-                # Keep tool_calls intact so tool results stay paired
-                if isinstance(content, str) and len(content) > 200:
-                    result.append({**msg, "content": _compress_assistant_message(content)})
+            if _is_compressible_tool(tool_name) and len(content) > _TOOL_RESULT_MAX_CHARS:
+                if isinstance(content, str):
+                    result.append({**msg, "content": _compress_tool_result(content)})
+                elif isinstance(content, list):
+                    result.append({**msg, "content": _compress_tool_result_multipart(content)})
                 else:
                     result.append(msg)
-            elif isinstance(content, str) and len(content) > 200:
-                result.append({
-                    "role": "assistant",
-                    "content": _compress_assistant_message(content),
-                })
+            else:
+                result.append(msg)
+        elif role == "assistant":
+            # Keep assistant messages intact — they're the model's reasoning chain.
+            # Do strip scaffolding blocks (<thinking>/<reasoning>) since those are
+            # internal monologue not needed for context continuity.
+            content = msg.get("content", "") or ""
+            if isinstance(content, str) and content:
+                stripped = strip_reasoning(content)
+                if stripped != content:
+                    result.append({**msg, "content": stripped})
+                else:
+                    result.append(msg)
             else:
                 result.append(msg)
         else:
+            # user messages and any other roles — keep intact
             result.append(msg)
 
     # Append the coherence tail intact
@@ -138,8 +163,82 @@ def rewrite_messages(
     return result
 
 
+# Max chars to keep from a compressible tool result in the middle section.
+_TOOL_RESULT_MAX_CHARS = 400
+
+# Tools whose results are safe to compress in the middle section.
+# These return informational/search output, not file content the model needs
+# for edits or exact line references.
+_COMPRESSIBLE_TOOLS = frozenset({
+    # Search and grep
+    "search", "grep", "ripgrep", "find", "findfiles",
+    "web_search", "websearch",
+    # Directory and file listing (not file content)
+    "list_directory", "listdir", "ls", "glob",
+    # Web content (informational)
+    "web_fetch", "webfetch", "fetch",
+    # Shell commands that return informational output
+    "bash", "shell", "run_command", "execute",
+})
+
+
+def _is_compressible_tool(tool_name: str) -> bool:
+    """Return True if this tool's result is safe to compress in the middle section.
+
+    File-read tools (read, cat, head, tail, etc.) return exact content the model
+    may need for edits or line references — they must be preserved verbatim.
+    Search/list/web tools return informational output that's captured in the
+    extracted facts; their large results can be compressed.
+    """
+    if not tool_name:
+        return False  # Unknown tool — preserve to be safe
+    # Exact match against the compressible set
+    if tool_name in _COMPRESSIBLE_TOOLS:
+        return True
+    # Prefix match for namespaced tools (e.g. "mcp__brave__search")
+    for compressible in _COMPRESSIBLE_TOOLS:
+        if tool_name.endswith(f"__{compressible}") or tool_name.endswith(f"_{compressible}"):
+            return True
+    return False
+
+
+def _compress_tool_result(content: str) -> str:
+    """Compress a tool result (file read, search output) to a short preview.
+
+    Tool results in the middle section are the primary token cost — raw file
+    contents can be 5K-50K chars each. Keeping a short preview lets the model
+    identify what was read; extracted facts in the injected system context carry
+    the semantic content needed to avoid re-reading.
+
+    Breaks at the last newline within the preview budget to avoid mid-line cuts.
+    """
+    if len(content) <= _TOOL_RESULT_MAX_CHARS:
+        return content
+    preview = content[:_TOOL_RESULT_MAX_CHARS]
+    nl = preview.rfind("\n")
+    if nl > _TOOL_RESULT_MAX_CHARS // 2:
+        preview = preview[:nl]
+    omitted = len(content) - len(preview)
+    return f"{preview}\n[...{omitted} chars — key facts in session context above...]"
+
+
+def _compress_tool_result_multipart(parts: list) -> list:
+    """Compress multi-part tool result content (list-of-dicts format)."""
+    result = []
+    for part in parts:
+        if isinstance(part, dict) and part.get("type") == "text":
+            text = part.get("text", "")
+            result.append({**part, "text": _compress_tool_result(text)})
+        else:
+            result.append(part)
+    return result
+
+
 def _compress_assistant_message(content: str, max_chars: int = 300) -> str:
     """Compress a long assistant response to its key content.
+
+    No longer used in the middle section rewriter (assistant messages are kept
+    intact to preserve reasoning chains). Retained for other callers.
 
     Keeps the first and last portions, dropping the verbose middle.
     """
