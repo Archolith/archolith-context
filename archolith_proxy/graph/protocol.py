@@ -205,6 +205,28 @@ class GraphBackend(Protocol):
         """Get all decisions for a session."""
         ...
 
+    # ── File Content Cache ─────────────────────────────────────────────
+
+    async def upsert_file_content(
+        self, session_id: str, path: str, content: str, sha256: str, turn: int,
+    ) -> None:
+        """Store or update cached file content. Uses sha256 for dedup."""
+        ...
+
+    async def get_file_content(self, session_id: str, path: str) -> dict | None:
+        """Get cached file content. Returns {content, sha256, line_count} or None."""
+        ...
+
+    async def get_file_lines(
+        self, session_id: str, path: str, start: int, end: int,
+    ) -> str | None:
+        """Retrieve a line range from cached file content (1-indexed, inclusive)."""
+        ...
+
+    async def list_cached_files(self, session_id: str) -> list[dict]:
+        """List all cached files for a session."""
+        ...
+
     # ── Cleanup / TTL ──────────────────────────────────────────────────
 
     async def expire_sessions(self) -> int:

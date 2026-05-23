@@ -77,6 +77,17 @@ CREATE REL TABLE BELONGS_TO(FROM Fact TO Session);
 CREATE REL TABLE TOUCHES(FROM Session TO File);
 CREATE REL TABLE SUPERSEDES(FROM Fact TO Fact);
 CREATE REL TABLE DECIDED_IN(FROM Decision TO Session);
+
+CREATE NODE TABLE IF NOT EXISTS FileContent(
+    file_id           STRING PRIMARY KEY,
+    session_id        STRING,
+    path              STRING,
+    content           STRING,
+    sha256            STRING,
+    line_count        INT64,
+    last_updated_turn INT64,
+    created_at        TIMESTAMP
+);
 """
 
 
@@ -573,6 +584,96 @@ class LadybugBackend:
                    d.rationale AS rationale, d.turn AS turn,
                    d.superseded_by AS superseded_by
             ORDER BY d.turn ASC
+            """,
+            {"session_id": session_id},
+        )
+
+    # ── Cleanup / TTL ──────────────────────────────────────────────────
+
+    # ── File Content Cache ─────────────────────────────────────────────
+
+    async def upsert_file_content(
+        self, session_id: str, path: str, content: str, sha256: str, turn: int,
+    ) -> None:
+        """Store or update cached file content, using sha256 for dedup.
+
+        If the existing row has the same sha256, skip the write (file unchanged).
+        Otherwise update content, sha256, line_count, and last_updated_turn.
+        """
+        existing = await self._execute(
+            "MATCH (fc:FileContent {session_id: $session_id, path: $path}) RETURN fc.sha256 AS sha256, fc.file_id AS file_id",
+            {"session_id": session_id, "path": path},
+        )
+        if existing:
+            existing_sha = existing[0].get("sha256")
+            if existing_sha == sha256:
+                logger.debug("file_cache_hit", path=path, session_id=session_id)
+                return
+            fid = existing[0].get("file_id")
+            line_count = content.count("\n") + 1
+            await self._execute(
+                """
+                MATCH (fc:FileContent {file_id: $fid})
+                SET fc.content = $content, fc.sha256 = $sha256,
+                    fc.line_count = $line_count, fc.last_updated_turn = $turn
+                """,
+                {"fid": fid, "content": content, "sha256": sha256,
+                 "line_count": line_count, "turn": turn},
+            )
+            logger.debug("file_cache_updated", path=path, session_id=session_id)
+        else:
+            fid = "fc" + uuid4().hex[:14]
+            line_count = content.count("\n") + 1
+            await self._execute(
+                """
+                CREATE (fc:FileContent {
+                    file_id: $fid, session_id: $session_id, path: $path,
+                    content: $content, sha256: $sha256, line_count: $line_count,
+                    last_updated_turn: $turn, created_at: current_timestamp()
+                })
+                """,
+                {"fid": fid, "session_id": session_id, "path": path,
+                 "content": content, "sha256": sha256,
+                 "line_count": line_count, "turn": turn},
+            )
+            logger.debug("file_cache_created", path=path, session_id=session_id)
+
+    async def get_file_content(self, session_id: str, path: str) -> dict | None:
+        """Get cached file content. Returns {content, sha256, line_count} or None."""
+        rows = await self._execute(
+            """
+            MATCH (fc:FileContent {session_id: $session_id, path: $path})
+            RETURN fc.content AS content, fc.sha256 AS sha256, fc.line_count AS line_count
+            """,
+            {"session_id": session_id, "path": path},
+        )
+        return rows[0] if rows else None
+
+    async def get_file_lines(self, session_id: str, path: str, start: int, end: int) -> str | None:
+        """Retrieve a line range from cached file content (1-indexed, inclusive).
+
+        Out-of-range end is clamped to EOF.
+        """
+        row = await self.get_file_content(session_id, path)
+        if not row:
+            return None
+        lines = row["content"].split("\n")
+        start = max(1, start)
+        end = min(end, len(lines))
+        if start > end:
+            return None
+        selected = lines[start - 1:end]
+        numbered = [f"{start + i}: {line}" for i, line in enumerate(selected)]
+        return "\n".join(numbered)
+
+    async def list_cached_files(self, session_id: str) -> list[dict]:
+        """List all cached files. Returns [{path, sha256, line_count, last_updated_turn}]."""
+        return await self._execute(
+            """
+            MATCH (fc:FileContent {session_id: $session_id})
+            RETURN fc.path AS path, fc.sha256 AS sha256,
+                   fc.line_count AS line_count, fc.last_updated_turn AS last_updated_turn
+            ORDER BY fc.path ASC
             """,
             {"session_id": session_id},
         )

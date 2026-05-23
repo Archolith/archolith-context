@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # Session recall as proxy-intercepted tool (injects __archolith_recall)
     session_recall_tool_enabled: bool = False
 
+    # RTK output filtering for outbound tool-role messages
+    rtk_enabled: bool = False
+
     # Retry / resilience
     upstream_max_retries: int = 3
     upstream_retry_backoff_base_s: float = 0.5
@@ -89,6 +92,18 @@ class Settings(BaseSettings):
     # Promotion policy defaults
     promotion_min_confidence: float = 0.9
     promotion_dry_run: bool = False  # If True, generate records but don't write
+
+    # File content cache
+    file_cache_enabled: bool = True
+    file_cache_max_file_bytes: int = 500_000  # skip caching files larger than this
+
+    # Curator LLM — active context curation via tool-calling loop
+    curator_enabled: bool = False
+    curator_model: str = ""             # defaults to extractor_model if empty
+    curator_base_url: str = ""          # defaults to extractor_base_url if empty
+    curator_api_key: str = ""           # defaults to extractor_api_key if empty
+    curator_max_iterations: int = 4
+    curator_latency_budget_ms: int = 6000   # hard timeout; falls back to heuristic
 
     # Admin/operator token for protecting non-proxy surfaces
     # When empty (default), admin endpoints are open (localhost-only assumption).

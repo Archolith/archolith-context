@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 
@@ -65,6 +66,53 @@ def _extract_response_text(response_data: dict) -> str:
         return ""
     message = choices[0].get("message", {})
     return _normalize_message_content(message.get("content"))
+
+
+def _extract_file_reads(messages: list[dict]) -> list[dict]:
+    """Pair file-read tool calls with their results via tool_call_id.
+
+    Iterates the messages array to build a lookup from assistant tool_calls,
+    then matches tool result messages by tool_call_id. Only returns pairs
+    where the tool is NOT a compressible tool (i.e., it's a file-read tool)
+    and content is a non-empty string.
+
+    Returns list of {path, content, tool_call_id, tool_name}.
+    """
+    from archolith_proxy.proxy.rewrite import _is_compressible_tool
+
+    # Build lookup: tool_call_id → (name, parsed_args)
+    call_map: dict[str, tuple[str, dict]] = {}
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            for tc in (msg.get("tool_calls") or []):
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except (KeyError, json.JSONDecodeError):
+                    args = {}
+                call_map[tc["id"]] = (tc["function"]["name"], args)
+
+    # Match tool results to calls
+    results = []
+    for msg in messages:
+        if msg.get("role") != "tool":
+            continue
+        tc_id = msg.get("tool_call_id", "")
+        if tc_id not in call_map:
+            continue
+        name, args = call_map[tc_id]
+        if _is_compressible_tool(name):
+            continue  # search/grep/web — not file content
+        content = msg.get("content", "")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        path = args.get("path") or args.get("file_path") or args.get("filename") or ""
+        if not path:
+            continue
+        results.append({
+            "path": path, "content": content,
+            "tool_call_id": tc_id, "tool_name": name,
+        })
+    return results
 
 
 def _collect_recent_tool_results(messages: list[dict], max_chars: int = 4000) -> str | None:
@@ -231,7 +279,28 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     break
 
             assembly_start = time.monotonic()
-            assembled = await assemble_context(
+
+            # Try curator first (LLM-driven context manager)
+            if settings.curator_enabled:
+                try:
+                    from archolith_proxy.curator import curate_context
+                    record_metric("curator_calls", 1)
+                    assembled = await curate_context(
+                        session_id=session_id,
+                        turn_number=turn_number,
+                        user_message=user_message or "",
+                        session_goal=session_goal,
+                        http_client=request.app.state.http_client,
+                        messages=body.get("messages", []),
+                    )
+                    if assembled:
+                        assembly_mode = "curator"
+                except Exception:
+                    logger.warning("curator_error", session_id=session_id, exc_info=True)
+
+            # Fall back to heuristic assembler if curator didn't produce a result
+            if assembled is None:
+                assembled = await assemble_context(
                 session_id=session_id,
                 turn_number=turn_number,
                 input_token_estimate=input_tokens,
@@ -1102,6 +1171,30 @@ async def _handle_non_streaming(
     )
 
 
+async def _upsert_file_cache(session_id: str, file_reads: list[dict], turn: int) -> None:
+    """Store file-read content into the graph backend's file content cache.
+
+    Skips files exceeding the configured max byte size. Uses sha256
+    deduplication — if the file's content hasn't changed, no DB write
+    is needed (common case on re-reads of unmodified files).
+    """
+    settings = get_settings()
+    backend = get_backend()
+    for fr in file_reads:
+        content = fr["content"]
+        if len(content.encode()) > settings.file_cache_max_file_bytes:
+            logger.debug("file_cache_skipped_too_large", path=fr["path"], session_id=session_id)
+            continue
+        sha256 = hashlib.sha256(content.encode()).hexdigest()
+        try:
+            await backend.upsert_file_content(
+                session_id=session_id, path=fr["path"],
+                content=content, sha256=sha256, turn=turn,
+            )
+        except Exception:
+            logger.warning("file_cache_upsert_failed", path=fr["path"], session_id=session_id, exc_info=True)
+
+
 async def _run_extraction(
     client,
     session_id: str,
@@ -1151,6 +1244,17 @@ async def _run_extraction(
 
         # Strip reasoning blocks from the response before extraction
         response_text = strip_reasoning(response_text)
+
+        # Capture file reads before flattening — pairs tool calls with results
+        # using tool_call_id so the content cache gets structured file content.
+        fc_settings = get_settings()
+        if fc_settings.file_cache_enabled:
+            try:
+                file_reads = _extract_file_reads(messages)
+                if file_reads:
+                    await _upsert_file_cache(session_id, file_reads, turn_number)
+            except Exception:
+                logger.warning("file_cache_capture_failed", session_id=session_id, turn=turn_number, exc_info=True)
 
         # Serialize the newest tool results first so the current turn survives truncation.
         tool_results = _collect_recent_tool_results(messages, max_chars=4000)

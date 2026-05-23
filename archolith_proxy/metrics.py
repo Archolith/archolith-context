@@ -20,6 +20,7 @@ _metrics: dict = {
         "passthrough": 0,
         "skipped_low_tokens": 0,
         "skipped_low_savings": 0,
+        "curator": 0,
     },
     "extraction_successes": 0,
     "extraction_empties": 0,
@@ -33,6 +34,9 @@ _metrics: dict = {
     "promotions_succeeded": 0,
     "promotions_failed": 0,
     "promotions_skipped": 0,
+    "curator_calls": 0,
+    "curator_timeouts": 0,
+    "curator_fallbacks": 0,
 }
 
 

@@ -206,6 +206,24 @@ class Neo4jBackend:
     ) -> list[dict]:
         return await _decisions.get_decisions(session_id, include_superseded)
 
+    # ── File Content Cache (LadybugDB-only in MVP — stubs for Neo4j) ───
+
+    async def upsert_file_content(
+        self, session_id: str, path: str, content: str, sha256: str, turn: int,
+    ) -> None:
+        return None
+
+    async def get_file_content(self, session_id: str, path: str) -> dict | None:
+        return None
+
+    async def get_file_lines(
+        self, session_id: str, path: str, start: int, end: int,
+    ) -> str | None:
+        return None
+
+    async def list_cached_files(self, session_id: str) -> list[dict]:
+        return []
+
     # ── Cleanup / TTL ──────────────────────────────────────────────────
 
     async def expire_sessions(self) -> int:
