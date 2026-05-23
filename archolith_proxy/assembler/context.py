@@ -24,6 +24,9 @@ import structlog
 from archolith_proxy.config import get_settings
 from archolith_proxy.graph.backend import get_backend
 
+from archolith_proxy.assembler.intent import (
+    TurnIntent, classify_intent, DOMAIN_TO_FACT_TYPES,
+)
 from archolith_proxy.models.dtos import AssembledContext
 from archolith_proxy.models.graph_nodes import FactType
 
@@ -78,38 +81,73 @@ def _score_fact(
     fact: dict,
     query_embedding: list[float] | None,
     turn_number: int,
+    intent: TurnIntent | None = None,
 ) -> float:
-    """Score a fact for relevance to the current query.
+    """Score a fact for relevance using intent-driven weighting.
 
-    When embeddings are available:
+    Scoring formula (with intent):
+      intent_match (30%) + similarity (25%) + recency (20%) + type+confidence (25%)
+
+    Without intent, falls back to:
       similarity (40%) + recency (30%) + type+confidence (30%)
 
-    Without embeddings (fallback):
-      type priority (40%) + confidence (30%) + recency (30%)
+    Recency uses logarithmic decay instead of linear — a turn-1 fact at
+    turn 20 scores ~0.38 (log) instead of 0.05 (linear).
     """
-    # Normalize type priority to 0-1 range
+    import math
+
     fact_type_str = fact.get("fact_type", "observation")
     try:
         type_priority = _FACT_TYPE_PRIORITY.get(FactType(fact_type_str), 0)
     except ValueError:
         type_priority = 0
-    type_score = type_priority / 5.0  # max priority is 5
+    type_score = type_priority / 5.0
 
     confidence = fact.get("confidence", 0.5)
 
-    # Recency: source_turn / turn_number (0-1, higher = more recent)
+    # Logarithmic recency: decays slowly, old facts remain usable
     source_turn = fact.get("source_turn", 0)
-    recency = source_turn / max(turn_number, 1)
+    if turn_number > 0 and source_turn > 0:
+        age = turn_number - source_turn
+        recency = 1.0 / (1.0 + math.log1p(age))
+    else:
+        recency = 0.5
 
+    # Embedding similarity
     fact_embedding = fact.get("embedding")
-
     if query_embedding and fact_embedding:
         similarity = _cosine_similarity(query_embedding, fact_embedding)
-        # Weighted blend: similarity 40%, recency 30%, type+confidence 30%
-        return similarity * 0.4 + recency * 0.3 + (type_score * 0.5 + confidence * 0.5) * 0.3
     else:
-        # No embeddings: fall back to priority/recency/confidence
-        return type_score * 0.4 + confidence * 0.3 + recency * 0.3
+        similarity = 0.0
+
+    # Intent match: boost facts whose type aligns with the detected intent
+    intent_boost = 0.0
+    if intent and intent.domain_weights:
+        for domain, weight in intent.domain_weights.items():
+            matching_types = DOMAIN_TO_FACT_TYPES.get(domain, [])
+            if fact_type_str in matching_types:
+                intent_boost = max(intent_boost, weight)
+
+        # Explicit reference match: if the fact mentions a referenced file/identifier
+        if intent.explicit_refs:
+            content_lower = fact.get("content", "").lower()
+            for ref in intent.explicit_refs:
+                if ref.lower() in content_lower:
+                    intent_boost = max(intent_boost, 0.8)
+                    break
+
+    if intent and intent.domain_weights:
+        # Intent-driven scoring
+        return (
+            intent_boost * 0.30
+            + similarity * 0.25
+            + recency * 0.20
+            + (type_score * 0.5 + confidence * 0.5) * 0.25
+        )
+    elif query_embedding and fact_embedding:
+        return similarity * 0.40 + recency * 0.30 + (type_score * 0.5 + confidence * 0.5) * 0.30
+    else:
+        return type_score * 0.40 + confidence * 0.30 + recency * 0.30
 
 
 def _expand_with_context_window(
@@ -255,54 +293,73 @@ def _budget_facts(
     query_embedding: list[float] | None = None,
     turn_number: int = 0,
     embedding_enabled: bool = False,
+    intent: TurnIntent | None = None,
 ) -> list[dict]:
-    """Select facts that fit within the token budget, scored by relevance.
+    """Select facts within token budget using intent-driven scoring.
 
-    When embeddings are available and enabled, facts are scored using
-    cosine similarity + recency + type/confidence. Otherwise falls back
-    to priority-only scoring (current behavior).
+    Strategy:
+    1. Anchor facts (goal, active decisions) are always included first
+    2. Remaining budget filled by intent-scored facts
+    3. N-1/N+1 context windowing expands to preserve narrative continuity
 
-    After initial selection, N-1/N+1 context windowing expands the selection
-    to include facts from adjacent turns.
+    When intent is available, facts are scored with intent-match boosting.
+    Otherwise falls back to embedding/priority scoring.
     """
-    # Infer turn_number from facts if not provided (avoids division issues)
     effective_turn = turn_number
     if effective_turn <= 0 and facts:
         effective_turn = max(f.get("source_turn", 0) for f in facts) or 1
 
-    # Score facts
     use_embeddings = embedding_enabled and query_embedding is not None
-    scored_facts = []
+
+    # Step 1: Separate anchor facts (goal, decision) — always included
+    anchors = []
+    candidates = []
     for fact in facts:
-        if use_embeddings:
-            score = _score_fact(fact, query_embedding, effective_turn)
+        ft = fact.get("fact_type", "observation")
+        if ft in ("goal", "decision"):
+            anchors.append(fact)
         else:
-            score = _score_fact(fact, None, effective_turn)
-        scored_facts.append((score, fact))
+            candidates.append(fact)
 
-    # Sort by score descending
-    scored_facts.sort(key=lambda x: x[0], reverse=True)
-
-    # Select facts within budget
+    # Budget anchors first
     selected = []
     used_tokens = 0
-
-    for score, fact in scored_facts:
+    for fact in anchors:
         content = fact.get("content", "")
         fact_line = f"- [{fact.get('fact_type', 'observation')}|t{fact.get('source_turn', '?')}] {content}\n"
         fact_tokens = _estimate_tokens(fact_line)
+        if used_tokens + fact_tokens <= token_budget:
+            selected.append(fact)
+            used_tokens += fact_tokens
 
+    remaining_budget = token_budget - used_tokens
+
+    # Step 2: Score and select remaining facts
+    scored = []
+    for fact in candidates:
+        score = _score_fact(
+            fact,
+            query_embedding if use_embeddings else None,
+            effective_turn,
+            intent=intent,
+        )
+        scored.append((score, fact))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    for score, fact in scored:
+        content = fact.get("content", "")
+        fact_line = f"- [{fact.get('fact_type', 'observation')}|t{fact.get('source_turn', '?')}] {content}\n"
+        fact_tokens = _estimate_tokens(fact_line)
         if used_tokens + fact_tokens <= token_budget:
             selected.append(fact)
             used_tokens += fact_tokens
         else:
             break
 
-    # Expand with N-1/N+1 context windowing if embeddings are active
+    # Step 3: Context windowing (narrative continuity)
     if use_embeddings and selected:
         windowed = _expand_with_context_window(selected, facts)
-        # Re-budget: windowing may have added facts that exceed budget
-        # Keep the windowed set but trim if it exceeds budget
         total_tokens = 0
         final = []
         for fact in windowed:
@@ -312,11 +369,8 @@ def _budget_facts(
             if total_tokens + fact_tokens <= token_budget:
                 final.append(fact)
                 total_tokens += fact_tokens
-            # If windowed facts exceed budget, stop adding — but keep
-            # the originally selected core facts even if windowing trimmed
         if len(final) >= len(selected):
             selected = final
-        # If windowing would shrink below original, keep original (shouldn't happen)
 
     return selected
 
@@ -451,18 +505,35 @@ async def assemble_context(
         logger.warning("graph_query_failed_decisions", session_id=session_id, error=str(e))
         decisions = []
 
+    # Intent analysis — drives fact selection
+    intent = classify_intent(
+        user_message=user_message or "",
+        session_goal=goal,
+        recent_messages=messages[-6:] if messages else None,
+    )
+    logger.debug(
+        "intent_classified",
+        session_id=session_id,
+        turn=turn_number,
+        question_type=intent.question_type.value,
+        domains=[d.value for d in intent.domains],
+        explicit_refs=intent.explicit_refs[:5],
+        is_topic_shift=intent.is_topic_shift,
+        confidence=round(intent.confidence, 2),
+    )
+
     # Budget: reserve tokens for goal, files, decisions, framing
-    # The fact budget is what remains after fixed overhead
-    fixed_overhead = 200  # goal + files + decisions + framing tokens
+    fixed_overhead = 200
     fact_budget = max(0, settings.context_token_budget - fixed_overhead)
 
-    # Select facts within budget — use embedding scoring if available
+    # Intent-driven fact selection
     budgeted_facts = _budget_facts(
         all_facts,
         fact_budget,
         query_embedding=query_embedding,
         turn_number=turn_number,
         embedding_enabled=settings.embedding_enabled,
+        intent=intent,
     )
 
     # Format the context block with two tiers (overview + relevant facts)
@@ -477,7 +548,6 @@ async def assemble_context(
 
     context_tokens = _estimate_tokens(context_text)
 
-    # Build the assembled context as synthetic messages
     graph_context = [
         {
             "role": "system",
@@ -488,7 +558,7 @@ async def assemble_context(
     result = AssembledContext(
         system_message=graph_context[0],
         graph_context=graph_context,
-        coherence_tail=[],  # Filled by the proxy handler
+        coherence_tail=[],
         token_estimate=context_tokens,
         facts_retrieved=len(budgeted_facts),
         session_id=session_id,
@@ -500,6 +570,8 @@ async def assemble_context(
         "context_assembled",
         session_id=session_id,
         turn=turn_number,
+        intent_type=intent.question_type.value,
+        intent_domains=[d.value for d in intent.domains],
         facts_available=len(all_facts),
         facts_selected=len(budgeted_facts),
         files=len(files),
