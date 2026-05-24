@@ -19,6 +19,9 @@ class AssembledContext(BaseModel):
     files_selected: list[dict] = Field(default_factory=list)
     decisions_selected: list[dict] = Field(default_factory=list)
     compression_ratio: float = 1.0
+    # Turn numbers the curator selected to retain in the middle section.
+    # None = keep all middle turns (curator did not exercise turn selection).
+    retained_turn_numbers: list[int] | None = None
 
 
 class ExtractionResult(BaseModel):

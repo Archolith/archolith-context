@@ -104,6 +104,7 @@ async def _run_curator_native(
     error_window: list[tuple[str, str]] = []
     total_tool_calls = 0
     curated_paths: set[str] = set()
+    retained_turn_numbers: list[int] | None = None
 
     for iteration in range(max_iterations):
         logger.debug(
@@ -148,6 +149,7 @@ async def _run_curator_native(
             return CuratorResult(
                 context_text=content,
                 curated_paths=curated_paths,
+                retained_turn_numbers=retained_turn_numbers,
                 tool_calls_used=total_tool_calls,
                 estimated_tokens=_estimate_tokens(content),
             )
@@ -185,6 +187,14 @@ async def _run_curator_native(
                     path = args.get("path", "")
                     if path:
                         curated_paths.add(path)
+                if tool_name == "select_relevant_turns":
+                    turn_nums = args.get("turn_numbers", [])
+                    retained_turn_numbers = [int(n) for n in turn_nums] if turn_nums else []
+                    logger.info(
+                        "curator_turn_selection",
+                        session_id=session_id,
+                        retained=retained_turn_numbers,
+                    )
                 error_window.append((tool_name, "ok"))
             except Exception as exc:
                 result_str = "Error: " + type(exc).__name__ + ": " + str(exc)
@@ -283,6 +293,7 @@ async def _run_curator_nous(
     error_window: list[tuple[str, str]] = []
     total_tool_calls = 0
     curated_paths: set[str] = set()
+    retained_turn_numbers: list[int] | None = None
 
     for iteration in range(max_iterations):
         logger.debug(
@@ -322,6 +333,7 @@ async def _run_curator_nous(
             return CuratorResult(
                 context_text=content,
                 curated_paths=curated_paths,
+                retained_turn_numbers=retained_turn_numbers,
                 tool_calls_used=total_tool_calls,
                 estimated_tokens=_estimate_tokens(content),
             )
@@ -350,6 +362,14 @@ async def _run_curator_nous(
                     path = args.get("path", "")
                     if path:
                         curated_paths.add(path)
+                if tool_name == "select_relevant_turns":
+                    turn_nums = args.get("turn_numbers", [])
+                    retained_turn_numbers = [int(n) for n in turn_nums] if turn_nums else []
+                    logger.info(
+                        "curator_nous_turn_selection",
+                        session_id=session_id,
+                        retained=retained_turn_numbers,
+                    )
                 error_window.append((tool_name, "ok"))
             except Exception as exc:
                 result_str = "Error: " + type(exc).__name__ + ": " + str(exc)

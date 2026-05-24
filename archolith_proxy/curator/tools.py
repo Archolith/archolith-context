@@ -194,6 +194,20 @@ async def get_last_verification(session_id: str, **kwargs) -> str:
     return f"[{icon}] turn {turn}: `{command}`\n{summary}"
 
 
+async def select_relevant_turns(
+    session_id: str, turn_numbers: list | None = None, **kwargs
+) -> str:
+    """Record the curator's turn retention decision.
+
+    The actual filtering is applied by rewrite_messages() in the proxy pipeline
+    using the retained_turn_numbers captured in the loop. This handler just
+    returns a confirmation string for the curator's tool result.
+    """
+    if not turn_numbers:
+        return "Recorded: drop all middle turns (retain none)."
+    return f"Recorded: retaining turns {sorted(int(n) for n in turn_numbers)} in compressed history."
+
+
 # Tool name → implementation mapping (used by loop.py for dispatch)
 TOOL_HANDLERS: dict[str, callable] = {
     "list_session_files": list_session_files,
@@ -206,4 +220,5 @@ TOOL_HANDLERS: dict[str, callable] = {
     "get_checkpoint": get_checkpoint,
     "get_open_issues": get_open_issues,
     "get_last_verification": get_last_verification,
+    "select_relevant_turns": select_relevant_turns,
 }

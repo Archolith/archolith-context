@@ -163,4 +163,34 @@ ALL_CURATOR_TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "select_relevant_turns",
+            "description": (
+                "Select which historical conversation turns to retain in the compressed "
+                "context. Turns NOT selected will be dropped (their key facts are preserved "
+                "in the system context block above). Call this after reviewing the turn "
+                "inventory in the user prompt. Include turns whose conversations introduced "
+                "patterns, schemas, or decisions still active in the current question. "
+                "Omit turns fully captured in facts/checkpoint. "
+                "Do NOT include coherence tail turns — they are always kept automatically."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "turn_numbers": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": (
+                            "Turn numbers to retain (use the t-numbers from the turn "
+                            "inventory, e.g. [3, 5, 8]). Empty list means drop all "
+                            "middle turns."
+                        ),
+                    },
+                },
+                "required": ["turn_numbers"],
+            },
+        },
+    },
 ]

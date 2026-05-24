@@ -52,11 +52,14 @@ def rewrite_messages(
     coherence_tail_size: int,
     max_tail_messages: int = 20,
 ) -> list[dict]:
-    """Rewrite the messages array: compress tool results, preserve assistant reasoning.
+    """Rewrite the messages array: curator turn selection + tool result compression.
 
     Strategy:
     1. Keep the original system message + injected graph context (goal, facts, files)
     2. For the middle (non-tail) portion:
+       - If the curator provided retained_turn_numbers, drop turns not in that set.
+         A "turn" is the user message and all messages that follow until the next
+         user message (preserves tool-call structural integrity within a turn).
        - Tool results (file reads, search outputs): compress to a short preview.
          These are the expensive blobs; extracted facts in the system message carry
          the semantic content the model needs without re-reading.
@@ -65,11 +68,15 @@ def rewrite_messages(
        - User messages: keep intact verbatim.
     3. Keep the coherence tail (last N exchanges) completely intact.
 
-    Token savings come from compressing tool result blobs (5K-50K chars each),
-    not from compressing the model's reasoning (typically 100-1000 chars each).
+    Token savings come from (a) dropping irrelevant historical turns selected by
+    the curator, and (b) compressing tool result blobs (5K-50K chars each).
     """
     if not assembled_context or not getattr(assembled_context, "graph_context", None):
         return original_messages
+
+    # Curator turn selection — None means keep all (backward compatible)
+    retained_turn_numbers = getattr(assembled_context, "retained_turn_numbers", None)
+    retained_set = set(retained_turn_numbers) if retained_turn_numbers is not None else None
 
     # Split: system message, non-system messages
     system_msg = None
@@ -86,8 +93,22 @@ def rewrite_messages(
     tail_start = len(rest) - len(tail) if tail else len(rest)
     middle = rest[:tail_start]
 
-    # Build the session overview from graph context (goal, files, decisions)
-    # but NOT the flat fact list — facts get woven into per-turn summaries
+    # Assign ABSOLUTE turn numbers to middle messages.
+    # Turn numbers match the curator's turn inventory (1-indexed across the full
+    # conversation, not just the middle). The curator receives these absolute
+    # numbers in the prompt and calls select_relevant_turns([3, 5, 8, ...]).
+    if retained_set is not None:
+        turn_num = 0
+        all_rest_turn_nums: list[int] = []
+        for msg in rest:  # count across the full non-system portion
+            if msg.get("role") == "user":
+                turn_num += 1
+            all_rest_turn_nums.append(turn_num)
+        middle_turn_nums: list[int] = all_rest_turn_nums[:tail_start]
+    else:
+        middle_turn_nums = []  # unused when retained_set is None
+
+    # Build the session overview from graph context (goal, facts, decisions)
     system_context = getattr(assembled_context, "system_message", None) or {}
     graph_context = getattr(assembled_context, "graph_context", None) or []
     graph_content = system_context.get("content", "") if isinstance(system_context, dict) else ""
@@ -104,11 +125,12 @@ def rewrite_messages(
     else:
         result.append({"role": "system", "content": graph_content})
 
-    # Rewrite the middle — INVERTED compression target vs naive approach:
-    # Compress tool results (the expensive file/search blobs), keep assistant
-    # reasoning intact. This avoids the failure mode where the model loses its
-    # intermediate analysis and re-reads files it already processed.
-    for msg in middle:
+    # Rewrite the middle.
+    for i, msg in enumerate(middle):
+        # Turn selection: skip messages from turns the curator did not retain
+        if retained_set is not None and middle_turn_nums[i] not in retained_set:
+            continue
+
         role = msg.get("role")
         if role == "tool":
             # Tool results are often the primary token cost, but not all tool results

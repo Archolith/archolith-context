@@ -59,8 +59,14 @@ async def curate_context(
         logger.warning("curator_no_api_key", session_id=session_id)
         return None
 
-    # Build prompt
-    user_prompt = build_curator_user_prompt(session_goal, user_message)
+    # Build prompt — include turn inventory so curator can call select_relevant_turns
+    user_prompt = build_curator_user_prompt(
+        session_goal,
+        user_message,
+        messages=messages,
+        coherence_tail_size=settings.coherence_tail_size,
+        max_tail_messages=settings.max_tail_messages,
+    )
 
     # Build OpenAI client
     client = AsyncOpenAI(base_url=base_url, api_key=api_key)
@@ -104,5 +110,6 @@ async def curate_context(
         files_selected=[{"path": p} for p in result.curated_paths],
         decisions_selected=[],
         compression_ratio=1.0,
+        retained_turn_numbers=result.retained_turn_numbers,
     )
 
