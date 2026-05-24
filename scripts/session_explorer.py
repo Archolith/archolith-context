@@ -50,7 +50,7 @@ _port = os.getenv("PROXY_PORT", _dotenv.get("PROXY_PORT", "9801"))
 PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{_port}/v1")
 ADMIN_URL = PROXY_URL.rsplit("/v1", 1)[0]
 MODEL = os.getenv("BENCHMARK_MODEL", _dotenv.get("BENCHMARK_MODEL", "deepseek-chat"))
-MAX_TOKENS = int(os.getenv("EXPLORER_MAX_TOKENS", "1024"))
+MAX_TOKENS = int(os.getenv("EXPLORER_MAX_TOKENS", "4096"))
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
@@ -202,9 +202,17 @@ def main() -> None:
     # Run scenario
     turn_records = run_scenario(scenario_path, args.turns, session_id)
 
-    # Fetch trace
-    print("\nFetching trace...", end="", flush=True)
-    trace = fetch_trace(session_id)
+    # Wait briefly for the last turn's background trace-storage task to commit,
+    # then retry up to 3 times until all expected turns are present.
+    print("\nFetching trace", end="", flush=True)
+    expected_turns = len(turn_records)
+    trace = None
+    for attempt in range(4):
+        time.sleep(1.5)
+        trace = fetch_trace(session_id)
+        if trace and len(trace.get("turns", [])) >= expected_turns:
+            break
+        print(".", end="", flush=True)
     print(" ok" if trace else " failed (explorer will have partial data)")
 
     # Output path
@@ -348,7 +356,19 @@ code, pre { font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; fo
   display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 20px; margin: 1px;
   background: var(--bg3); color: var(--text3); border: 1px solid var(--border); text-decoration: line-through;
 }
-.ctx-block-text { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; font-size: 11px; color: var(--text2); white-space: pre-wrap; max-height: 200px; overflow-y: auto; margin-top: 4px; }
+.ctx-block-text { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; font-size: 11px; color: var(--text2); white-space: pre-wrap; margin-top: 6px; line-height: 1.6; }
+.curator-expand-btn { cursor: pointer; font-size: 12px; color: var(--purple); background: none; border: 1px solid var(--purple-border); border-radius: var(--radius-sm); padding: 2px 10px; margin-top: 4px; display: inline-block; }
+.curator-expand-btn:hover { background: var(--purple-dim); }
+details.curator-details summary { list-style: none; }
+details.curator-details summary::-webkit-details-marker { display: none; }
+details.curator-details[open] .curator-expand-btn::after { content: " ▲"; }
+details.curator-details:not([open]) .curator-expand-btn::after { content: " ▼"; }
+.rewritten-msg { border-left: 3px solid var(--border); margin: 4px 0; padding: 6px 10px; font-size: 11px; }
+.rewritten-msg.role-system { border-color: var(--green-border); background: var(--green-dim); }
+.rewritten-msg.role-user { border-color: var(--blue-border); background: var(--blue-dim); }
+.rewritten-msg.role-assistant { border-color: var(--indigo-border); background: var(--indigo-dim); }
+.rewritten-msg .msg-role { font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; color: var(--text2); }
+.rewritten-msg .msg-content { color: var(--text); white-space: pre-wrap; }
 
 /* Facts strip */
 .facts-strip { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
@@ -676,15 +696,37 @@ function renderTurnCard(turnRecord, idx) {
     }
 
     if (tr.curator_context_block) {
+      const ctxId = `curator-ctx-${n}`;
       curatorHtml += `
-  <div class="curator-row">
-    <span class="curator-label">Context block</span>
-    <span class="curator-val" style="width:100%">
-      <details><summary style="cursor:pointer;color:var(--purple);font-size:12px">Show curator context...</summary>
-      <pre class="ctx-block-text">${esc(tr.curator_context_block)}</pre></details>
-    </span>
+  <div class="curator-row" style="flex-direction:column;align-items:flex-start">
+    <details class="curator-details" style="width:100%">
+      <summary><span class="curator-expand-btn">Curator context block (${tr.curator_context_block.length} chars)</span></summary>
+      <pre class="ctx-block-text">${esc(tr.curator_context_block)}</pre>
+    </details>
   </div>`;
     }
+
+    // Rewritten prompt — full message array sent upstream
+    if (rewrMsgs && rewrMsgs.length) {
+      const msgRows = rewrMsgs.map(msg => {
+        const role = msg.role || 'unknown';
+        let content = '';
+        if (typeof msg.content === 'string') {
+          content = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          content = msg.content.map(p => p.text || '').join('');
+        }
+        return `<div class="rewritten-msg role-${esc(role)}"><div class="msg-role">${esc(role)}</div><div class="msg-content">${esc(content)}</div></div>`;
+      }).join('');
+      curatorHtml += `
+  <div class="curator-row" style="flex-direction:column;align-items:flex-start">
+    <details class="curator-details" style="width:100%">
+      <summary><span class="curator-expand-btn">Rewritten prompt (${rewrMsgs.length} messages, ${rewrTok}t)</span></summary>
+      <div style="margin-top:6px">${msgRows}</div>
+    </details>
+  </div>`;
+    }
+
     curatorHtml += `</div>`;
   }
 
