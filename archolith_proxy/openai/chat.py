@@ -1346,6 +1346,59 @@ async def _run_extraction(
                 turn=turn_number,
             )
 
+        # Store checkpoint (single record per session — overwrites on each turn)
+        if result.checkpoint:
+            try:
+                await get_backend().upsert_checkpoint(
+                    session_id=session_id,
+                    summary=result.checkpoint.get("summary", ""),
+                    next_step=result.checkpoint.get("next_step", ""),
+                    confidence=result.checkpoint.get("confidence", 0.5),
+                    turn=turn_number,
+                )
+            except Exception as e:
+                logger.warning("checkpoint_store_failed", session_id=session_id, error=str(e))
+
+        # Store issues — create new open ones, resolve closed ones
+        if result.issues:
+            open_issues = [i for i in result.issues if i.get("status") != "resolved"]
+            resolved_issues = [i for i in result.issues if i.get("status") == "resolved"]
+            for issue in open_issues:
+                try:
+                    await get_backend().create_issue(
+                        session_id=session_id,
+                        summary=issue.get("summary", ""),
+                        status="open",
+                        related_file=issue.get("related_file", ""),
+                        related_command=issue.get("related_command", ""),
+                        turn=turn_number,
+                    )
+                except Exception as e:
+                    logger.warning("issue_store_failed", session_id=session_id, error=str(e))
+            if resolved_issues:
+                try:
+                    summaries = [i.get("summary", "") for i in resolved_issues if i.get("summary")]
+                    if summaries:
+                        await get_backend().resolve_issues(
+                            session_id, summaries,
+                            f"resolved at turn {turn_number}", turn_number,
+                        )
+                except Exception as e:
+                    logger.warning("issue_resolve_failed", session_id=session_id, error=str(e))
+
+        # Store verifications
+        for v in result.verifications:
+            try:
+                await get_backend().create_verification(
+                    session_id=session_id,
+                    command=v.get("command", ""),
+                    status=v.get("status", "fail"),
+                    summary=v.get("summary", ""),
+                    turn=turn_number,
+                )
+            except Exception as e:
+                logger.warning("verification_store_failed", session_id=session_id, error=str(e))
+
         # Invalidate superseded facts — match description strings to actual fact IDs
         invalidations_matched_count = 0
         if result.invalidated_fact_ids:

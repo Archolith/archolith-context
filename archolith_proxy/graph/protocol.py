@@ -227,6 +227,49 @@ class GraphBackend(Protocol):
         """List all cached files for a session."""
         ...
 
+    # ── Checkpoint ─────────────────────────────────────────────────────
+
+    async def upsert_checkpoint(
+        self, session_id: str, summary: str, next_step: str, confidence: float, turn: int,
+    ) -> None:
+        """Insert or overwrite the single checkpoint record for a session."""
+        ...
+
+    async def get_checkpoint(self, session_id: str) -> dict | None:
+        """Get the current checkpoint. Returns None if none recorded."""
+        ...
+
+    # ── Issues ─────────────────────────────────────────────────────────
+
+    async def create_issue(
+        self, session_id: str, summary: str, status: str,
+        related_file: str, related_command: str, turn: int,
+    ) -> None:
+        """Record a new issue for a session."""
+        ...
+
+    async def resolve_issues(
+        self, session_id: str, summaries: list[str], resolution_ref: str, turn: int,
+    ) -> None:
+        """Mark open issues matching summaries as resolved."""
+        ...
+
+    async def get_open_issues(self, session_id: str) -> list[dict]:
+        """Get all open issues for a session."""
+        ...
+
+    # ── Verifications ──────────────────────────────────────────────────
+
+    async def create_verification(
+        self, session_id: str, command: str, status: str, summary: str, turn: int,
+    ) -> None:
+        """Record a verification result for a session."""
+        ...
+
+    async def get_last_verification(self, session_id: str) -> dict | None:
+        """Get the most recent verification for a session."""
+        ...
+
     # ── Cleanup / TTL ──────────────────────────────────────────────────
 
     async def expire_sessions(self) -> int:

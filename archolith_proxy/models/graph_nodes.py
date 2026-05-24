@@ -69,3 +69,32 @@ class DecisionNode(BaseModel):
     rationale: str | None = None
     turn: int = 0
     superseded_by: str | None = None
+
+
+class CheckpointNode(BaseModel):
+    session_id: str
+    summary: str
+    next_step: str | None = None
+    confidence: float = 0.5
+    source_turn: int = 0
+
+
+class IssueNode(BaseModel):
+    issue_id: str
+    session_id: str
+    status: str = "open"  # "open" | "resolved"
+    summary: str
+    related_file: str | None = None
+    related_command: str | None = None
+    resolution_ref: str | None = None
+    source_turn: int = 0
+    resolved_turn: int = 0
+
+
+class VerificationNode(BaseModel):
+    verification_id: str
+    session_id: str
+    command: str
+    status: str  # "pass" | "fail" | "partial"
+    summary: str
+    source_turn: int = 0

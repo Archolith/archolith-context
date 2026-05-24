@@ -224,6 +224,38 @@ class Neo4jBackend:
     async def list_cached_files(self, session_id: str) -> list[dict]:
         return []
 
+    # ── Checkpoint / Issues / Verifications (LadybugDB-only in MVP) ───
+
+    async def upsert_checkpoint(
+        self, session_id: str, summary: str, next_step: str, confidence: float, turn: int,
+    ) -> None:
+        return None
+
+    async def get_checkpoint(self, session_id: str) -> dict | None:
+        return None
+
+    async def create_issue(
+        self, session_id: str, summary: str, status: str,
+        related_file: str, related_command: str, turn: int,
+    ) -> None:
+        return None
+
+    async def resolve_issues(
+        self, session_id: str, summaries: list[str], resolution_ref: str, turn: int,
+    ) -> None:
+        return None
+
+    async def get_open_issues(self, session_id: str) -> list[dict]:
+        return []
+
+    async def create_verification(
+        self, session_id: str, command: str, status: str, summary: str, turn: int,
+    ) -> None:
+        return None
+
+    async def get_last_verification(self, session_id: str) -> dict | None:
+        return None
+
     # ── Cleanup / TTL ──────────────────────────────────────────────────
 
     async def expire_sessions(self) -> int:

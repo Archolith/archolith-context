@@ -24,7 +24,18 @@ You MUST respond with a single JSON object matching this exact schema:
  "invalidated": [
   "<description of a previously-extracted fact that is now superseded>"
  ],
- "session_goal": "<one-sentence description of what the user is trying to accomplish, or null>"
+"session_goal": "<one-sentence description of what the user is trying to accomplish, or null>",
+  "checkpoint": {
+    "summary": "<one sentence: what state is work in RIGHT NOW>",
+    "next_step": "<what should happen next, or null if unknown>",
+    "confidence": 0.0
+  },
+  "issues": [
+    {"summary": "<description>", "status": "open|resolved", "related_file": "<path or null>", "related_command": "<command or null>"}
+  ],
+  "verifications": [
+    {"command": "<exact command that was run>", "status": "pass|fail|partial", "summary": "<what was tested and what happened>"}
+  ]
 }
 ```
 
@@ -82,6 +93,25 @@ You MUST respond with a single JSON object matching this exact schema:
 
 11. ALWAYS extract a session_goal, even if you can only make a rough inference.
 
+12. EXTRACT A CHECKPOINT on every turn. The checkpoint is a single record reflecting the current state of work — not a history. Overwrite it each turn.
+- summary: one sentence describing what is currently done / where things stand
+- next_step: the single most important next action, or null if none is clear
+- confidence: how confident you are in this summary (0.9+ if stated, 0.7+ if implied, 0.5 if inferred)
+
+13. EXTRACT ISSUES when the turn reveals errors, blockers, failing tests, or unresolved problems.
+- Only include NEW issues discovered this turn (not ones already known from prior context).
+- Status "open": a problem that exists and is not yet fixed.
+- Status "resolved": a problem was fixed or closed this turn.
+- related_file and related_command: include when directly relevant, otherwise omit (null).
+- Do NOT extract minor warnings or non-blocking notes as issues.
+
+14. EXTRACT VERIFICATIONS when the turn shows a command being run and its result.
+- Applies to: test runs, build commands, linters, curl/API calls, script executions.
+- command: the exact command as it appears in the output.
+- status: "pass" (succeeded/green), "fail" (errored/red), "partial" (mixed results).
+- summary: what was tested and the key outcome in one sentence.
+- Only extract verifications for commands with observable output in this turn.
+
 ## Session Goal
 
 Extract a `session_goal` on EVERY turn — this is critical for context assembly.
@@ -110,7 +140,14 @@ Assistant: I read the file. The error is a missing import for `json`. I've added
   ],
   "decisions": [],
   "invalidated": [],
-  "session_goal": "Fix the missing json import error in src/main.py"
+"session_goal": "Fix the missing json import error in src/main.py",
+  "checkpoint": {
+    "summary": "Missing json import has been added to src/main.py",
+    "next_step": "Run tests to verify the fix works",
+    "confidence": 0.9
+  },
+  "issues": [],
+  "verifications": []
 }
 
 ## Example Input 2 (tool-result extraction):
@@ -126,7 +163,14 @@ Assistant: I'll search for Python files.
   "files_touched": [],
   "decisions": [],
   "invalidated": [],
-  "session_goal": "Explore the auth module Python files"
+"session_goal": "Explore the auth module Python files",
+  "checkpoint": {
+    "summary": "Auth module file structure has been mapped out",
+    "next_step": null,
+    "confidence": 0.95
+  },
+  "issues": [],
+  "verifications": []
 }
 
 ## BAD Example (DO NOT extract like this):

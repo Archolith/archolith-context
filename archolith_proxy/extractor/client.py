@@ -139,6 +139,56 @@ def _parse_extraction_response(content: str, turn_number: int) -> ExtractionResu
     if not isinstance(session_goal, str):
         session_goal = None
 
+    # Extract checkpoint
+    checkpoint = None
+    raw_checkpoint = data.get("checkpoint")
+    if isinstance(raw_checkpoint, dict) and raw_checkpoint.get("summary"):
+        conf = raw_checkpoint.get("confidence", 0.5)
+        try:
+            conf = float(conf)
+        except (TypeError, ValueError):
+            conf = 0.5
+        checkpoint = {
+            "summary": str(raw_checkpoint.get("summary", "")),
+            "next_step": str(raw_checkpoint.get("next_step") or ""),
+            "confidence": max(0.0, min(1.0, conf)),
+        }
+
+    # Extract issues
+    issues = []
+    for item in (data.get("issues") or []):
+        if not isinstance(item, dict):
+            continue
+        summary = item.get("summary", "")
+        if not summary:
+            continue
+        status = item.get("status", "open")
+        if status not in ("open", "resolved"):
+            status = "open"
+        issues.append({
+            "summary": str(summary),
+            "status": status,
+            "related_file": str(item.get("related_file") or ""),
+            "related_command": str(item.get("related_command") or ""),
+        })
+
+    # Extract verifications
+    verifications = []
+    for item in (data.get("verifications") or []):
+        if not isinstance(item, dict):
+            continue
+        command = item.get("command", "")
+        if not command:
+            continue
+        status = item.get("status", "fail")
+        if status not in ("pass", "fail", "partial"):
+            status = "fail"
+        verifications.append({
+            "command": str(command),
+            "status": status,
+            "summary": str(item.get("summary") or ""),
+        })
+
     return ExtractionResult(
         facts=facts,
         files_touched=files_touched,
@@ -146,4 +196,7 @@ def _parse_extraction_response(content: str, turn_number: int) -> ExtractionResu
         invalidated_fact_ids=invalidated_ids,
         turn_number=turn_number,
         session_goal=session_goal,
+        checkpoint=checkpoint,
+        issues=issues,
+        verifications=verifications,
     )

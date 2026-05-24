@@ -88,6 +88,38 @@ CREATE NODE TABLE IF NOT EXISTS FileContent(
     last_updated_turn INT64,
     created_at        TIMESTAMP
 );
+
+CREATE NODE TABLE IF NOT EXISTS Checkpoint(
+    session_id   STRING PRIMARY KEY,
+    summary      STRING,
+    next_step    STRING,
+    confidence   DOUBLE,
+    source_turn  INT64,
+    updated_at   TIMESTAMP
+);
+
+CREATE NODE TABLE IF NOT EXISTS Issue(
+    issue_id        STRING PRIMARY KEY,
+    session_id      STRING,
+    status          STRING,
+    summary         STRING,
+    related_file    STRING,
+    related_command STRING,
+    resolution_ref  STRING,
+    source_turn     INT64,
+    resolved_turn   INT64,
+    created_at      TIMESTAMP
+);
+
+CREATE NODE TABLE IF NOT EXISTS Verification(
+    verification_id STRING PRIMARY KEY,
+    session_id      STRING,
+    command         STRING,
+    status          STRING,
+    summary         STRING,
+    source_turn     INT64,
+    created_at      TIMESTAMP
+);
 """
 
 
@@ -677,6 +709,136 @@ class LadybugBackend:
             """,
             {"session_id": session_id},
         )
+
+    # ── Checkpoint ─────────────────────────────────────────────────────
+
+    async def upsert_checkpoint(
+        self, session_id: str, summary: str, next_step: str, confidence: float, turn: int,
+    ) -> None:
+        """Insert or overwrite the single checkpoint record for a session."""
+        existing = await self._execute(
+            "MATCH (c:Checkpoint {session_id: $session_id}) RETURN c.session_id AS sid",
+            {"session_id": session_id},
+        )
+        if existing:
+            await self._execute(
+                """
+                MATCH (c:Checkpoint {session_id: $session_id})
+                SET c.summary = $summary, c.next_step = $next_step,
+                    c.confidence = $confidence, c.source_turn = $turn,
+                    c.updated_at = current_timestamp()
+                """,
+                {"session_id": session_id, "summary": summary, "next_step": next_step,
+                 "confidence": confidence, "turn": turn},
+            )
+        else:
+            await self._execute(
+                """
+                CREATE (c:Checkpoint {
+                    session_id: $session_id, summary: $summary, next_step: $next_step,
+                    confidence: $confidence, source_turn: $turn,
+                    updated_at: current_timestamp()
+                })
+                """,
+                {"session_id": session_id, "summary": summary, "next_step": next_step,
+                 "confidence": confidence, "turn": turn},
+            )
+
+    async def get_checkpoint(self, session_id: str) -> dict | None:
+        """Get the current checkpoint for a session. Returns None if none recorded."""
+        rows = await self._execute(
+            """
+            MATCH (c:Checkpoint {session_id: $session_id})
+            RETURN c.summary AS summary, c.next_step AS next_step,
+                   c.confidence AS confidence, c.source_turn AS source_turn
+            """,
+            {"session_id": session_id},
+        )
+        return rows[0] if rows else None
+
+    # ── Issues ─────────────────────────────────────────────────────────
+
+    async def create_issue(
+        self, session_id: str, summary: str, status: str,
+        related_file: str, related_command: str, turn: int,
+    ) -> None:
+        """Record a new issue (open or resolved) for a session."""
+        iid = "iss" + uuid4().hex[:13]
+        await self._execute(
+            """
+            CREATE (i:Issue {
+                issue_id: $iid, session_id: $session_id, status: $status,
+                summary: $summary, related_file: $related_file,
+                related_command: $related_command, resolution_ref: '',
+                source_turn: $turn, resolved_turn: 0,
+                created_at: current_timestamp()
+            })
+            """,
+            {"iid": iid, "session_id": session_id, "status": status,
+             "summary": summary, "related_file": related_file or "",
+             "related_command": related_command or "", "turn": turn},
+        )
+
+    async def resolve_issues(
+        self, session_id: str, summaries: list[str], resolution_ref: str, turn: int,
+    ) -> None:
+        """Mark open issues whose summary matches any entry in `summaries` as resolved."""
+        for summary in summaries:
+            await self._execute(
+                """
+                MATCH (i:Issue {session_id: $session_id, status: 'open', summary: $summary})
+                SET i.status = 'resolved', i.resolution_ref = $ref, i.resolved_turn = $turn
+                """,
+                {"session_id": session_id, "summary": summary,
+                 "ref": resolution_ref, "turn": turn},
+            )
+
+    async def get_open_issues(self, session_id: str) -> list[dict]:
+        """Get all open issues for a session ordered by turn."""
+        return await self._execute(
+            """
+            MATCH (i:Issue {session_id: $session_id, status: 'open'})
+            RETURN i.issue_id AS issue_id, i.summary AS summary,
+                   i.related_file AS related_file,
+                   i.related_command AS related_command,
+                   i.source_turn AS source_turn
+            ORDER BY i.source_turn ASC
+            """,
+            {"session_id": session_id},
+        )
+
+    # ── Verifications ──────────────────────────────────────────────────
+
+    async def create_verification(
+        self, session_id: str, command: str, status: str, summary: str, turn: int,
+    ) -> None:
+        """Record a verification result (pass/fail/partial) for a session."""
+        vid = "ver" + uuid4().hex[:13]
+        await self._execute(
+            """
+            CREATE (v:Verification {
+                verification_id: $vid, session_id: $session_id,
+                command: $command, status: $status, summary: $summary,
+                source_turn: $turn, created_at: current_timestamp()
+            })
+            """,
+            {"vid": vid, "session_id": session_id, "command": command,
+             "status": status, "summary": summary, "turn": turn},
+        )
+
+    async def get_last_verification(self, session_id: str) -> dict | None:
+        """Get the most recent verification for a session."""
+        rows = await self._execute(
+            """
+            MATCH (v:Verification {session_id: $session_id})
+            RETURN v.command AS command, v.status AS status,
+                   v.summary AS summary, v.source_turn AS source_turn
+            ORDER BY v.source_turn DESC
+            LIMIT 1
+            """,
+            {"session_id": session_id},
+        )
+        return rows[0] if rows else None
 
     # ── Cleanup / TTL ──────────────────────────────────────────────────
 

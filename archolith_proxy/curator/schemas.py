@@ -1,4 +1,4 @@
-"""OpenAI-compatible tool schemas for the curator's 7 tools.
+"""OpenAI-compatible tool schemas for the curator's 10 tools.
 
 Each schema follows the OpenAI function-calling format used by
 delegate_server.py ALL_TOOL_LIST. These are passed as the `tools=`
@@ -108,6 +108,54 @@ ALL_CURATOR_TOOLS: list[dict] = [
         "function": {
             "name": "get_touched_files",
             "description": "Get all files touched (read, modified, created, deleted) in the session as a table.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+},
+    {
+        "type": "function",
+        "function": {
+            "name": "get_checkpoint",
+            "description": (
+                "Get the current work checkpoint: what state the session is in right now "
+                "and what the next step is. Call this first — it is the fastest way to "
+                "orient to where the session stands."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_open_issues",
+            "description": (
+                "Get all open (unresolved) issues for the session: errors, blockers, "
+                "failing tests, and unresolved problems. Includes the file and command "
+                "associated with each issue when available."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_last_verification",
+            "description": (
+                "Get the most recent test or verification result: the exact command run, "
+                "whether it passed/failed/partial, and a summary of what was tested. "
+                "Use this when the current question involves tests, builds, or commands."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {},

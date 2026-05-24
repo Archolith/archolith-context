@@ -1,4 +1,4 @@
-"""Curator tool implementations — 7 async tool functions.
+"""Curator tool implementations — 10 async tool functions.
 
 Each is `async def tool_name(session_id: str, **kwargs) -> str`.
 All call `get_backend()` directly. No LLM calls — pure DB queries
@@ -146,6 +146,53 @@ async def get_touched_files(session_id: str, **kwargs) -> str:
         lines.append(f"| {path} | {status} | {turn} |")
     return "\n".join(lines)
 
+async def get_checkpoint(session_id: str, **kwargs) -> str:
+    """Get the current work checkpoint: what state the session is in and what comes next."""
+    checkpoint = await get_backend().get_checkpoint(session_id)
+    if not checkpoint:
+        return "(no checkpoint recorded yet — not enough turns)"
+    summary = checkpoint.get("summary", "")
+    next_step = checkpoint.get("next_step", "")
+    confidence = checkpoint.get("confidence", 0.5)
+    turn = checkpoint.get("source_turn", 0)
+    lines = [f"**Current state** (turn {turn}, confidence {confidence:.0%}): {summary}"]
+    if next_step:
+        lines.append(f"**Next step**: {next_step}")
+    return "\n".join(lines)
+
+
+async def get_open_issues(session_id: str, **kwargs) -> str:
+    """Get all open (unresolved) issues: errors, blockers, and failing tests."""
+    issues = await get_backend().get_open_issues(session_id)
+    if not issues:
+        return "(no open issues)"
+    lines = []
+    for i, issue in enumerate(issues, 1):
+        summary = issue.get("summary", "")
+        related_file = issue.get("related_file", "")
+        related_command = issue.get("related_command", "")
+        turn = issue.get("source_turn", 0)
+        line = f"{i}. [turn {turn}] {summary}"
+        if related_file:
+            line += f" (file: {related_file})"
+        if related_command:
+            line += f" (cmd: {related_command})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+async def get_last_verification(session_id: str, **kwargs) -> str:
+    """Get the most recent test/verification result: command, pass/fail, and what was tested."""
+    v = await get_backend().get_last_verification(session_id)
+    if not v:
+        return "(no verifications recorded)"
+    command = v.get("command", "")
+    status = v.get("status", "")
+    summary = v.get("summary", "")
+    turn = v.get("source_turn", 0)
+    icon = {"pass": "PASS", "fail": "FAIL", "partial": "PARTIAL"}.get(status, status.upper())
+    return f"[{icon}] turn {turn}: `{command}`\n{summary}"
+
 
 # Tool name → implementation mapping (used by loop.py for dispatch)
 TOOL_HANDLERS: dict[str, callable] = {
@@ -156,4 +203,7 @@ TOOL_HANDLERS: dict[str, callable] = {
     "get_session_goal": get_session_goal,
     "get_recent_decisions": get_recent_decisions,
     "get_touched_files": get_touched_files,
+    "get_checkpoint": get_checkpoint,
+    "get_open_issues": get_open_issues,
+    "get_last_verification": get_last_verification,
 }

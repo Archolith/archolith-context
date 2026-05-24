@@ -30,6 +30,10 @@ class ExtractionResult(BaseModel):
     invalidated_fact_ids: list[str] # Description strings, not actual IDs — matched via find_matching_fact_ids()
     turn_number: int
     session_goal: str | None = None
+    # Typed work state — populated when extractor detects checkpoint/issue/verification signals
+    checkpoint: dict | None = None          # {summary, next_step, confidence}
+    issues: list[dict] = Field(default_factory=list)        # [{summary, status, related_file, related_command}]
+    verifications: list[dict] = Field(default_factory=list) # [{command, status, summary}]
 
 
 # ---------------------------------------------------------------------------
