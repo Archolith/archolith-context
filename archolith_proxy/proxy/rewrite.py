@@ -16,6 +16,31 @@ _REASONING_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# DSML tool-call artifacts emitted by DeepSeek when it attempts to invoke tools
+# from within its response text. These appear when the model sees DSML-format
+# tool outputs in its history (from a prior cold-start turn where the user
+# mentioned a file path) and continues the pattern.
+#
+# Removing these from retained assistant messages prevents the pattern from
+# propagating into subsequent turns via the curator's retained history.
+#
+# Patterns handled:
+# - DeepSeek DSML: <｜｜DSML｜｜...> (fullwidth pipes, U+FF5C)
+# - DeepSeek V3 tool-call block: <｜tool▁calls▁begin｜> ... <｜tool▁calls▁end｜>
+# - Nous-style tool calls: <tool_call>...</tool_call>
+_DSML_BLOCK_RE = re.compile(
+    r"<｜｜DSML｜｜.*",  # strip from first DSML marker to end
+    re.DOTALL,
+)
+_NOUS_TOOL_CALL_RE = re.compile(
+    r"<tool_call>.*?</tool_call>",
+    re.DOTALL,
+)
+_DEEPSEEK_TOOL_BLOCK_RE = re.compile(
+    r"<｜tool▁calls▁begin｜>.*?<｜tool▁calls▁end｜>",
+    re.DOTALL,
+)
+
 
 def strip_reasoning(text: str) -> str:
     """Strip model reasoning blocks before extraction.
@@ -25,6 +50,29 @@ def strip_reasoning(text: str) -> str:
     as facts. Stripping prevents noise in the extraction pipeline.
     """
     return _REASONING_PATTERN.sub("", text).strip()
+
+
+def strip_dsml_artifacts(text: str) -> str:
+    """Strip DSML tool-call artifacts from assistant message text.
+
+    DeepSeek emits DSML-format tool invocations (``<｜｜DSML｜｜...>``) when it
+    thinks it is in a tool-enabled session. When a prior turn containing this
+    markup is retained in the curator's rewritten history, the model sees its
+    own DSML output and repeats the pattern on the next turn.
+
+    This function removes the artifact markup from assistant messages before
+    they are passed upstream, breaking the contamination cycle. The prose
+    content before the first DSML tag is preserved.
+    """
+    if not text:
+        return text
+    # DeepSeek DSML: everything from the first marker to end-of-string
+    text = _DSML_BLOCK_RE.sub("", text)
+    # DeepSeek V3 tool block delimiters (bounded — remove the whole block)
+    text = _DEEPSEEK_TOOL_BLOCK_RE.sub("", text)
+    # Nous-style XML tool calls (bounded)
+    text = _NOUS_TOOL_CALL_RE.sub("", text)
+    return text.rstrip()
 
 
 def estimate_input_tokens(messages: list[dict]) -> int:
@@ -155,13 +203,17 @@ def rewrite_messages(
                 result.append(msg)
         elif role == "assistant":
             # Keep assistant messages intact — they're the model's reasoning chain.
-            # Do strip scaffolding blocks (<thinking>/<reasoning>) since those are
-            # internal monologue not needed for context continuity.
+            # Strip two categories of scaffolding that contaminate downstream turns:
+            # 1. <thinking>/<reasoning> blocks — internal monologue, not needed.
+            # 2. DSML tool-call artifacts — DeepSeek emits these when it thinks it's
+            #    in a tool-enabled session. Retaining them causes the pattern to
+            #    propagate: the model sees its own prior DSML and repeats it.
             content = msg.get("content", "") or ""
             if isinstance(content, str) and content:
-                stripped = strip_reasoning(content)
-                if stripped != content:
-                    result.append({**msg, "content": stripped})
+                cleaned = strip_reasoning(content)
+                cleaned = strip_dsml_artifacts(cleaned)
+                if cleaned != content:
+                    result.append({**msg, "content": cleaned})
                 else:
                     result.append(msg)
             else:

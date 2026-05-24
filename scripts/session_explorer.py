@@ -52,6 +52,31 @@ ADMIN_URL = PROXY_URL.rsplit("/v1", 1)[0]
 MODEL = os.getenv("BENCHMARK_MODEL", _dotenv.get("BENCHMARK_MODEL", "deepseek-chat"))
 MAX_TOKENS = int(os.getenv("EXPLORER_MAX_TOKENS", "4096"))
 
+# Substrings that indicate DSML/tool-call artifacts in response text.
+# DeepSeek emits these when it thinks it's in a tool-enabled session; seeing
+# its own prior DSML output in history causes it to repeat the pattern.
+_DSML_MARKERS = (
+    "<｜｜DSML｜｜",       # DeepSeek DSML delimiter (fullwidth pipes)
+    "<｜tool▁calls▁begin｜>",  # DeepSeek V3 tool-call block opener
+    "<tool_call>",           # Nous-style XML tool call (may appear from history contamination)
+)
+
+
+def _degraded_reason(response_text: str, output_tokens: int | None, min_tokens: int) -> str | None:
+    """Return a human-readable degradation reason, or None if the turn looks healthy.
+
+    A turn is degraded if:
+    - output_tokens is below the minimum threshold (stuck / empty)
+    - response_text contains DSML tool-call markup (contamination artifact)
+    """
+    if output_tokens is not None and output_tokens < min_tokens:
+        return f"low_tokens ({output_tokens}t < {min_tokens}t)"
+    for marker in _DSML_MARKERS:
+        if marker in response_text:
+            short = marker.encode("unicode_escape").decode()[:20]
+            return f"dsml_artifact ('{short}...' in response)"
+    return None
+
 
 # ── Runner ────────────────────────────────────────────────────────────────────
 
@@ -67,12 +92,11 @@ def run_scenario(scenario_path: Path, n_turns: int, session_id: str) -> list[dic
     print(f"Model    : {MODEL}")
     print()
 
-    # Circuit breaker: if output_tokens stays below this threshold for
-    # CIRCUIT_BREAKER_CONSECUTIVE consecutive turns, the model is stuck
-    # (tool-call artifacts, empty responses, context collapse) — stop early.
+    # Circuit breaker: stop early when the model is degraded for N consecutive turns.
+    # Degraded = low output token count OR DSML tool-call artifacts in response text.
     CIRCUIT_BREAKER_MIN_TOKENS = int(os.getenv("EXPLORER_MIN_TOKENS", "100"))
     CIRCUIT_BREAKER_CONSECUTIVE = int(os.getenv("EXPLORER_BREAKER_TURNS", "3"))
-    low_token_streak = 0
+    degraded_streak = 0
 
     messages: list[dict] = []
     records: list[dict] = []
@@ -109,31 +133,35 @@ def run_scenario(scenario_path: Path, n_turns: int, session_id: str) -> list[dic
             elapsed_ms = (time.monotonic() - t0) * 1000
 
             messages.append({"role": "assistant", "content": response_text})
+
+            # Circuit breaker: detect degraded turns (low tokens OR DSML artifacts)
+            degrade = _degraded_reason(response_text, output_tokens, CIRCUIT_BREAKER_MIN_TOKENS)
+            if degrade:
+                degraded_streak += 1
+            else:
+                degraded_streak = 0
+
             records.append({
                 "turn": i,
                 "user_msg": user_msg,
                 "response": response_text,
                 "output_tokens": output_tokens,
                 "latency_ms": round(elapsed_ms, 1),
+                "degraded": degrade,
             })
 
-            # Circuit breaker check
-            if output_tokens is not None and output_tokens < CIRCUIT_BREAKER_MIN_TOKENS:
-                low_token_streak += 1
-            else:
-                low_token_streak = 0
-
+            degrade_tag = f"  ⚠ {degrade}" if degrade else ""
             print(
                 f"{elapsed_ms / 1000:.1f}s  |  "
                 f"out={output_tokens or '?'}t  |  "
                 f"{user_msg[:60].replace(chr(10), ' ')}..."
+                + degrade_tag
             )
 
-            if low_token_streak >= CIRCUIT_BREAKER_CONSECUTIVE:
+            if degraded_streak >= CIRCUIT_BREAKER_CONSECUTIVE:
                 print(
-                    f"\n  [early stop] {low_token_streak} consecutive turns "
-                    f"under {CIRCUIT_BREAKER_MIN_TOKENS}t — saving partial run "
-                    f"({i}/{len(turns_spec)} turns) for tuning analysis."
+                    f"\n  [early stop] {degraded_streak} consecutive degraded turns "
+                    f"— saving partial run ({i}/{len(turns_spec)} turns) for tuning analysis."
                 )
                 break
 
@@ -329,6 +357,11 @@ code, pre { font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; fo
   white-space: nowrap;
 }
 .savings-chip.zero { background: var(--bg3); color: var(--text3); border-color: var(--border); }
+.degraded-badge {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px;
+  background: #2d1a00; color: #e07b00; border: 1px solid #7a4000;
+  white-space: nowrap; cursor: help;
+}
 .toggle-arrow { color: var(--text3); font-size: 10px; transition: transform 0.15s; }
 .toggle-arrow.open { transform: rotate(90deg); }
 
@@ -457,6 +490,15 @@ function traceByTurn(n) {
 
 function modeBadge(mode) {
   return `<span class="mode-badge mode-${esc(mode)}">${esc(mode || 'passthrough')}</span>`;
+}
+
+function degradedBadge(reason) {
+  if (!reason) return '';
+  // Shorten to just the type part for the badge label
+  const label = reason.startsWith('dsml_artifact') ? '⚠ DSML artifact'
+               : reason.startsWith('low_tokens') ? '⚠ low tokens'
+               : '⚠ degraded';
+  return `<span class="degraded-badge" title="${esc(reason)}">${label}</span>`;
 }
 
 // Group messages into segments: system, middle turns (each user+asst run), tail
@@ -796,13 +838,15 @@ function renderTurnCard(turnRecord, idx) {
 
   const cardId = `card-${n}`;
   const bodyId = `body-${n}`;
-  const openByDefault = n <= 3 || mode === 'curator';
+  const degradedReason = turnRecord.degraded || null;
+  const openByDefault = n <= 3 || mode === 'curator' || !!degradedReason;
 
   return `
 <div class="turn-card" id="${cardId}">
   <div class="turn-header ${openByDefault ? 'open' : ''}" onclick="toggleCard('${bodyId}', this)">
     <span class="turn-num">Turn ${n}</span>
     ${modeBadge(mode)}
+    ${degradedBadge(degradedReason)}
     <span class="turn-user-preview">${esc((turnRecord.user_msg || '').slice(0,120).replace(/\n/g,' '))}</span>
     <span class="savings-chip ${savingsChipCls}">${fmt(savings)}t saved</span>
     <span class="turn-tokens">${fmt(origTok)}t &rarr; ${fmt(rewrTok)}t</span>
