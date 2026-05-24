@@ -1,0 +1,32 @@
+{
+  "name": "config_doc",
+  "description": "Generate config reference doc and validation script",
+  "task_prompt": "You are working in the archolith-context repository.\n\nComplete the following two tasks in order:\n\nTASK 1 — Config Reference Doc\nRead archolith_proxy/config.py in full. Create docs/config_reference.md containing\na markdown table with one row per setting. Columns: Setting Name, Type, Default,\nDescription. Include every field defined in the Settings class. The file must have\nat least 40 lines.\n\nTASK 2 — Config Validator Script\nCreate scripts/validate_config.py. It must:\n- Read a .env file path from argv[1] (default: \".env\")\n- Check that UPSTREAM_API_KEY, UPSTREAM_BASE_URL, EXTRACTOR_API_KEY,\n  EXTRACTOR_BASE_URL, and UPSTREAM_MAX_RETRIES are all set and non-empty\n- Print a PASS/FAIL line for each, then a final summary line\n- Exit 0 if all pass, 1 if any fail\n\nDo not modify any existing files. Create only docs/config_reference.md and\nscripts/validate_config.py.",
+  "total_timeout_seconds": 600,
+  "checkpoints": [
+    {
+      "id": "docs_written",
+      "description": "Config reference markdown exists with all settings",
+      "check_after_seconds": 120,
+      "gate": true,
+      "filesystem_checks": [
+        {"path": "docs/config_reference.md", "exists": true},
+        {"path": "docs/config_reference.md", "contains": "UPSTREAM_API_KEY"},
+        {"path": "docs/config_reference.md", "contains": "EXTRACTOR_API_KEY"},
+        {"path": "docs/config_reference.md", "min_lines": 40}
+      ]
+    },
+    {
+      "id": "validator_written",
+      "description": "Validation script exists and imports correctly",
+      "check_after_seconds": 240,
+      "gate": true,
+      "filesystem_checks": [
+        {"path": "scripts/validate_config.py", "exists": true},
+        {"path": "scripts/validate_config.py", "contains": "UPSTREAM_API_KEY"},
+        {"path": "scripts/validate_config.py", "contains": "EXTRACTOR_API_KEY"},
+        {"path": "scripts/validate_config.py", "not_empty": true}
+      ]
+    }
+  ]
+}
