@@ -67,11 +67,11 @@ _port = os.getenv("PROXY_PORT", _dotenv.get("PROXY_PORT", "9801"))
 PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{_port}/v1")
 ADMIN_URL = PROXY_URL.rsplit("/v1", 1)[0]
 
-# DeepSeek V4 Flash — API string: deepseek-v4-flash
-# Provider prefix ("deepseek-proxy/" vs "deepseek/") selects proxy vs direct routing
-# in opencode.json. Override via BENCHMARK_PROXY_MODEL / BENCHMARK_DIRECT_MODEL.
+# DeepSeek V4 Flash — registered in opencode.json under deepseek-proxy / deepseek-direct providers.
+# Provider prefix selects proxy vs direct routing; model ID is validated by the harness
+# against OpencodeAdapter.supportedModels. Override via env vars.
 PROXY_MODEL = os.getenv("BENCHMARK_PROXY_MODEL", _dotenv.get("BENCHMARK_PROXY_MODEL", "deepseek-proxy/deepseek-v4-flash"))
-DIRECT_MODEL = os.getenv("BENCHMARK_DIRECT_MODEL", _dotenv.get("BENCHMARK_DIRECT_MODEL", "deepseek/deepseek-v4-flash"))
+DIRECT_MODEL = os.getenv("BENCHMARK_DIRECT_MODEL", _dotenv.get("BENCHMARK_DIRECT_MODEL", "deepseek-direct/deepseek-v4-flash"))
 
 
 # ── Proxy admin API ───────────────────────────────────────────────────────────
