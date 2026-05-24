@@ -131,9 +131,9 @@ def run_scenario(scenario_path: Path, n_turns: int, session_id: str) -> list[dic
 
             if low_token_streak >= CIRCUIT_BREAKER_CONSECUTIVE:
                 print(
-                    f"\n  [CIRCUIT BREAKER] {low_token_streak} consecutive turns "
-                    f"below {CIRCUIT_BREAKER_MIN_TOKENS}t — model appears stuck. "
-                    f"Stopping at turn {i}/{len(turns_spec)}."
+                    f"\n  [early stop] {low_token_streak} consecutive turns "
+                    f"under {CIRCUIT_BREAKER_MIN_TOKENS}t — saving partial run "
+                    f"({i}/{len(turns_spec)} turns) for tuning analysis."
                 )
                 break
 
