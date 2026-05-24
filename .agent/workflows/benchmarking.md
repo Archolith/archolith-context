@@ -4,8 +4,14 @@
 
 The benchmark suite measures how well the archolith-proxy compresses conversation context while preserving the model's ability to recall facts from earlier turns. It sends the same multi-turn conversation through two paths:
 
-1. **Direct** — full conversation history sent to the upstream LLM every turn (baseline)
+1. **Passthrough** — request routes through the proxy unchanged (no context management), full history forwarded verbatim. Token counts recorded in the same trace store as the proxy path for accurate comparison. Uses `deepseek-passthrough/deepseek-v4-flash-passthrough` provider.
 2. **Proxy** — archolith-proxy rewrites the conversation, replacing middle history with graph-assembled context + a coherence tail of recent messages
+
+### Passthrough mode
+
+The proxy detects any model name ending in `-passthrough`, strips the suffix before forwarding to DeepSeek, and skips all context management (no assembly, no injection, no graph writes, no extraction). The trace is still recorded (input_tokens, output_tokens, upstream_latency) so both sessions appear in the same trace explorer and the harness benchmark report.
+
+This replaces the old approach of routing the "direct" session straight to the DeepSeek API, which made token comparison impossible since the trace store never saw those requests.
 
 After specific turns, **fact probes** ask the model questions about earlier content and check whether expected keywords appear in the response. This gives two key metrics:
 

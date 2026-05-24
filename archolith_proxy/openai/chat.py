@@ -172,6 +172,112 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             400, "Messages array must not be empty", "invalid_request_error", param="messages"
         )
 
+    # Passthrough mode — model name ends with "-passthrough" suffix.
+    # Strip the suffix, forward unchanged, record trace (tokens + latency), skip
+    # all context management (assembly, injection, extraction, graph writes).
+    # Used for accurate baseline benchmarking through the same infrastructure.
+    _PASSTHROUGH_SUFFIX = "-passthrough"
+    is_passthrough = req.model.endswith(_PASSTHROUGH_SUFFIX)
+    if is_passthrough:
+        clean_model = req.model[: -len(_PASSTHROUGH_SUFFIX)]
+        body["model"] = clean_model
+        upstream_url = f"{settings.upstream_api_url}/chat/completions"
+        upstream_headers = {
+            "Authorization": f"Bearer {settings.upstream_api_key}",
+            "Content-Type": "application/json",
+        }
+        input_tokens = estimate_input_tokens(body.get("messages", []))
+        trace_builder.set_request(
+            session_id=None,
+            turn_number=0,
+            model=clean_model,
+            stream=req.stream,
+            input_tokens=input_tokens,
+            message_count=len(body.get("messages", [])),
+            user_turn_count=sum(1 for m in body.get("messages", []) if m.get("role") == "user"),
+        )
+        trace_builder.set_original_messages(body.get("messages", []))
+        trace_builder.set_assembly(
+            mode="passthrough",
+            reason="passthrough model",
+            latency_ms=0.0,
+            facts_selected=[],
+            files_selected=[],
+            decisions_selected=[],
+            rewritten_tokens=0,
+            savings_tokens=0,
+            savings_ratio=0.0,
+            compression_ratio=1.0,
+        )
+        request_body = json.dumps(body).encode("utf-8")
+        t0 = time.monotonic()
+        try:
+            resp = await upstream_request_with_retry(
+                client=request.app.state.http_client,
+                url=upstream_url,
+                headers=upstream_headers,
+                content=request_body,
+                max_retries=settings.upstream_max_retries,
+                backoff_base=settings.upstream_retry_backoff_base_s,
+            )
+        except httpx.TimeoutException:
+            return make_error_response(504, "Upstream request timed out", "upstream_timeout", code="timeout")
+        except httpx.ConnectError as e:
+            return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
+        latency_ms = (time.monotonic() - t0) * 1000
+        if req.stream:
+            # Streaming passthrough — relay SSE unchanged, record trace in background
+            async def _passthrough_stream():
+                async with resp.aiter_bytes() as stream:
+                    async for chunk in stream:
+                        yield chunk
+
+            async def _finalize_passthrough_trace():
+                trace_builder.set_response(
+                    status=resp.status_code,
+                    latency_ms=latency_ms,
+                    output_tokens=None,
+                    response_summary="(passthrough streaming)",
+                )
+                try:
+                    trace = trace_builder.build()
+                    await get_trace_store().record(trace)
+                except Exception:
+                    logger.warning("passthrough_trace_store_failed", exc_info=True)
+
+            background_tasks.add_task(_finalize_passthrough_trace)
+            return StreamingResponse(
+                _passthrough_stream(),
+                status_code=resp.status_code,
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+                background=background_tasks,
+            )
+        else:
+            # Non-streaming passthrough — record token counts from response
+            response_data = resp.json() if resp.status_code == 200 else {}
+            usage = response_data.get("usage", {})
+            output_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
+            trace_builder.set_response(
+                status=resp.status_code,
+                latency_ms=latency_ms,
+                output_tokens=output_tokens,
+                response_summary=_extract_response_text(response_data)[:500],
+            )
+            async def _finalize_passthrough_trace_ns():
+                try:
+                    trace = trace_builder.build()
+                    await get_trace_store().record(trace)
+                except Exception:
+                    logger.warning("passthrough_trace_store_failed_ns", exc_info=True)
+            background_tasks.add_task(_finalize_passthrough_trace_ns)
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type="application/json",
+                background=background_tasks,
+            )
+
     # Session resolution (graceful — skip if Neo4j not ready)
     session_id = None
     turn_number = 0

@@ -67,11 +67,12 @@ _port = os.getenv("PROXY_PORT", _dotenv.get("PROXY_PORT", "9801"))
 PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{_port}/v1")
 ADMIN_URL = PROXY_URL.rsplit("/v1", 1)[0]
 
-# DeepSeek V4 Flash — registered in opencode.json under deepseek-proxy / deepseek-direct providers.
-# Provider prefix selects proxy vs direct routing; model ID is validated by the harness
-# against OpencodeAdapter.supportedModels. Override via env vars.
+# DeepSeek V4 Flash — registered in opencode.json under deepseek-proxy / deepseek-passthrough providers.
+# Both sessions route through the proxy so token counts are recorded in the same trace store.
+# The passthrough provider strips the "-passthrough" suffix and forwards unchanged (no context
+# management), giving an accurate baseline for comparison. Override via env vars or .env.
 PROXY_MODEL = os.getenv("BENCHMARK_PROXY_MODEL", _dotenv.get("BENCHMARK_PROXY_MODEL", "deepseek-proxy/deepseek-v4-flash"))
-DIRECT_MODEL = os.getenv("BENCHMARK_DIRECT_MODEL", _dotenv.get("BENCHMARK_DIRECT_MODEL", "deepseek-direct/deepseek-v4-flash"))
+DIRECT_MODEL = os.getenv("BENCHMARK_DIRECT_MODEL", _dotenv.get("BENCHMARK_DIRECT_MODEL", "deepseek-passthrough/deepseek-v4-flash-passthrough"))
 
 
 # ── Proxy admin API ───────────────────────────────────────────────────────────
@@ -84,7 +85,7 @@ def set_proxy_session(session_id: str) -> None:
             json={"session_id": session_id},
         )
         r.raise_for_status()
-    print(f"  [proxy] session override set → {session_id}")
+    print(f"  [proxy] session override set -> {session_id}")
 
 
 def clear_proxy_session() -> None:
@@ -238,7 +239,7 @@ def cmd_setup(args) -> None:
         "task": args.task or "",
         "ts": ts,
     }), encoding="utf-8")
-    print(f"\nState saved → {state_path}")
+    print(f"\nState saved -> {state_path}")
 
 
 def cmd_report(args) -> None:
@@ -273,7 +274,7 @@ def cmd_report(args) -> None:
 
     output_path = Path(args.output) if args.output else None
     report_path = generate_report(session_id, task, trace, output_path)
-    print(f"\nReport saved → {report_path}")
+    print(f"\nReport saved -> {report_path}")
     print(f"Open: file://{report_path.resolve()}")
 
     # Clear the proxy override if still set
@@ -307,7 +308,7 @@ def cmd_run(args) -> None:
 
     output_path = Path(args.output) if getattr(args, "output", None) else None
     report_path = generate_report(proxy_session_id, task, trace, output_path)
-    print(f"\nReport → {report_path}")
+    print(f"\nReport -> {report_path}")
     print(f"Open  : file://{report_path.resolve()}")
 
     try:
