@@ -196,7 +196,20 @@ def cmd_setup(args: argparse.Namespace) -> None:
 def cmd_start(args: argparse.Namespace) -> None:
     state = load_state(Path(args.state) if args.state else None)
 
+    # Verify proxy is reachable and record baseline uptime
+    try:
+        with httpx.Client(timeout=5) as c:
+            r = c.get(f"{PROXY_BASE}/health")
+            uptime = float(r.json().get("uptime_s", 0)) if r.status_code == 200 else None
+    except Exception:
+        uptime = None
+
+    if uptime is None:
+        print("ERROR: Proxy is not reachable — start the proxy before running the benchmark", file=sys.stderr)
+        sys.exit(1)
+
     state["started_at"] = time.time()
+    state["proxy_baseline_uptime"] = uptime
     state["proxy_worktree"] = str(Path(args.proxy_worktree).resolve())
     state["passthrough_worktree"] = str(Path(args.passthrough_worktree).resolve())
 
@@ -204,11 +217,24 @@ def cmd_start(args: argparse.Namespace) -> None:
     print(f"STARTED proxy_worktree={state['proxy_worktree']}")
     print(f"        passthrough_worktree={state['passthrough_worktree']}")
     print(f"        started_at={state['started_at']}")
+    print(f"        proxy_baseline_uptime={uptime:.0f}s")
 
 
 # ---------------------------------------------------------------------------
 # Phase 3: monitor
 # ---------------------------------------------------------------------------
+
+def _get_proxy_uptime() -> float | None:
+    """Return proxy uptime_s from /health, or None on failure."""
+    try:
+        with httpx.Client(timeout=5) as c:
+            r = c.get(f"{PROXY_BASE}/health")
+            if r.status_code == 200:
+                return float(r.json().get("uptime_s", 0))
+    except Exception:
+        pass
+    return None
+
 
 def cmd_monitor(args: argparse.Namespace) -> None:
     state = load_state(Path(args.state) if args.state else None)
@@ -226,6 +252,15 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     proxy_dead = state.get("proxy_terminated_at") is not None
     pass_dead = state.get("passthrough_terminated_at") is not None
     checkpoint_results: list[dict] = state.get("checkpoint_results", [])
+
+    # Use baseline uptime from cmd_start (preferred) or re-fetch now
+    baseline_uptime = state.get("proxy_baseline_uptime")
+    if baseline_uptime is None:
+        baseline_uptime = _get_proxy_uptime()
+    if baseline_uptime is None:
+        print("ERROR: Proxy is not reachable at monitor start — aborting", file=sys.stderr)
+        sys.exit(1)
+    print(f"PROXY_BASELINE_UPTIME={baseline_uptime:.0f}s")
 
     for cp in checkpoints:
         cp_id = cp["id"]
@@ -247,17 +282,31 @@ def cmd_monitor(args: argparse.Namespace) -> None:
         pass_passed = False
         proxy_failed_checks: list[str] = []
         pass_failed_checks: list[str] = []
+        infra_failure: str | None = None
 
         while True:
             elapsed = time.time() - started_at
-            if elapsed > total_timeout:
-                print(f"TIMEOUT total_timeout={total_timeout}s exceeded at checkpoint={cp_id}")
-                break
+            timed_out = elapsed > total_timeout
 
+            # Check for proxy restart (uptime would be < elapsed since monitor start)
+            current_uptime = _get_proxy_uptime()
+            if current_uptime is not None and current_uptime < baseline_uptime - 5:
+                infra_failure = (
+                    f"PROXY_RESTARTED baseline={baseline_uptime:.0f}s current={current_uptime:.0f}s"
+                )
+                print(f"INFRA_FAIL {infra_failure}")
+                # Update baseline so subsequent polls don't re-trigger
+                baseline_uptime = current_uptime
+
+            # Always run filesystem checks before deciding to break
             if not proxy_dead:
                 proxy_passed, proxy_failed_checks = run_checkpoint_checks(proxy_wt, fs_checks)
             if not pass_dead:
                 pass_passed, pass_failed_checks = run_checkpoint_checks(pass_wt, fs_checks)
+
+            if timed_out:
+                print(f"TIMEOUT total_timeout={total_timeout}s exceeded at checkpoint={cp_id}")
+                break
 
             # Both passed or both dead — done with this checkpoint
             if (proxy_passed or proxy_dead) and (pass_passed or pass_dead):
@@ -277,8 +326,18 @@ def cmd_monitor(args: argparse.Namespace) -> None:
             "proxy_failed": proxy_failed_checks if not proxy_passed else [],
             "passthrough_failed": pass_failed_checks if not pass_passed else [],
         }
+        if infra_failure:
+            result["infra_failure"] = infra_failure
         checkpoint_results.append(result)
         print(json.dumps(result))
+
+        # Abort entire benchmark on infrastructure failure
+        if infra_failure:
+            print(f"BENCHMARK_ABORTED reason=infra_failure detail={infra_failure!r}")
+            state["checkpoint_results"] = checkpoint_results
+            state["infra_failure"] = infra_failure
+            save_state(state, Path(args.state) if args.state else None)
+            sys.exit(2)
 
         # Handle gate failures
         if gate:
