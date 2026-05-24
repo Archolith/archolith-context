@@ -67,6 +67,13 @@ def run_scenario(scenario_path: Path, n_turns: int, session_id: str) -> list[dic
     print(f"Model    : {MODEL}")
     print()
 
+    # Circuit breaker: if output_tokens stays below this threshold for
+    # CIRCUIT_BREAKER_CONSECUTIVE consecutive turns, the model is stuck
+    # (tool-call artifacts, empty responses, context collapse) — stop early.
+    CIRCUIT_BREAKER_MIN_TOKENS = int(os.getenv("EXPLORER_MIN_TOKENS", "100"))
+    CIRCUIT_BREAKER_CONSECUTIVE = int(os.getenv("EXPLORER_BREAKER_TURNS", "3"))
+    low_token_streak = 0
+
     messages: list[dict] = []
     records: list[dict] = []
 
@@ -109,11 +116,26 @@ def run_scenario(scenario_path: Path, n_turns: int, session_id: str) -> list[dic
                 "output_tokens": output_tokens,
                 "latency_ms": round(elapsed_ms, 1),
             })
+
+            # Circuit breaker check
+            if output_tokens is not None and output_tokens < CIRCUIT_BREAKER_MIN_TOKENS:
+                low_token_streak += 1
+            else:
+                low_token_streak = 0
+
             print(
                 f"{elapsed_ms / 1000:.1f}s  |  "
                 f"out={output_tokens or '?'}t  |  "
                 f"{user_msg[:60].replace(chr(10), ' ')}..."
             )
+
+            if low_token_streak >= CIRCUIT_BREAKER_CONSECUTIVE:
+                print(
+                    f"\n  [CIRCUIT BREAKER] {low_token_streak} consecutive turns "
+                    f"below {CIRCUIT_BREAKER_MIN_TOKENS}t — model appears stuck. "
+                    f"Stopping at turn {i}/{len(turns_spec)}."
+                )
+                break
 
     return records
 
