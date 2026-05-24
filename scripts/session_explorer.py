@@ -49,7 +49,7 @@ _dotenv = _load_dotenv(_here / ".env")
 _port = os.getenv("PROXY_PORT", _dotenv.get("PROXY_PORT", "9801"))
 PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{_port}/v1")
 ADMIN_URL = PROXY_URL.rsplit("/v1", 1)[0]
-MODEL = os.getenv("BENCHMARK_MODEL", _dotenv.get("BENCHMARK_MODEL", "deepseek-chat"))
+MODEL = os.getenv("BENCHMARK_MODEL", _dotenv.get("BENCHMARK_MODEL", "deepseek-v4-flash"))
 MAX_TOKENS = int(os.getenv("EXPLORER_MAX_TOKENS", "4096"))
 
 # Substrings that indicate DSML/tool-call artifacts in response text.
