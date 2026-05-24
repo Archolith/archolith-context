@@ -348,6 +348,47 @@ def _validate_tail(tail: list[dict]) -> list[dict]:
     return validated
 
 
+_DEEPSEEK_NO_TOOL_HINT = (
+    "Respond with plain text, markdown, and code blocks only. "
+    "Do not emit tool calls, function invocations, DSML markup, "
+    "or any other special invocation syntax in your response."
+)
+
+
+def inject_no_dsml_hint(messages: list[dict], model: str, has_tools: bool = False) -> list[dict]:
+    """Inject a plain-text instruction into the system prompt for DeepSeek models.
+
+    DeepSeek emits DSML tool-call markup when it infers it is in a tool-enabled
+    session (e.g., user mentions file paths). This instruction explicitly tells
+    it to respond in plain text only.
+
+    Only injected when:
+    - The model name contains "deepseek" (case-insensitive).
+    - The request has no tools (if real tools are present, tool-calling is intentional
+      and we must not suppress it).
+    """
+    if has_tools:
+        return messages
+    if "deepseek" not in model.lower():
+        return messages
+
+    result = []
+    injected = False
+    for msg in messages:
+        if msg.get("role") == "system" and not injected:
+            existing = msg.get("content", "") or ""
+            result.append({**msg, "content": existing + "\n\n" + _DEEPSEEK_NO_TOOL_HINT})
+            injected = True
+        else:
+            result.append(msg)
+
+    if not injected:
+        # No system message found — prepend one
+        result.insert(0, {"role": "system", "content": _DEEPSEEK_NO_TOOL_HINT})
+
+    return result
+
+
 def _ensure_user_first(messages: list[dict]) -> list[dict]:
     """Ensure the first non-system message is a user message."""
     system_msgs = []

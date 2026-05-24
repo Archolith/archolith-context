@@ -21,7 +21,7 @@ from archolith_proxy.metrics import get_metrics, record_assembly_mode, record_me
 from archolith_proxy.models.graph_nodes import FactType, FileStatus
 from archolith_proxy.openai.errors import make_error_response
 from archolith_proxy.openai.schemas import ChatCompletionRequest
-from archolith_proxy.proxy.rewrite import estimate_input_tokens, rewrite_messages, strip_reasoning
+from archolith_proxy.proxy.rewrite import estimate_input_tokens, inject_no_dsml_hint, rewrite_messages, strip_reasoning
 from archolith_proxy.proxy.session import resolve_session
 from archolith_proxy.proxy.live import (
     broadcast_request, broadcast_assembly, broadcast_response,
@@ -502,6 +502,16 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         from archolith_proxy.proxy.tool_injection import inject_recall_tool
         body = inject_recall_tool(body)
         recall_injected = True
+
+    # Inject no-DSML hint for DeepSeek models without tools.
+    # DeepSeek infers tool-enabled sessions from context and emits DSML markup.
+    # An explicit plain-text instruction suppresses the initial emission
+    # (strip_dsml_artifacts in rewrite.py handles propagation from retained turns).
+    body["messages"] = inject_no_dsml_hint(
+        body.get("messages", []),
+        model=req.model,
+        has_tools=bool(body.get("tools")),
+    )
 
     body = filter_request_body(body, enabled=settings.rtk_enabled)
     request_body = json.dumps(body).encode("utf-8")
