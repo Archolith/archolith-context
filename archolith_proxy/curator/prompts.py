@@ -52,7 +52,10 @@ Rules:
 === DECISIONS ===
 - <decision>
 
-If a section has no content, omit it entirely.
+Critical output rules:
+- Omit any section that has no content. Do NOT write a section header with "None", "N/A", or empty content.
+- Only include RELEVANT CODE if you retrieved actual code with get_file or get_file_lines. If list_session_files returned no files, skip the section entirely.
+- Write plain prose context blocks — do NOT emit tool calls, XML tags, or function invocations in your final response.
 """
 
 

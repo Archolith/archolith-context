@@ -133,18 +133,43 @@ async def _run_curator_native(
             return None
 
         tool_count = len(choice.message.tool_calls or [])
-        logger.debug(
+        content_len = len((choice.message.content or "").strip())
+        logger.info(
             "curator_response",
             iteration=iteration + 1,
             finish_reason=choice.finish_reason,
             tool_calls=tool_count,
+            content_len=content_len,
             session_id=session_id,
         )
 
         if choice.finish_reason == "stop":
             content = (choice.message.content or "").strip()
             if not content:
-                logger.info("curator_empty_final", session_id=session_id, tool_calls=total_tool_calls)
+                # Model returned stop with empty content — retry once with an
+                # explicit nudge before giving up.  This recovers from the
+                # transient gpt-4.1-mini behaviour where it suppresses its
+                # inline answer when tool_choice="auto" confuses it.
+                if iteration == 0:
+                    logger.info(
+                        "curator_empty_final_retry",
+                        session_id=session_id,
+                        tool_calls=total_tool_calls,
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Please provide the context block now. "
+                            "Use the format in the system prompt. "
+                            "If you have no information to add, still write the SESSION GOAL section."
+                        ),
+                    })
+                    continue  # one more iteration
+                logger.info(
+                    "curator_empty_final",
+                    session_id=session_id,
+                    tool_calls=total_tool_calls,
+                )
                 return None
             return CuratorResult(
                 context_text=content,
@@ -155,11 +180,20 @@ async def _run_curator_native(
             )
 
         if choice.finish_reason == "length":
-            logger.warning("curator_context_length_exceeded", session_id=session_id)
+            logger.warning(
+                "curator_context_length_exceeded",
+                session_id=session_id,
+                iteration=iteration + 1,
+            )
             return None
 
         if choice.finish_reason != "tool_calls" or not choice.message.tool_calls:
-            logger.warning("curator_unexpected_finish", session_id=session_id, finish_reason=choice.finish_reason)
+            logger.warning(
+                "curator_unexpected_finish",
+                session_id=session_id,
+                finish_reason=choice.finish_reason,
+                iteration=iteration + 1,
+            )
             return None
 
         messages.append(choice.message)
@@ -328,6 +362,19 @@ async def _run_curator_nous(
         if not parsed_calls:
             # No tool calls found — this is the final answer
             if not content:
+                if iteration == 0:
+                    logger.info(
+                        "curator_nous_empty_final_retry",
+                        session_id=session_id,
+                        tool_calls=total_tool_calls,
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Please provide the context block now using the format in the system prompt."
+                        ),
+                    })
+                    continue
                 logger.info("curator_nous_empty_final", session_id=session_id, tool_calls=total_tool_calls)
                 return None
             return CuratorResult(
