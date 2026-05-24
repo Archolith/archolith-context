@@ -18,7 +18,35 @@ from archolith_proxy.graph.backend import get_backend
 
 logger = structlog.get_logger()
 
-# Patterns to strip from system prompts before fingerprinting
+# ── Benchmark session-ID override ─────────────────────────────────────────────
+# When set, any request that arrives WITHOUT an explicit X-Session-ID header
+# is forced to use this session ID instead of the fingerprint fallback.
+# Intended for benchmark runs where the caller pre-generates the session ID
+# and needs to fetch the exact trace afterwards.
+# Only one override can be active at a time (benchmarks are sequential).
+_benchmark_session_id: str | None = None
+
+
+def set_benchmark_session_id(session_id: str) -> None:
+    """Activate a benchmark session-ID override."""
+    global _benchmark_session_id
+    _benchmark_session_id = session_id
+    logger.info("benchmark_session_override_set", session_id=session_id)
+
+
+def clear_benchmark_session_id() -> None:
+    """Clear the benchmark session-ID override."""
+    global _benchmark_session_id
+    _benchmark_session_id = None
+    logger.info("benchmark_session_override_cleared")
+
+
+def get_benchmark_session_id() -> str | None:
+    """Return the current benchmark override, or None."""
+    return _benchmark_session_id
+
+
+# ── Patterns to strip from system prompts before fingerprinting ───────────────
 _SANITIZE_PATTERNS = [
     re.compile(r"(?m)^.*current\s+(date|time|timestamp)\s*[:=].*$", re.IGNORECASE),
     re.compile(r"(?m)^.*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}.*$", re.IGNORECASE),
@@ -69,6 +97,19 @@ async def resolve_session(
         # Create with explicit ID
         await get_backend().create_session(session_id, fingerprint=None)
         return session_id, True
+
+    # Secondary: benchmark override (set via /trace/benchmark/session-id admin endpoint)
+    # Allows benchmark scripts to pre-register a known session ID so the trace
+    # can be fetched by that ID after the run, without needing to control headers.
+    benchmark_id = get_benchmark_session_id()
+    if benchmark_id:
+        existing = await get_backend().find_session_by_id(benchmark_id)
+        if existing:
+            await get_backend().touch_session(benchmark_id)
+            return benchmark_id, False
+        await get_backend().create_session(benchmark_id, fingerprint=None)
+        logger.info("benchmark_session_created", session_id=benchmark_id)
+        return benchmark_id, True
 
     # Fallback: fingerprint from messages
     system_msg = ""
