@@ -114,6 +114,10 @@ class TurnTrace(BaseModel):
     # Fallback
     fallback_reason: str = ""
 
+    # Curator decisions — populated when assembly_mode == "curator"
+    curator_retained_turns: list[int] | None = None   # None = no selection made
+    curator_context_block: str | None = None           # The curator's assembled context text
+
 
 class SessionTraceSummary(BaseModel):
     """Aggregated view of a session's trace history."""

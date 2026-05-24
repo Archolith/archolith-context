@@ -127,6 +127,17 @@ class TraceBuilder:
     def set_fallback_reason(self, reason: str) -> None:
         self._data["fallback_reason"] = reason
 
+    def set_curator_info(
+        self,
+        retained_turns: list[int] | None = None,
+        context_block: str | None = None,
+    ) -> None:
+        """Record the curator's turn-selection and context block for trace inspection."""
+        self._data["curator_retained_turns"] = retained_turns
+        # Cap context block at 4000 chars for trace storage
+        if context_block:
+            self._data["curator_context_block"] = context_block[:4000]
+
     def build(self) -> TurnTrace:
         """Build the TurnTrace from accumulated data."""
         return TurnTrace(**self._data)
