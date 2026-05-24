@@ -503,6 +503,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         body = inject_recall_tool(body)
         recall_injected = True
 
+    # Inject synthetic session-summary tools (recall_session_work, recall_files_read)
+    synthetic_injected = False
+    if settings.synthetic_tools_enabled and session_id:
+        from archolith_proxy.proxy.synthetic_tools import inject_synthetic_tools
+        body = inject_synthetic_tools(body)
+        synthetic_injected = True
+
     # Inject no-DSML hint for DeepSeek models without tools.
     # DeepSeek infers tool-enabled sessions from context and emits DSML markup.
     # An explicit plain-text instruction suppresses the initial emission
@@ -521,6 +528,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             request, background_tasks, upstream_url, upstream_headers, request_body,
             session_id=session_id, turn_number=turn_number,
             messages=body.get("messages", []), recall_injected=recall_injected,
+            synthetic_injected=synthetic_injected,
             session_goal=session_goal,
             trace_builder=trace_builder,
         )
@@ -529,6 +537,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             request, background_tasks, upstream_url, upstream_headers, request_body,
             session_id=session_id, turn_number=turn_number,
             messages=body.get("messages", []), recall_injected=recall_injected,
+            synthetic_injected=synthetic_injected,
             session_goal=session_goal,
             trace_builder=trace_builder,
         )
@@ -544,6 +553,7 @@ async def _handle_streaming(
     turn_number: int = 0,
     messages: list[dict] | None = None,
     recall_injected: bool = False,
+    synthetic_injected: bool = False,
     session_goal: str | None = None,
     trace_builder: TraceBuilder | None = None,
 ) -> StreamingResponse:
@@ -983,6 +993,7 @@ async def _handle_non_streaming(
     turn_number: int = 0,
     messages: list[dict] | None = None,
     recall_injected: bool = False,
+    synthetic_injected: bool = False,
     session_goal: str | None = None,
     trace_builder: TraceBuilder | None = None,
 ) -> Response:
@@ -1076,14 +1087,68 @@ async def _handle_non_streaming(
             logger.warning("recall_interception_failed", session_id=session_id, error=str(e), exc_info=True)
             # Fall through to use original response
 
+    # Handle synthetic tool calls (recall_session_work, recall_files_read).
+    # Only runs if recall did not already produce a final_data (avoid double-processing).
+    synthetic_result = None
+    if synthetic_injected and session_id and final_data is None:
+        try:
+            from archolith_proxy.proxy.synthetic_tools import handle_non_streaming_synthetic
+
+            synthetic_result = await handle_non_streaming_synthetic(
+                resp=resp,
+                http_client=request.app.state.http_client,
+                url=url,
+                headers=headers,
+                body=body,
+                session_id=session_id,
+                turn_number=turn_number,
+                original_messages=messages or [],
+                max_retries=settings.upstream_max_retries,
+                backoff_base=settings.upstream_retry_backoff_base_s,
+            )
+
+            if synthetic_result.synthetic_used and synthetic_result.final_data is not None:
+                final_data = synthetic_result.final_data
+
+                # Schedule extraction for the final re-sent response
+                if trace_builder:
+                    trace_builder.set_response(
+                        status=resp.status_code,
+                        latency_ms=0.0,
+                        output_tokens=None,
+                        response_summary=_extract_response_text(final_data),
+                    )
+
+                response_text = _extract_response_text(final_data)
+                if session_id and response_text:
+                    background_tasks.add_task(
+                        _run_extraction,
+                        client=request.app.state.extractor_client,
+                        session_id=session_id,
+                        turn_number=turn_number,
+                        messages=messages or [],
+                        response_text=response_text,
+                        session_goal=session_goal,
+                        trace_builder=trace_builder,
+                        promotion_service=getattr(request.app.state, "promotion_service", None),
+                    )
+
+        except Exception as e:
+            logger.warning("synthetic_interception_failed", session_id=session_id, error=str(e), exc_info=True)
+            # Fall through to use original response
+
     # Live stream: broadcast response event (non-streaming — always, for both recall and normal)
     await broadcast_response(
         session_id=session_id, turn_number=turn_number,
         status=resp.status_code, latency_ms=0.0, output_tokens=None,
     )
 
-    # Schedule extraction for the original response if recall was NOT used
-    if session_id and not (recall_result and recall_result.recall_used and final_data is not None):
+    # Schedule extraction for the original response if neither recall nor synthetic was used
+    _interception_used = (
+        (recall_result and recall_result.recall_used and final_data is not None)
+        or (synthetic_result and synthetic_result.synthetic_used and final_data is not None)
+    )
+    if session_id and not _interception_used:
         try:
             data = resp.json()
             response_text = _extract_response_text(data)
@@ -1105,7 +1170,7 @@ async def _handle_non_streaming(
 
     # Trace: record upstream response (non-streaming) — always stored
     if trace_builder:
-        if not (recall_result and recall_result.recall_used and final_data is not None):
+        if not _interception_used:
             # Normal path: trace the original response
             trace_builder.set_response(
                 status=resp.status_code,
@@ -1116,11 +1181,16 @@ async def _handle_non_streaming(
 
     # Build and return the response
     if final_data is not None:
-        # Recall path: return the final data from the recall interception
-        # Strip recall tool from the final response if still present
+        # Recall/synthetic path: return the final data from interception
+        # Strip internal proxy tools from the response so the client never sees them
         try:
             from archolith_proxy.proxy.tool_injection import strip_recall_from_response
             strip_recall_from_response(final_data)
+        except Exception:
+            pass
+        try:
+            from archolith_proxy.proxy.synthetic_tools import strip_synthetic_from_response
+            strip_synthetic_from_response(final_data)
         except Exception:
             pass
 
