@@ -72,7 +72,11 @@ def run_scenario(scenario_path: Path, n_turns: int, session_id: str) -> list[dic
 
     with httpx.Client(timeout=180) as client:
         for i, turn_spec in enumerate(turns_spec, 1):
-            user_msg = turn_spec.get("user", turn_spec.get("user_message", ""))
+            # Scenario turns can be plain strings or dicts with a "user" key
+            if isinstance(turn_spec, str):
+                user_msg = turn_spec
+            else:
+                user_msg = turn_spec.get("user", turn_spec.get("user_message", ""))
             messages.append({"role": "user", "content": user_msg})
 
             print(f"  [{i:>2}/{len(turns_spec)}] ", end="", flush=True)
@@ -137,14 +141,23 @@ def generate_html(
     output_path: Path,
 ) -> None:
     """Embed all data into a self-contained HTML file."""
+    # Merge per-turn trace data into turn records by position.
+    # Trace turn_number is 0-indexed; turn_records.turn is 1-indexed.
+    merged_turns = [dict(r) for r in turn_records]
+    if trace and trace.get("turns"):
+        trace_turns = sorted(trace["turns"], key=lambda t: t.get("turn_number", 0))
+        for i, rec in enumerate(merged_turns):
+            if i < len(trace_turns):
+                rec["trace"] = trace_turns[i]
+
     payload = {
         "scenario": scenario_name,
         "scenario_path": scenario_path,
         "session_id": session_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "model": MODEL,
-        "turns": turn_records,
-        "trace": trace,
+        "turns": merged_turns,
+        "trace": trace,  # Keep full session trace (summary + all turns) for header stats
     }
     data_json = json.dumps(payload, ensure_ascii=False, default=str)
     html = _HTML_TEMPLATE.replace("__DATA_JSON__", data_json)
@@ -597,7 +610,9 @@ function renderChart() {
 
 function renderTurnCard(turnRecord, idx) {
   const n = turnRecord.turn;
-  const tr = traceByTurn(n);
+  // Use pre-merged trace (by position) from the turn record;
+  // fall back to lookup by turn_number for backward compatibility.
+  const tr = turnRecord.trace || traceByTurn(n - 1) || null;
   const mode = tr ? tr.assembly_mode : 'unknown';
   const origTok = tr ? tr.input_tokens : 0;
   const rewrTok = tr ? (tr.rewritten_tokens || origTok) : 0;

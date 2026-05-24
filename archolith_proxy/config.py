@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     curator_model: str = ""             # defaults to extractor_model if empty
     curator_base_url: str = ""          # defaults to extractor_base_url if empty
     curator_api_key: str = ""           # defaults to extractor_api_key if empty
-    curator_max_iterations: int = 4
+    curator_max_iterations: int = 6
     curator_latency_budget_ms: int = 6000   # hard timeout; falls back to heuristic
 
     # Admin/operator token for protecting non-proxy surfaces
