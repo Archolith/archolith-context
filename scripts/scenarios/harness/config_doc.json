@@ -11,8 +11,8 @@
       "gate": true,
       "filesystem_checks": [
         {"path": "docs/config_reference.md", "exists": true},
-        {"path": "docs/config_reference.md", "contains": "UPSTREAM_API_KEY"},
-        {"path": "docs/config_reference.md", "contains": "EXTRACTOR_API_KEY"},
+        {"path": "docs/config_reference.md", "contains": "upstream_api_key"},
+        {"path": "docs/config_reference.md", "contains": "extractor_api_key"},
         {"path": "docs/config_reference.md", "min_lines": 40}
       ]
     },
