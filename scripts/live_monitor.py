@@ -17,6 +17,24 @@ import asyncio
 import json
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+
+def _load_dotenv(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if not path.exists():
+        return env
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        env[k.strip()] = v.strip().strip('"').strip("'")
+    return env
+
+
+_dotenv = _load_dotenv(Path(__file__).parent.parent / ".env")
+_DEFAULT_PORT = int(_dotenv.get("PROXY_PORT", "9801"))
 
 try:
     import websockets
@@ -263,8 +281,8 @@ def main() -> None:
         description="Terminal monitor for context-engine live stream",
     )
     parser.add_argument(
-        "--port", type=int, default=9800,
-        help="Proxy port (default: 9800)",
+        "--port", type=int, default=_DEFAULT_PORT,
+        help=f"Proxy port (default: {_DEFAULT_PORT}, from .env PROXY_PORT)",
     )
     parser.add_argument(
         "--host", default="localhost",

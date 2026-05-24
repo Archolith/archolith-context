@@ -175,13 +175,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     # Session resolution (graceful — skip if Neo4j not ready)
     session_id = None
     turn_number = 0
-    neo4j_ready = is_graph_ready()
+    graph_ready = is_graph_ready()
 
     # Guard: if lifespan didn't initialize http_client, return 503
     if not hasattr(request.app.state, "http_client"):
         return make_error_response(503, "Proxy not initialized — lifespan did not complete", "server_error")
 
-    if neo4j_ready:
+    if graph_ready:
         try:
             headers = {k: v for k, v in request.headers.items()}
             messages_raw = body.get("messages", [])
@@ -222,7 +222,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
 
     # Fetch current session goal for extraction context
     session_goal = None
-    if session_id and neo4j_ready:
+    if session_id and graph_ready:
         try:
             session_data = await get_backend().find_session_by_id(session_id)
             session_goal = session_data.get("goal") if session_data else None
@@ -260,7 +260,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         stream=req.stream, input_tokens=input_tokens,
     )
 
-    if session_id and neo4j_ready:
+    if session_id and graph_ready:
         try:
             # Wait for prior turn's extraction to commit before reading graph state
             from archolith_proxy.proxy.locks import wait_for_prior_extraction
@@ -320,7 +320,8 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     max_tail_messages=settings.max_tail_messages,
                 )
                 rewritten_count = len(body["messages"])
-                assembly_mode = "graph"
+                if assembly_mode != "curator":
+                    assembly_mode = "graph"
 
                 # Estimate token savings
                 rewritten_tokens = estimate_input_tokens(body["messages"])
@@ -459,7 +460,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     # Trace: record assembly result
     trace_builder.set_assembly(
         mode=assembly_mode,
-        reason="session not ready" if not (session_id and neo4j_ready) else "",
+        reason="session not ready" if not (session_id and graph_ready) else "",
         latency_ms=assembly_latency_ms,
         facts_selected=[{"content": m.get("content", "")[:100]} for m in (assembled.graph_context if assembled else [])],
         files_selected=assembled.files_selected if assembled else [],

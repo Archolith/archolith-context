@@ -2,13 +2,20 @@
 
 import httpx
 import json
+import os
 import time
 import sys
 
-BASE = "http://localhost:9800/v1"
+from dotenv import load_dotenv
+load_dotenv()
+
+_port = os.getenv("PROXY_PORT", "9800")
+_base_host = os.getenv("PROXY_HOST", f"localhost:{_port}")
+BASE = os.getenv("PROXY_URL", f"http://{_base_host}/v1")
+ADMIN_BASE = BASE.rsplit("/v1", 1)[0]
 SESSION = "e2e-test-session-002"
 HEADERS = {"Content-Type": "application/json", "X-Session-ID": SESSION}
-MODEL = "google/gemma-3-4b-it"
+MODEL = os.getenv("BENCHMARK_MODEL", "deepseek-chat")
 
 
 def main():
@@ -55,23 +62,35 @@ def main():
         # Allow extraction to complete before next turn
         time.sleep(3)
 
-    # Check session
+    # Check session via trace endpoint (works with LadybugDB; /sessions/{id} requires Neo4j)
     print("\n--- Session Check ---")
     try:
-        sess = httpx.get(f"http://localhost:9800/sessions/{SESSION}", timeout=5)
+        sess = httpx.get(f"{ADMIN_BASE}/trace/sessions/{SESSION}", timeout=5)
         print(f"Session status: {sess.status_code}")
         if sess.status_code == 200:
             sd = sess.json()
-            print(f"  Fact count: {sd.get('fact_count', '?')}")
-            print(f"  Turns: {sd.get('turn_count', '?')}")
-            print(f"  Goal: {sd.get('goal', '?')}")
+            summary = sd.get("summary", sd)  # /trace/sessions/{id} wraps in {"summary":..., "turns":[...]}
+            print(f"  Turns:         {summary.get('turn_count', '?')}")
+            print(f"  User turns:    {summary.get('max_user_turns', '?')}")
+            print(f"  Modes:         {summary.get('assembly_modes', {})}")
+            print(f"  Facts stored:  {summary.get('total_facts_stored', '?')}")
+            print(f"  Goal:          {summary.get('goal', '(none)')}")
+            turns = sd.get("turns", [])
+            if turns:
+                print(f"\n  Per-turn:")
+                for t in turns:
+                    mode = t.get("assembly_mode", "?")
+                    uturn = t.get("user_turn_count", "?")
+                    tokens = t.get("input_tokens", 0)
+                    facts = t.get("facts_stored", 0)
+                    print(f"    turn {t.get('turn_number',0):02d}  mode={mode:<12} user_turn={uturn}  in={tokens}  facts_stored={facts}")
     except Exception as e:
         print(f"Session check failed: {e}")
 
     # Check metrics
     print("\n--- Metrics ---")
     try:
-        met = httpx.get("http://localhost:9800/metrics", timeout=5)
+        met = httpx.get(f"{ADMIN_BASE}/metrics", timeout=5)
         md = met.json()
         for k, v in md.items():
             print(f"  {k}: {v}")

@@ -101,9 +101,17 @@ def cmd_metrics() -> None:
     modes = d.get("assembly_modes", {})
     cold = modes.get("cold_start", 0)
     graph = modes.get("graph", 0)
+    curator = modes.get("curator", 0)
     fallback = modes.get("fallback", 0)
-    mode_str = f"cold_start={cold}  graph={graph}  fallback={fallback}"
+    mode_str = f"cold_start={cold}  graph={graph}  curator={_c(MAGENTA, str(curator)) if curator else str(curator)}  fallback={fallback}"
     print(_c(CYAN, f"  assembly_modes ") + mode_str)
+
+    curator_calls = d.get("curator_calls", 0)
+    curator_timeouts = d.get("curator_timeouts", 0)
+    curator_fallbacks = d.get("curator_fallbacks", 0)
+    if curator_calls or curator_timeouts or curator_fallbacks:
+        cur_str = f"calls={curator_calls}  timeouts={_c(RED, str(curator_timeouts)) if curator_timeouts else str(curator_timeouts)}  fallbacks={curator_fallbacks}"
+        print(_c(CYAN, f"  curator        ") + cur_str)
 
     user_turns = d.get("user_turns_by_session", {})
     if user_turns:
@@ -137,8 +145,8 @@ def cmd_sessions() -> None:
         print("No trace sessions recorded.")
         return
 
-    print(_c(BOLD, f"{'SESSION':<20} {'TURNS':>5} {'USER':>5} {'COLD_START':>10} {'GRAPH':>6} {'TOKENS':>9}"))
-    print("-" * 62)
+    print(_c(BOLD, f"{'SESSION':<20} {'TURNS':>5} {'USER':>5} {'COLD':>5} {'GRAPH':>6} {'CURATOR':>7} {'TOKENS':>9}"))
+    print("-" * 68)
     for s in sessions:
         sid = s.get("session_id", "?")
         turns = s.get("turn_count", 0)
@@ -146,11 +154,13 @@ def cmd_sessions() -> None:
         modes = s.get("assembly_modes", {})
         cold = modes.get("cold_start", 0)
         graph = modes.get("graph", 0)
+        curator = modes.get("curator", 0)
         tokens = s.get("total_input_tokens", 0)
 
         user_col = _c(GREEN if user_turns >= 3 else YELLOW, str(user_turns))
         graph_col = _c(GREEN if graph > 0 else DIM, str(graph))
-        print(f"{sid:<20} {turns:>5} {user_col:>5} {cold:>10} {graph_col:>6} {tokens:>9,}")
+        curator_col = _c(MAGENTA if curator > 0 else DIM, str(curator))
+        print(f"{sid:<20} {turns:>5} {user_col:>5} {cold:>5} {graph_col:>6} {curator_col:>7} {tokens:>9,}")
 
 
 def cmd_turns(session_id: str) -> None:
