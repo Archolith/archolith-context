@@ -211,6 +211,50 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         )
         request_body = json.dumps(body).encode("utf-8")
         t0 = time.monotonic()
+        if req.stream:
+            # Streaming passthrough — must keep the httpx stream context alive while
+            # yielding chunks. upstream_request_with_retry buffers the full body via
+            # client.post(), making aiter_bytes() a no-op on the already-consumed stream.
+            # Use client.stream() directly and own the context manager inside the generator.
+            http_client = request.app.state.http_client
+
+            async def _passthrough_stream():
+                try:
+                    async with http_client.stream(
+                        "POST",
+                        upstream_url,
+                        headers=upstream_headers,
+                        content=request_body,
+                        timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0),
+                    ) as resp:
+                        async for chunk in resp.aiter_bytes():
+                            yield chunk
+                except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                    logger.warning("passthrough_stream_error", error=str(exc))
+
+            latency_ms = (time.monotonic() - t0) * 1000
+
+            async def _finalize_passthrough_trace():
+                trace_builder.set_response(
+                    status=200,
+                    latency_ms=latency_ms,
+                    output_tokens=None,
+                    response_summary="(passthrough streaming)",
+                )
+                try:
+                    trace = trace_builder.build()
+                    await get_trace_store().record(trace)
+                except Exception:
+                    logger.warning("passthrough_trace_store_failed", exc_info=True)
+
+            background_tasks.add_task(_finalize_passthrough_trace)
+            return StreamingResponse(
+                _passthrough_stream(),
+                status_code=200,
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+                background=background_tasks,
+            )
         try:
             resp = await upstream_request_with_retry(
                 client=request.app.state.http_client,
@@ -225,36 +269,8 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         except httpx.ConnectError as e:
             return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
         latency_ms = (time.monotonic() - t0) * 1000
-        if req.stream:
-            # Streaming passthrough — relay SSE unchanged, record trace in background
-            async def _passthrough_stream():
-                async with resp.aiter_bytes() as stream:
-                    async for chunk in stream:
-                        yield chunk
-
-            async def _finalize_passthrough_trace():
-                trace_builder.set_response(
-                    status=resp.status_code,
-                    latency_ms=latency_ms,
-                    output_tokens=None,
-                    response_summary="(passthrough streaming)",
-                )
-                try:
-                    trace = trace_builder.build()
-                    await get_trace_store().record(trace)
-                except Exception:
-                    logger.warning("passthrough_trace_store_failed", exc_info=True)
-
-            background_tasks.add_task(_finalize_passthrough_trace)
-            return StreamingResponse(
-                _passthrough_stream(),
-                status_code=resp.status_code,
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-                background=background_tasks,
-            )
-        else:
-            # Non-streaming passthrough — record token counts from response
+        # Non-streaming passthrough — record token counts from response
+        if True:
             response_data = resp.json() if resp.status_code == 200 else {}
             usage = response_data.get("usage", {})
             output_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
