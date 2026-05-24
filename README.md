@@ -1,12 +1,12 @@
-# archolith-proxy
+# archolith-context
 
 Self-hosted context intelligence for LLMs.
 
 Compress context. Extract knowledge. Remember everything.
 
-`archolith-proxy` is an OpenAI-compatible proxy that sits in front of `/v1/chat/completions`, extracts durable facts from each turn, stores them in a session graph, and replaces replayed middle history with a smaller assembled context block. The goal is not generic prompt compression. The goal is preserving continuity in long-running coding and agent conversations without paying to resend every prior turn on every request.
+`archolith-context` is an OpenAI-compatible proxy that sits in front of `/v1/chat/completions`, extracts durable knowledge from each turn into a session graph, and uses a tool-calling context manager LLM to build the minimum viable context window for the next turn. The goal is not generic prompt compression. The goal is a coding agent that never re-reads a file it already knows, never loses a decision it already made, and never degrades from context bloat in long sessions.
 
-- Product name: `archolith-proxy`
+- Product name: `archolith-context`
 - Python package: `archolith_proxy`
 - Default public bootstrap: LadybugDB + OpenAI-compatible upstream on port `9800`
 - Current focus: proxy-first OSS release, with `archolith-memory` and `archolith-filter` as adjacent products on the broader roadmap
@@ -15,7 +15,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the system walkthrough and [CONTRIB
 
 ## What It Does
 
-`archolith-proxy` keeps the parts of a conversation that still matter and rewrites the parts that no longer need verbatim replay.
+`archolith-context` keeps the parts of a conversation that still matter and rewrites the parts that no longer need verbatim replay.
 
 At a high level it:
 
@@ -163,11 +163,48 @@ The proxy then:
 - removes the replay-heavy middle
 - merges the assembled context into the system message so providers that dislike consecutive system messages still work
 
-### 4. Optional Recall Tool
+### 4. Context Manager LLM (Curator)
+
+When `CURATOR_ENABLED=true`, a tool-calling context manager LLM replaces the heuristic assembler as the primary context-building path. Instead of scoring and ranking facts with Python heuristics, the curator LLM actively queries the session's knowledge store using 7 tools:
+
+| Tool | What it retrieves |
+|------|------------------|
+| `list_session_files` | All cached files for the session (path, line count, last turn) |
+| `get_file` | Full content of a cached file (≤200 lines) |
+| `get_file_lines` | Specific line range from a cached file |
+| `search_facts` | Facts matching a keyword substring |
+| `get_session_goal` | The session goal string |
+| `get_recent_decisions` | Decisions made during the session |
+| `get_touched_files` | Files read or modified, with status and turn |
+
+The curator calls 2–4 tools per turn (configurable max), selects only what the agent needs for the current question, and emits a structured context block:
+
+```
+=== SESSION GOAL ===
+<goal>
+
+=== RELEVANT CODE ===
+<path> lines <start>-<end>:
+```
+<code>
+```
+
+=== KEY FACTS ===
+- <fact>
+
+=== DECISIONS ===
+- <decision>
+```
+
+The curator runs with a 6-second hard latency cap (`CURATOR_LATENCY_BUDGET_MS`). On timeout or failure it falls back to the heuristic assembler — no errors are surfaced to the client. File content is stored in a local cache (LadybugDB `FileContent` table) with SHA-256 change detection. The curator only re-reads a file when its content hash changes — previously seen file versions are served from cache.
+
+Enable with `CURATOR_ENABLED=true` in your `.env`. Requires `FILE_CACHE_ENABLED=true` (default) and at least `COLD_START_TURNS` user turns before activating.
+
+### 5. Optional Recall Tool
 
 If `SESSION_RECALL_TOOL_ENABLED=true`, the proxy injects a hidden `__archolith_recall` tool into the request. If the model calls it, the proxy intercepts the tool call, queries the session graph, returns a bounded tool result, and re-sends the request upstream. The tool never leaks back out as part of the public API response.
 
-### 5. Optional Long-Term Promotion
+### 6. Optional Long-Term Promotion
 
 If `PROMOTION_ENABLED=true`, high-confidence session facts can be promoted into an external memory backend. The registry currently supports adapters including `archolith_memory`, `mem0`, `zep`, `generic_http`, `basic_memory`, `claude_mem`, `cognee`, `openmemory`, and `nocturne_memory`.
 
@@ -229,18 +266,18 @@ Neo4j remains the more traditional graph backend:
 
 ### Long-Term Memory
 
-Promotion is separate from the session graph. `archolith-proxy` can optionally promote facts into an external memory system, but that path is disabled by default.
+Promotion is separate from the session graph. `archolith-context` can optionally promote facts into an external memory system, but that path is disabled by default.
 
 ## Comparison
 
 This is a directional comparison based on public product docs as of `2026-05-22`. Check vendor docs for the latest details.
 
-| Tool | Core idea | Deploy model | Best fit | How `archolith-proxy` differs |
+| Tool | Core idea | Deploy model | Best fit | How `archolith-context` differs |
 |------|-----------|--------------|----------|-------------------------------|
-| `archolith-proxy` | Rewrite replay-heavy chat history into a graph-assembled session context | Self-hosted proxy | Long-running coding and agent sessions where continuity matters | It sits directly in front of OpenAI-compatible chat APIs and reconstructs context from extracted facts |
-| [Graphiti / Zep](https://help.getzep.com/zep-vs-graphiti) | Graphiti is an open-source temporal graph framework; Zep is a managed context platform built around it | OSS framework plus managed platform | Teams that want a graph foundation or a turnkey hosted context stack | `archolith-proxy` is narrower and proxy-first: it rewrites chat payloads for existing clients instead of being a full managed context platform |
-| [Headroom](https://headroomlabs.ai/) | Compress tool output, logs, files, and RAG payloads before they hit the model | Local/open-source layer | Tool-heavy agents where non-chat payloads dominate token spend | `archolith-proxy` focuses on session memory and decision recall across turns, not just compressing the current payload |
-| [The Token Company](https://thetokencompany.com/docs) | Hosted API that compresses prompt text before inference | Hosted API + SDKs | Teams that want API-based prompt compression without self-hosting | `archolith-proxy` keeps session state local and rebuilds history from graph facts instead of sending prompts to a third-party compression API |
+| `archolith-context` | Rewrite replay-heavy chat history into a graph-assembled session context | Self-hosted proxy | Long-running coding and agent sessions where continuity matters | It sits directly in front of OpenAI-compatible chat APIs and reconstructs context from extracted facts |
+| [Graphiti / Zep](https://help.getzep.com/zep-vs-graphiti) | Graphiti is an open-source temporal graph framework; Zep is a managed context platform built around it | OSS framework plus managed platform | Teams that want a graph foundation or a turnkey hosted context stack | `archolith-context` is narrower and proxy-first: it rewrites chat payloads for existing clients instead of being a full managed context platform |
+| [Headroom](https://headroomlabs.ai/) | Compress tool output, logs, files, and RAG payloads before they hit the model | Local/open-source layer | Tool-heavy agents where non-chat payloads dominate token spend | `archolith-context` focuses on session memory and decision recall across turns, not just compressing the current payload |
+| [The Token Company](https://thetokencompany.com/docs) | Hosted API that compresses prompt text before inference | Hosted API + SDKs | Teams that want API-based prompt compression without self-hosting | `archolith-context` keeps session state local and rebuilds history from graph facts instead of sending prompts to a third-party compression API |
 
 ## Roadmap
 

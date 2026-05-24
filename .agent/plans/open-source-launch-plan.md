@@ -16,7 +16,7 @@ After competitive analysis, the strategy shifted from open-core (OSS proxy + pro
 - **Headroom** does context compression via summarization — no knowledge graph, no memory.
 - **Graphiti** (Zep's OSS component) is a raw graph engine — no proxy, no session management, no extraction pipeline, requires Neo4j.
 
-**Our unique position:** The only self-hosted, transparent proxy that extracts knowledge into a graph and compresses conversation history — with an embedded backend requiring zero infrastructure. Plus a recall tool that lets the model query its own knowledge graph mid-conversation (nobody else has this).
+**Our unique position:** A self-hosted, transparent proxy that extracts knowledge into a session graph and curates context via a tool-calling LLM, using an embedded backend that requires zero infrastructure. The differentiator is not "a graph" by itself — it is a context manager LLM that picks exactly what the coding agent needs turn by turn, so it never re-reads a file it already knows and never loses a decision it already made.
 
 **Three products under one brand (shipped in order):**
 1. `archolith-proxy` — transparent context compression proxy (this launch)
@@ -136,12 +136,12 @@ The README is the product page. It must answer in 30 seconds: "What is this, why
 1. **Hero**: Name + tagline + benchmark chart (before/after token graph)
 2. **What it does**: 3-bullet summary
    - Intercepts OpenAI-compatible API calls — zero code changes
-   - Extracts facts/decisions into a knowledge graph automatically
-   - Replaces growing conversation history with compressed, relevant context
+   - Extracts knowledge from every turn into a session graph — facts, decisions, file state
+   - Reconstructs recent work state with curated, source-backed context via a tool-calling LLM
 3. **Quick start**: `docker compose up` → send a request → see the savings
 4. **Benchmark results**: Table showing per-turn savings from the 16-turn gpt-4o-mini run
 5. **How it works**: Architecture diagram (assembly pipeline flow)
-6. **The Recall Tool**: How the model can query its own knowledge graph (unique feature — emphasize)
+6. **The Recall Tool**: How the model can query prior session context and exact supporting evidence (unique feature — emphasize)
 7. **Configuration**: Key env vars with descriptions
 8. **Backends**: Neo4j vs LadybugDB comparison — emphasize zero-infra LadybugDB
 9. **Comparison**: Brief positioning vs Zep, Token Company, Headroom
@@ -189,7 +189,7 @@ Goal: Repo public with enough polish that the Claude for Open Source reviewers a
 - Lead with "Zep went cloud-only. Here's the self-hosted alternative."
 - Emphasize zero infrastructure (LadybugDB) — `docker compose up` and done
 - Emphasize zero code changes — transparent proxy, no SDK
-- Show the recall tool — "your LLM can query its own knowledge graph mid-conversation"
+- Show the recall tool — "your LLM can query prior work context mid-conversation"
 - Show the benchmark chart — real numbers on real conversations
 
 ### Success metrics:
@@ -205,11 +205,11 @@ Goal: Repo public with enough polish that the Claude for Open Source reviewers a
 **Deadline:** June 30, 2026
 
 ### Pitch:
-"Open-source context compression proxy and knowledge graph for LLMs. Drop-in replacement for direct API calls — zero code changes, 50-60% token savings, automatic fact extraction into a knowledge graph, and a novel recall tool that lets the model query its own accumulated knowledge.
+"Open-source context intelligence proxy for LLMs. Drop-in replacement for direct API calls — zero code changes. Extracts durable knowledge from every turn into a local graph, then uses a tool-calling context manager LLM to build the minimum viable context window: the right file sections, the right facts, the right decisions — nothing more.
 
 After Zep deprecated their self-hosted Community Edition in 2025, there's no open-source, self-hosted alternative for agent memory with automatic extraction. We're filling that gap with an embedded backend (no Neo4j required) and a transparent proxy that works with any OpenAI-compatible client.
 
-Benchmarked on 16-turn conversations with gpt-4o-mini: 50-60% steady-state token savings with quality preserved. The recall tool — which lets the model actively query facts it extracted from earlier in the conversation — is a novel capability no existing tool provides."
+Benchmarked on 16-turn conversations with gpt-4o-mini: 50-60% steady-state token savings with quality preserved. The context manager LLM eliminates the core failure mode of long coding sessions: the agent re-reading files it already knows, re-diagnosing errors it already found, and losing decisions it already made."
 
 ### Supporting evidence:
 - Public repo with README, benchmarks, architecture docs
