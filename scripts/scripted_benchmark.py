@@ -42,8 +42,57 @@ _dotenv = _load_dotenv(_here / ".env")
 
 PROXY_URL = os.getenv("PROXY_URL", _dotenv.get("PROXY_URL", "http://localhost:9801"))
 PROXY_BASE = PROXY_URL.rstrip("/").removesuffix("/v1")
+HARNESS_URL = os.getenv("HARNESS_URL", _dotenv.get("HARNESS_URL", "http://localhost:3485"))
 STATE_FILE = _here / ".scripted_bench_state.json"
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
+
+
+# ---------------------------------------------------------------------------
+# Harness helpers
+# ---------------------------------------------------------------------------
+
+def _send_harness_handoff(session_id: str, message: str) -> bool:
+    """Send a follow-up user message to a running harness session via MCP.
+
+    Returns True on success, False on error.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "harness_send_handoff",
+            "arguments": {
+                "targetSessionId": session_id,
+                "senderName": "benchmark-orchestrator",
+                "message": message,
+            },
+        },
+    }
+    try:
+        with httpx.Client(timeout=15) as c:
+            r = c.post(
+                f"{HARNESS_URL}/mcp",
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+                json=payload,
+            )
+            # MCP returns SSE — extract first data line
+            text = r.text
+            for line in text.splitlines():
+                if line.startswith("data:"):
+                    data = line[5:].strip()
+                    parsed = json.loads(data)
+                    if "error" in parsed:
+                        print(f"HANDOFF_ERROR session={session_id} error={parsed['error']}")
+                        return False
+                    return True
+            return r.status_code < 400
+    except Exception as e:
+        print(f"HANDOFF_FAILED session={session_id} error={e}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -147,12 +196,12 @@ def cmd_setup(args: argparse.Namespace) -> None:
     proxy_sid = f"bench-proxy-{ts}"
     pass_sid = f"bench-pass-{ts}"
 
-    # Register proxy session override (proxy path only — passthrough is traced separately)
+    # Register both session IDs so proxy traces both paths under their benchmark IDs
     try:
         with httpx.Client(timeout=10) as c:
             r = c.post(
                 f"{PROXY_BASE}/trace/benchmark/session-id",
-                json={"session_id": proxy_sid},
+                json={"session_id": proxy_sid, "passthrough_session_id": pass_sid},
             )
             if r.status_code not in (200, 201, 204):
                 print(f"WARNING: trace/benchmark/session-id returned {r.status_code}")
@@ -167,6 +216,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         "proxy_model": args.proxy_model or "deepseek-proxy/deepseek-v4-flash",
         "passthrough_model": args.passthrough_model or "deepseek-passthrough/deepseek-v4-flash-passthrough",
         "task_prompt": scenario["task_prompt"],
+        "follow_up_turns": scenario.get("follow_up_turns", []),
         "checkpoints": scenario["checkpoints"],
         "total_timeout_seconds": scenario.get("total_timeout_seconds", 600),
         "ts": ts,
@@ -253,6 +303,12 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     pass_dead = state.get("passthrough_terminated_at") is not None
     checkpoint_results: list[dict] = state.get("checkpoint_results", [])
 
+    # Follow-up turns — inject additional user messages at scheduled elapsed times
+    follow_up_turns = state.get("follow_up_turns", [])
+    follow_up_sent: list[bool] = [False] * len(follow_up_turns)
+    proxy_session_id = state["proxy_session_id"]
+    pass_session_id = state["passthrough_session_id"]
+
     # Use baseline uptime from cmd_start (preferred) or re-fetch now
     baseline_uptime = state.get("proxy_baseline_uptime")
     if baseline_uptime is None:
@@ -267,6 +323,27 @@ def cmd_monitor(args: argparse.Namespace) -> None:
         wait_seconds = cp["check_after_seconds"]
         gate = cp.get("gate", False)
         fs_checks = cp["filesystem_checks"]
+
+        # Send any follow-up turns that are due before this checkpoint's check window
+        for i, turn in enumerate(follow_up_turns):
+            if follow_up_sent[i]:
+                continue
+            turn_due_at = turn["send_after_seconds"]
+            elapsed = time.time() - started_at
+            if elapsed < turn_due_at:
+                sleep_until_turn = turn_due_at - elapsed
+                if sleep_until_turn > 0:
+                    print(f"WAIT follow_up_turn={i+1} sleeping {sleep_until_turn:.0f}s (send_after={turn_due_at}s)")
+                    time.sleep(sleep_until_turn)
+            # Send to both sessions
+            msg = turn["message"]
+            if not proxy_dead:
+                ok = _send_harness_handoff(proxy_session_id, msg)
+                print(f"TURN_SENT proxy turn={i+2} ok={ok}")
+            if not pass_dead:
+                ok = _send_harness_handoff(pass_session_id, msg)
+                print(f"TURN_SENT passthrough turn={i+2} ok={ok}")
+            follow_up_sent[i] = True
 
         # Wait until the check window
         elapsed = time.time() - started_at

@@ -18,8 +18,11 @@ from fastapi.responses import JSONResponse
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
 from archolith_proxy.proxy.session import (
     clear_benchmark_session_id,
+    clear_benchmark_passthrough_session_id,
     get_benchmark_session_id,
+    get_benchmark_passthrough_session_id,
     set_benchmark_session_id,
+    set_benchmark_passthrough_session_id,
 )
 from archolith_proxy.trace.store import get_trace_store
 
@@ -32,34 +35,43 @@ router = APIRouter(prefix="/trace", tags=["trace"])
 
 @router.post("/benchmark/session-id")
 async def benchmark_set_session_id(request: Request) -> dict:
-    """Set the benchmark session-ID override.
+    """Set the benchmark session-ID override(s).
 
     Forces all subsequent requests without an explicit X-Session-ID header
-    to use the given session_id. Intended for benchmark runs where the script
-    pre-generates a session ID and needs to fetch the exact trace afterwards.
+    to use session_id (proxy path) or passthrough_session_id (passthrough path).
+    Intended for benchmark runs where the script pre-generates session IDs and
+    needs to fetch exact traces afterwards.
 
-    Only one override can be active at a time — set a new one to replace.
+    Only one override pair can be active at a time — set new ones to replace.
     """
     body = await request.json()
     session_id = (body or {}).get("session_id", "")
+    passthrough_session_id = (body or {}).get("passthrough_session_id")
     if not session_id:
         return JSONResponse(status_code=400, content={"error": "session_id is required"})
     set_benchmark_session_id(session_id)
-    return {"ok": True, "session_id": session_id}
+    if passthrough_session_id:
+        set_benchmark_passthrough_session_id(passthrough_session_id)
+    return {"ok": True, "session_id": session_id, "passthrough_session_id": passthrough_session_id}
 
 
 @router.delete("/benchmark/session-id")
 async def benchmark_clear_session_id() -> dict:
-    """Clear the benchmark session-ID override."""
+    """Clear all benchmark session-ID overrides."""
     prev = get_benchmark_session_id()
+    prev_pt = get_benchmark_passthrough_session_id()
     clear_benchmark_session_id()
-    return {"ok": True, "cleared": prev}
+    clear_benchmark_passthrough_session_id()
+    return {"ok": True, "cleared": prev, "cleared_passthrough": prev_pt}
 
 
 @router.get("/benchmark/session-id")
 async def benchmark_get_session_id() -> dict:
-    """Return the current benchmark session-ID override (or null)."""
-    return {"session_id": get_benchmark_session_id()}
+    """Return the current benchmark session-ID overrides (or null)."""
+    return {
+        "session_id": get_benchmark_session_id(),
+        "passthrough_session_id": get_benchmark_passthrough_session_id(),
+    }
 
 
 @router.get("/sessions")

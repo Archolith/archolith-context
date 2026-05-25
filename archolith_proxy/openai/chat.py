@@ -27,6 +27,7 @@ from archolith_proxy.proxy.live import (
     broadcast_request, broadcast_assembly, broadcast_response,
     broadcast_extraction, broadcast_session_event, broadcast_recall,
 )
+from archolith_proxy.proxy.session import get_benchmark_passthrough_session_id
 from archolith_proxy.proxy.streaming import ResponseCapture, stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _non_streaming_to_sse
 from archolith_proxy.proxy.upstream import RETRYABLE_STATUS_CODES, upstream_request_with_retry
 from archolith_proxy.rtk import filter_request_body
@@ -187,8 +188,10 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             "Content-Type": "application/json",
         }
         input_tokens = estimate_input_tokens(body.get("messages", []))
+        # Resolve passthrough session ID from benchmark override (enables trace lookup by known ID)
+        passthrough_session_id = get_benchmark_passthrough_session_id()
         trace_builder.set_request(
-            session_id=None,
+            session_id=passthrough_session_id,
             turn_number=0,
             model=clean_model,
             stream=req.stream,

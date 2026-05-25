@@ -25,6 +25,7 @@ logger = structlog.get_logger()
 # and needs to fetch the exact trace afterwards.
 # Only one override can be active at a time (benchmarks are sequential).
 _benchmark_session_id: str | None = None
+_benchmark_passthrough_session_id: str | None = None
 
 
 def set_benchmark_session_id(session_id: str) -> None:
@@ -44,6 +45,25 @@ def clear_benchmark_session_id() -> None:
 def get_benchmark_session_id() -> str | None:
     """Return the current benchmark override, or None."""
     return _benchmark_session_id
+
+
+def set_benchmark_passthrough_session_id(session_id: str) -> None:
+    """Activate a benchmark passthrough session-ID override."""
+    global _benchmark_passthrough_session_id
+    _benchmark_passthrough_session_id = session_id
+    logger.info("benchmark_passthrough_session_override_set", session_id=session_id)
+
+
+def clear_benchmark_passthrough_session_id() -> None:
+    """Clear the benchmark passthrough session-ID override."""
+    global _benchmark_passthrough_session_id
+    _benchmark_passthrough_session_id = None
+    logger.info("benchmark_passthrough_session_override_cleared")
+
+
+def get_benchmark_passthrough_session_id() -> str | None:
+    """Return the current passthrough benchmark override, or None."""
+    return _benchmark_passthrough_session_id
 
 
 # ── Patterns to strip from system prompts before fingerprinting ───────────────
