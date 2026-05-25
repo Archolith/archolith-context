@@ -671,7 +671,12 @@ class LadybugBackend:
             logger.debug("file_cache_created", path=path, session_id=session_id)
 
     async def get_file_content(self, session_id: str, path: str) -> dict | None:
-        """Get cached file content. Returns {content, sha256, line_count} or None."""
+        """Get cached file content. Returns {content, sha256, line_count} or None.
+
+        Tries exact match first, then falls back to suffix match to handle
+        absolute-vs-relative path mismatches (opencode stores absolute paths;
+        agents may recall using relative paths).
+        """
         rows = await self._execute(
             """
             MATCH (fc:FileContent {session_id: $session_id, path: $path})
@@ -679,7 +684,27 @@ class LadybugBackend:
             """,
             {"session_id": session_id, "path": path},
         )
-        return rows[0] if rows else None
+        if rows:
+            return rows[0]
+
+        # Suffix fallback: normalize separators and check if any stored path ends
+        # with the query path (handles absolute-stored vs relative-queried case).
+        norm_query = path.replace("\\", "/").lstrip("/")
+        if not norm_query:
+            return None
+        all_files = await self.list_cached_files(session_id)
+        for f in all_files:
+            stored = f.get("path", "").replace("\\", "/")
+            if stored == norm_query or stored.endswith("/" + norm_query):
+                full_rows = await self._execute(
+                    """
+                    MATCH (fc:FileContent {session_id: $session_id, path: $stored_path})
+                    RETURN fc.content AS content, fc.sha256 AS sha256, fc.line_count AS line_count
+                    """,
+                    {"session_id": session_id, "stored_path": f["path"]},
+                )
+                return full_rows[0] if full_rows else None
+        return None
 
     async def get_file_lines(self, session_id: str, path: str, start: int, end: int) -> str | None:
         """Retrieve a line range from cached file content (1-indexed, inclusive).
