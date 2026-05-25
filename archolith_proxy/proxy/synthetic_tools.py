@@ -565,6 +565,26 @@ class SyntheticResult:
     tool_name: str = ""
 
 
+def _fallback_strip_synthetic(data: dict[str, Any]) -> SyntheticResult:
+    """Return a SyntheticResult that strips synthetic tool calls from the model response.
+
+    Used when a resend fails (error or timeout). Instead of returning the original
+    response intact (which would expose synthetic tool calls to OpenCode and cause an
+    infinite loop), strip the tool calls and normalise finish_reason to "stop".
+    """
+    strip_synthetic_from_response(data)
+    # If the message now has no tool_calls and no content (model only called synthetic
+    # tools), set finish_reason="stop" and ensure content is a non-null empty string
+    # so the response is well-formed for OpenCode.
+    if data.get("choices"):
+        choice = data["choices"][0]
+        msg = choice.get("message", {})
+        if not msg.get("tool_calls") and not msg.get("content"):
+            msg["content"] = ""
+            choice["finish_reason"] = "stop"
+    return SyntheticResult(final_data=data, synthetic_used=True)
+
+
 async def handle_non_streaming_synthetic(
     resp: httpx.Response,
     http_client: httpx.AsyncClient,
@@ -658,15 +678,20 @@ async def handle_non_streaming_synthetic(
             "synthetic_resend_failed",
             session_id=session_id, turn=turn_number, error=str(e),
         )
-        return SyntheticResult(final_data=None, synthetic_used=False)
+        # Strip synthetic tool calls from original response to prevent loop.
+        # Returning raw model response with synthetic tool call would cause OpenCode
+        # to handle it as an unknown tool, triggering another turn → infinite loop.
+        return _fallback_strip_synthetic(data)
 
     if resend_resp.status_code >= 400:
         logger.warning(
             "synthetic_resend_error",
             session_id=session_id, turn=turn_number,
             status=resend_resp.status_code,
+            error_body=resend_resp.text[:500],
         )
-        return SyntheticResult(final_data=None, synthetic_used=False)
+        # Same loop-prevention: strip synthetic tool calls from original response.
+        return _fallback_strip_synthetic(data)
 
     final_data = resend_resp.json()
     # Strip any leftover synthetic tool calls from final response
