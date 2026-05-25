@@ -571,17 +571,24 @@ def _fallback_strip_synthetic(data: dict[str, Any]) -> SyntheticResult:
     Used when a resend fails (error or timeout). Instead of returning the original
     response intact (which would expose synthetic tool calls to OpenCode and cause an
     infinite loop), strip the tool calls and normalise finish_reason to "stop".
+
+    If non-synthetic tool calls remain after stripping, leave them intact so OpenCode
+    can handle them normally. Only normalise finish_reason when the message is empty.
     """
     strip_synthetic_from_response(data)
-    # If the message now has no tool_calls and no content (model only called synthetic
-    # tools), set finish_reason="stop" and ensure content is a non-null empty string
-    # so the response is well-formed for OpenCode.
     if data.get("choices"):
         choice = data["choices"][0]
         msg = choice.get("message", {})
-        if not msg.get("tool_calls") and not msg.get("content"):
-            msg["content"] = ""
+        remaining_tool_calls = msg.get("tool_calls")
+        if not remaining_tool_calls and not msg.get("content"):
+            # Model only called synthetic tools — nothing useful remains.
+            # Set a non-null content so the response is well-formed for OpenCode.
+            msg["content"] = "(Context recall unavailable — continuing task.)"
             choice["finish_reason"] = "stop"
+        elif remaining_tool_calls:
+            # Non-synthetic tool calls remain — preserve finish_reason=tool_calls
+            # so OpenCode handles them normally.
+            choice["finish_reason"] = "tool_calls"
     return SyntheticResult(final_data=data, synthetic_used=True)
 
 
@@ -630,6 +637,27 @@ async def handle_non_streaming_synthetic(
     except json.JSONDecodeError:
         tool_args = {}
 
+    # Check for mixed tool calls: if model called non-synthetic tools alongside the
+    # synthetic one, we cannot safely resend (the resend would only supply the
+    # synthetic tool result, leaving the other tool_call_ids unanswered and causing
+    # DeepSeek to return 400: "insufficient tool messages following tool_calls").
+    model_message = data["choices"][0]["message"]
+    all_tool_calls = model_message.get("tool_calls") or []
+    non_synthetic_calls = [
+        tc for tc in all_tool_calls
+        if tc.get("function", {}).get("name") not in SYNTHETIC_TOOL_NAMES
+    ]
+    if non_synthetic_calls:
+        # Mixed call — strip synthetic tool from response and let OpenCode handle
+        # the non-synthetic tool calls normally.
+        logger.info(
+            "synthetic_tool_skipped_mixed_calls",
+            session_id=session_id, turn=turn_number, tool=tool_name,
+            non_synthetic=[tc.get("function", {}).get("name") for tc in non_synthetic_calls],
+        )
+        strip_synthetic_from_response(data)
+        return SyntheticResult(final_data=data, synthetic_used=True)
+
     logger.info(
         "synthetic_tool_intercepted",
         session_id=session_id, turn=turn_number, tool=tool_name,
@@ -640,7 +668,6 @@ async def handle_non_streaming_synthetic(
 
     # Build re-send messages:
     # original messages + model assistant message + synthetic tool result
-    model_message = data["choices"][0]["message"]
     resend_messages = list(original_messages)
     resend_messages.append(dict(model_message))  # Keep tool_calls intact
     resend_messages.append({
