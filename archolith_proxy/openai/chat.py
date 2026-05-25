@@ -670,6 +670,23 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     body = filter_request_body(body, enabled=settings.rtk_enabled)
     request_body = json.dumps(body).encode("utf-8")
 
+    if req.stream and synthetic_injected:
+        # Synthetic tool interception requires seeing the full response before forwarding.
+        # Force non-streaming to upstream, let _handle_non_streaming intercept synthetic
+        # tool calls, then convert the final JSON response to SSE so the streaming client
+        # (opencode) gets the format it expects.
+        body["stream"] = False
+        request_body = json.dumps(body).encode("utf-8")
+        ns_resp = await _handle_non_streaming(
+            request, background_tasks, upstream_url, upstream_headers, request_body,
+            session_id=session_id, turn_number=turn_number,
+            messages=body.get("messages", []), recall_injected=recall_injected,
+            synthetic_injected=True,
+            session_goal=session_goal,
+            trace_builder=trace_builder,
+        )
+        return _wrap_response_as_sse(ns_resp)
+
     if req.stream:
         return await _handle_streaming(
             request, background_tasks, upstream_url, upstream_headers, request_body,
@@ -688,6 +705,47 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             session_goal=session_goal,
             trace_builder=trace_builder,
         )
+
+
+def _wrap_response_as_sse(resp: Response) -> StreamingResponse:
+    """Convert a non-streaming JSON chat completion response to SSE streaming format.
+
+    Used when synthetic tools were intercepted (required non-streaming upstream) but
+    the original client requested streaming. Produces a well-formed SSE stream with
+    role, content, and finish_reason deltas so the streaming client parses it normally.
+    """
+    try:
+        data = json.loads(resp.body.decode("utf-8") if isinstance(resp.body, bytes) else resp.body)
+    except Exception:
+        data = {}
+
+    rid = data.get("id", "chatcmpl-" + uuid4().hex[:8])
+    model = data.get("model", "")
+    created = data.get("created", 0)
+    choices = data.get("choices", [])
+
+    async def _sse():
+        for i, choice in enumerate(choices):
+            msg = choice.get("message", {})
+            content = msg.get("content") or ""
+            finish_reason = choice.get("finish_reason") or "stop"
+            base = {"id": rid, "object": "chat.completion.chunk", "model": model, "created": created}
+
+            # Role delta
+            yield "data: " + json.dumps({**base, "choices": [{"index": i, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]}) + "\n\n"
+            # Content delta (single chunk — fake streaming)
+            if content:
+                yield "data: " + json.dumps({**base, "choices": [{"index": i, "delta": {"content": content}, "finish_reason": None}]}) + "\n\n"
+            # Finish delta
+            yield "data: " + json.dumps({**base, "choices": [{"index": i, "delta": {}, "finish_reason": finish_reason}]}) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _sse(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        background=resp.background,
+    )
 
 
 async def _handle_streaming(
