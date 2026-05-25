@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import json
 import time
-from uuid import uuid4
 
 import httpx
 import structlog
@@ -743,13 +742,11 @@ def _wrap_response_as_sse(resp: Response) -> StreamingResponse:
     role, content, tool_calls, and finish_reason deltas so the streaming client
     parses it normally.
 
-    Tool calls are emitted as separate name and argument deltas with proper ``index``
-    keys, matching the OpenAI streaming spec (see ``_non_streaming_to_sse`` in
-    streaming.py for the reference implementation).
-
-    When upstream returns an error (status >= 400), propagates the error body as a
-    data event followed by [DONE] — mirrors the streaming path's error forwarding
-    so the client can see and handle the error instead of receiving a silent empty stream.
+    The SSE body is produced by ``_non_streaming_to_sse`` (streaming.py) — the
+    canonical reference for the OpenAI streaming format.  This function adds only
+    the error-propagation wrapper on top: when upstream returns status >= 400 it
+    forwards the error body as a data event followed by [DONE] so the client can
+    see and handle the error instead of receiving a silent empty stream.
     """
     # Propagate upstream error responses as SSE error events (mirrors streaming path)
     if resp.status_code >= 400:
@@ -768,69 +765,9 @@ def _wrap_response_as_sse(resp: Response) -> StreamingResponse:
     except Exception:
         data = {}
 
-    rid = data.get("id", "chatcmpl-" + uuid4().hex[:8])
-    model = data.get("model", "")
-    created = data.get("created", 0)
-    choices = data.get("choices", [])
-
     async def _sse():
-        for i, choice in enumerate(choices):
-            msg = choice.get("message", {})
-            content = msg.get("content") or ""
-            tool_calls = msg.get("tool_calls")
-            finish_reason = choice.get("finish_reason") or "stop"
-            base = {"id": rid, "object": "chat.completion.chunk", "model": model, "created": created}
-
-            # Role delta
-            yield "data: " + json.dumps({**base, "choices": [{"index": i, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]}) + "\n\n"
-
-            # Content delta (single chunk — fake streaming)
-            if content:
-                yield "data: " + json.dumps({**base, "choices": [{"index": i, "delta": {"content": content}, "finish_reason": None}]}) + "\n\n"
-
-            # Tool call deltas — each tool call is emitted as two separate chunks:
-            # 1) Name delta: index, id, type, function.name (arguments="")
-            # 2) Arguments delta: index, function.arguments
-            # This matches the OpenAI streaming spec and the reference implementation
-            # in _non_streaming_to_sse (streaming.py L330-374).
-            if tool_calls:
-                for tc_idx, tc in enumerate(tool_calls):
-                    # Name delta
-                    tc_id = tc.get("id", f"call_{tc_idx}")
-                    tc_type = tc.get("type", "function")
-                    func = tc.get("function", {})
-                    name_delta = {**base, "choices": [{
-                        "index": i,
-                        "delta": {
-                            "tool_calls": [{
-                                "index": tc_idx,
-                                "id": tc_id,
-                                "type": tc_type,
-                                "function": {"name": func.get("name", ""), "arguments": ""},
-                            }],
-                        },
-                        "finish_reason": None,
-                    }]}
-                    yield "data: " + json.dumps(name_delta) + "\n\n"
-
-                    # Arguments delta
-                    args = func.get("arguments", "")
-                    if args:
-                        args_delta = {**base, "choices": [{
-                            "index": i,
-                            "delta": {
-                                "tool_calls": [{
-                                    "index": tc_idx,
-                                    "function": {"arguments": args},
-                                }],
-                            },
-                            "finish_reason": None,
-                        }]}
-                        yield "data: " + json.dumps(args_delta) + "\n\n"
-
-            # Finish delta
-            yield "data: " + json.dumps({**base, "choices": [{"index": i, "delta": {}, "finish_reason": finish_reason}]}) + "\n\n"
-        yield "data: [DONE]\n\n"
+        for line in _non_streaming_to_sse(data):
+            yield line + "\n\n"
 
     return StreamingResponse(
         _sse(),
