@@ -640,6 +640,7 @@ async def handle_non_streaming_synthetic(
         "stream": False,
         "messages": resend_messages,
     }
+    resend_payload.pop("stream_options", None)  # stream_options is only valid with stream=true
     resend_payload = filter_request_body(resend_payload, enabled=settings.rtk_enabled)
     resend_body = json.dumps(resend_payload).encode("utf-8")
 
