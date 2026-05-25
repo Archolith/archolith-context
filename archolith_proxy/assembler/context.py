@@ -536,9 +536,15 @@ async def assemble_context(
         confidence=round(intent.confidence, 2),
     )
 
-    # Budget: reserve tokens for goal, files, decisions, framing
+    # Budget: reserve tokens for goal, files, decisions, framing.
+    # short_session_context_budget overrides context_token_budget when set (experiment C).
+    raw_budget = (
+        settings.short_session_context_budget
+        if settings.short_session_context_budget > 0
+        else settings.context_token_budget
+    )
     fixed_overhead = 200
-    fact_budget = max(0, settings.context_token_budget - fixed_overhead)
+    fact_budget = max(0, raw_budget - fixed_overhead)
 
     # Intent-driven fact selection
     budgeted_facts = _budget_facts(
@@ -569,6 +575,12 @@ async def assemble_context(
         }
     ]
 
+    # drop_middle_on_assembly (experiment B): signal rewrite_messages to discard
+    # all middle turns — the assembled digest is the replacement, not a supplement.
+    # retained_turn_numbers=[] means "keep nothing from the middle".
+    # retained_turn_numbers=None (default) means "keep all middle turns (compressed)".
+    retained: list[int] | None = [] if settings.drop_middle_on_assembly else None
+
     result = AssembledContext(
         system_message=graph_context[0],
         graph_context=graph_context,
@@ -579,6 +591,7 @@ async def assemble_context(
         files_selected=files,
         decisions_selected=decisions,
         compression_ratio=compression_ratio,
+        retained_turn_numbers=retained,
     )
 
     logger.info(
