@@ -714,7 +714,23 @@ def _wrap_response_as_sse(resp: Response) -> StreamingResponse:
     Used when synthetic tools were intercepted (required non-streaming upstream) but
     the original client requested streaming. Produces a well-formed SSE stream with
     role, content, and finish_reason deltas so the streaming client parses it normally.
+
+    When upstream returns an error (status >= 400), propagates the error body as a
+    data event followed by [DONE] — mirrors the streaming path's error forwarding
+    so the client can see and handle the error instead of receiving a silent empty stream.
     """
+    # Propagate upstream error responses as SSE error events (mirrors streaming path)
+    if resp.status_code >= 400:
+        error_body = resp.body.decode("utf-8") if isinstance(resp.body, bytes) else (resp.body or b"{}").decode("utf-8")
+        async def _sse_error():
+            yield f"data: {error_body}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(
+            _sse_error(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
     try:
         data = json.loads(resp.body.decode("utf-8") if isinstance(resp.body, bytes) else resp.body)
     except Exception:
@@ -1221,6 +1237,17 @@ async def _handle_non_streaming(
     except httpx.ConnectError as e:
         record_metric("upstream_errors", 1)
         return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
+
+    # Log upstream error responses for diagnosis (before any further processing)
+    if resp.status_code >= 400:
+        logger.warning(
+            "upstream_error_response",
+            status_code=resp.status_code,
+            response_body=resp.text[:2000],
+            session_id=session_id,
+            synthetic_injected=synthetic_injected,
+            request_preview=body[:500].decode("utf-8", errors="replace") if isinstance(body, bytes) else str(body)[:500],
+        )
 
     # Check for recall tool call interception via the shared helper.
     # This handles up to 2 recall rounds consistently with the streaming path.
