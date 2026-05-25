@@ -218,6 +218,40 @@ def generate_html(
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+def _turn_records_from_trace(trace: dict) -> list[dict]:
+    """Build synthetic turn_records from stored trace data.
+
+    Used by --load mode to populate the per-turn HTML view without re-running
+    the scenario. Each trace turn becomes one record; the user message is taken
+    from the last user-role entry in original_messages (or '[trace only]' if
+    the field is absent).
+    """
+    records = []
+    for t in sorted(trace.get("turns", []), key=lambda x: x.get("turn_number", 0)):
+        # Extract last user message from original_messages if available
+        user_msg = "[trace only]"
+        for msg in reversed(t.get("original_messages") or []):
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(
+                        p.get("text", "") for p in content if isinstance(p, dict)
+                    )
+                user_msg = (content or "")[:300]
+                break
+
+        records.append({
+            "turn": t.get("turn_number", 0) + 1,
+            "user_msg": user_msg,
+            "response": t.get("upstream_response_summary", ""),
+            "status": t.get("upstream_status", 200),
+            "input_tokens": t.get("input_tokens", 0),
+            "output_tokens": t.get("output_tokens", 0),
+            "latency_ms": t.get("upstream_latency_ms", 0),
+        })
+    return records
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Archolith Context Explorer — run a scenario and generate HTML report",
@@ -238,8 +272,39 @@ def main() -> None:
         default=None,
         help="Override session ID (default: auto-generated)",
     )
+    parser.add_argument(
+        "--load",
+        metavar="SESSION_ID",
+        default=None,
+        help="Load and visualise an existing proxy session instead of running a new one",
+    )
     args = parser.parse_args()
 
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    out = Path(args.output) if args.output else Path(f"scripts/results/explorer_{ts}.html")
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    # ── Load mode: visualise an existing session from the proxy trace store ──
+    if args.load:
+        session_id = args.load
+        print(f"Loading trace for session {session_id} ...", end="", flush=True)
+        trace = fetch_trace(session_id)
+        if not trace:
+            print(f"\nERROR: no trace found for session {session_id}", file=sys.stderr)
+            sys.exit(1)
+        print(f" {len(trace.get('turns', []))} turns")
+        turn_records = _turn_records_from_trace(trace)
+        generate_html(
+            scenario_name=f"[loaded] {session_id}",
+            session_id=session_id,
+            scenario_path="(loaded from trace)",
+            turn_records=turn_records,
+            trace=trace,
+            output_path=out,
+        )
+        return
+
+    # ── Run mode: execute scenario and capture live trace ────────────────────
     scenario_path = Path(args.scenario)
     if not scenario_path.exists():
         print(f"Scenario not found: {scenario_path}", file=sys.stderr)
@@ -264,11 +329,6 @@ def main() -> None:
             break
         print(".", end="", flush=True)
     print(" ok" if trace else " failed (explorer will have partial data)")
-
-    # Output path
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    out = Path(args.output) if args.output else Path(f"scripts/results/explorer_{ts}.html")
-    out.parent.mkdir(parents=True, exist_ok=True)
 
     generate_html(
         scenario_name=scenario_name,
@@ -447,6 +507,33 @@ details.curator-details:not([open]) .curator-expand-btn::after { content: " ▼"
 .legend { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; font-size: 12px; color: var(--text2); }
 .legend-item { display: flex; align-items: center; gap: 5px; }
 .legend-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+/* Assembly reason */
+.reason-text { font-size: 11px; color: var(--text3); font-style: italic; margin-top: 4px; margin-bottom: 6px; }
+
+/* Fallback badge */
+.fallback-badge {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px;
+  background: #2d0d0d; color: var(--red); border: 1px solid #5a1010;
+  white-space: nowrap; cursor: help;
+}
+
+/* Graph context panel */
+.graph-ctx-panel { background: var(--blue-dim); border: 1px solid var(--blue-border); border-radius: var(--radius-sm); padding: 10px 12px; margin-top: 4px; }
+.graph-ctx-row { margin-bottom: 8px; }
+.graph-ctx-row:last-child { margin-bottom: 0; }
+.graph-ctx-label { font-size: 11px; font-weight: 600; color: var(--blue); margin-bottom: 4px; }
+.graph-fact-item { font-size: 11px; color: var(--text2); padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); line-height: 1.4; }
+.graph-fact-item:last-child { border-bottom: none; }
+.file-chip { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 20px; margin: 1px; background: var(--indigo-dim); color: var(--indigo); border: 1px solid var(--indigo-border); font-family: monospace; }
+.decision-chip { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 20px; margin: 1px; background: var(--orange-dim); color: var(--orange); border: 1px solid var(--orange-border); }
+
+/* Recall panel */
+.recall-panel { background: var(--orange-dim); border: 1px solid var(--orange-border); border-radius: var(--radius-sm); padding: 8px 12px; margin-top: 4px; }
+.recall-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 4px; }
+.recall-row:last-child { margin-bottom: 0; }
+.recall-label { font-size: 11px; font-weight: 600; color: var(--orange); min-width: 90px; flex-shrink: 0; }
+.recall-val { font-size: 12px; color: var(--text2); }
 </style>
 </head>
 <body>
@@ -690,6 +777,91 @@ function renderChart() {
   `;
 }
 
+// ── Graph Context ─────────────────────────────────────────────────────────────
+
+function renderGraphContext(tr) {
+  if (!tr) return '';
+  const facts = tr.facts_selected || [];
+  const files = tr.files_selected || [];
+  const decisions = tr.decisions_selected || [];
+  if (!facts.length && !files.length && !decisions.length) return '';
+
+  let html = `<div class="section-label">Graph Context Injected</div><div class="graph-ctx-panel">`;
+
+  if (facts.length) {
+    html += `<div class="graph-ctx-row"><div class="graph-ctx-label">Facts selected (${facts.length})</div>`;
+    html += `<details><summary style="font-size:11px;color:var(--blue);cursor:pointer;margin-bottom:4px">${facts.length} fact${facts.length>1?'s':''} — click to expand</summary>`;
+    for (const f of facts) {
+      const content = (f.content || f.text || JSON.stringify(f)).slice(0, 300);
+      html += `<div class="graph-fact-item">${esc(content)}</div>`;
+    }
+    html += `</details></div>`;
+  }
+
+  if (files.length) {
+    html += `<div class="graph-ctx-row"><div class="graph-ctx-label">Files selected (${files.length})</div><div>`;
+    for (const f of files) {
+      const label = f.path || f.file_path || f.name || JSON.stringify(f);
+      html += `<span class="file-chip" title="${esc(label)}">${esc(label.length > 60 ? '…' + label.slice(-57) : label)}</span>`;
+    }
+    html += `</div></div>`;
+  }
+
+  if (decisions.length) {
+    html += `<div class="graph-ctx-row"><div class="graph-ctx-label">Decisions (${decisions.length})</div><div>`;
+    for (const d of decisions) {
+      const label = String(d.content || d.text || d.description || JSON.stringify(d));
+      html += `<span class="decision-chip" title="${esc(label)}">${esc(label.slice(0, 60))}${label.length > 60 ? '…' : ''}</span>`;
+    }
+    html += `</div></div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+// ── Recall Panel ──────────────────────────────────────────────────────────────
+
+function renderRecallPanel(tr) {
+  if (!tr || !tr.recall_used) return '';
+  const q = tr.recall_question || '';
+  const n = tr.recall_facts_returned || 0;
+  return `
+<div class="section-label">Synthetic Recall Used</div>
+<div class="recall-panel">
+  ${q ? `<div class="recall-row"><span class="recall-label">Question</span><span class="recall-val">${esc(q)}</span></div>` : ''}
+  <div class="recall-row"><span class="recall-label">Facts returned</span><span class="recall-val">${n}</span></div>
+</div>`;
+}
+
+// ── Rewritten Messages ────────────────────────────────────────────────────────
+
+function renderRewrittenMessages(rewrMsgs, rewrTok, label) {
+  if (!rewrMsgs || !rewrMsgs.length) return '';
+  const title = label || 'Rewritten prompt';
+  const msgRows = rewrMsgs.map(msg => {
+    const role = msg.role || 'unknown';
+    let content = '';
+    if (typeof msg.content === 'string') {
+      content = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      content = msg.content.map(p => p.text || '').join('');
+    }
+    return `<div class="rewritten-msg role-${esc(role)}"><div class="msg-role">${esc(role)}</div><div class="msg-content">${esc(content)}</div></div>`;
+  }).join('');
+  return `<details class="curator-details" style="width:100%">
+  <summary><span class="curator-expand-btn">${esc(title)} (${rewrMsgs.length} messages, ${rewrTok}t)</span></summary>
+  <div style="margin-top:6px">${msgRows}</div>
+</details>`;
+}
+
+// ── Fallback Badge ────────────────────────────────────────────────────────────
+
+function fallbackBadge(reason) {
+  if (!reason) return '';
+  return `<span class="fallback-badge" title="${esc(reason)}">fallback</span>`;
+}
+
 // ── Turn Card ─────────────────────────────────────────────────────────────────
 
 function renderTurnCard(turnRecord, idx) {
@@ -705,6 +877,12 @@ function renderTurnCard(turnRecord, idx) {
   const factsStored = tr ? tr.facts_stored : 0;
   const latencyMs = turnRecord.latency_ms || (tr ? tr.upstream_latency_ms : 0);
   const asmLatency = tr ? tr.assembly_latency_ms : 0;
+  const fallbackReason = tr ? (tr.fallback_reason || null) : null;
+  const assemblyReason = tr ? (tr.assembly_reason || '') : '';
+  const extractionLatencyMs = tr ? (tr.extraction_latency_ms || 0) : 0;
+  const dupSkipped = tr ? (tr.duplicates_skipped || 0) : 0;
+  const compressionRatio = tr ? (tr.compression_ratio || 1.0) : 1.0;
+  const invalidationsMatched = tr ? (tr.invalidations_matched || 0) : 0;
 
   const origMsgs = tr ? tr.original_messages : null;
   const rewrMsgs = tr ? tr.rewritten_messages : null;
@@ -713,6 +891,11 @@ function renderTurnCard(turnRecord, idx) {
   const totalUserTurns = n; // turn N is the Nth user message
   const retainedTurns = tr ? tr.curator_retained_turns : null;
   const retainedSet = retainedTurns !== null ? new Set(retainedTurns) : null;
+
+  // Assembly reason hint
+  const assemblyReasonHtml = assemblyReason
+    ? `<div class="reason-text">↳ ${esc(assemblyReason)}</div>`
+    : '';
 
   // Context composition
   let ctxHtml = '';
@@ -724,6 +907,18 @@ function renderTurnCard(turnRecord, idx) {
       ctxHtml += renderContextRow('proxy', rewrMsgs, retainedSet, totalUserTurns, false);
     }
     ctxHtml += `</div>`;
+    ctxHtml += assemblyReasonHtml;
+  } else if (assemblyReasonHtml) {
+    ctxHtml = assemblyReasonHtml;
+  }
+
+  // Graph context — facts/files/decisions pulled from graph and injected
+  const graphCtxHtml = renderGraphContext(tr);
+
+  // Rewritten prompt — show for all non-curator/passthrough/cold_start modes
+  let rewriteHtml = '';
+  if (mode !== 'curator' && mode !== 'cold_start' && mode !== 'passthrough' && rewrMsgs && rewrMsgs.length) {
+    rewriteHtml = `<div class="section-label">Rewritten Prompt</div>` + renderRewrittenMessages(rewrMsgs, rewrTok);
   }
 
   // Curator panel
@@ -760,7 +955,6 @@ function renderTurnCard(turnRecord, idx) {
     }
 
     if (tr.curator_context_block) {
-      const ctxId = `curator-ctx-${n}`;
       curatorHtml += `
   <div class="curator-row" style="flex-direction:column;align-items:flex-start">
     <details class="curator-details" style="width:100%">
@@ -770,43 +964,40 @@ function renderTurnCard(turnRecord, idx) {
   </div>`;
     }
 
-    // Rewritten prompt — full message array sent upstream
     if (rewrMsgs && rewrMsgs.length) {
-      const msgRows = rewrMsgs.map(msg => {
-        const role = msg.role || 'unknown';
-        let content = '';
-        if (typeof msg.content === 'string') {
-          content = msg.content;
-        } else if (Array.isArray(msg.content)) {
-          content = msg.content.map(p => p.text || '').join('');
-        }
-        return `<div class="rewritten-msg role-${esc(role)}"><div class="msg-role">${esc(role)}</div><div class="msg-content">${esc(content)}</div></div>`;
-      }).join('');
       curatorHtml += `
   <div class="curator-row" style="flex-direction:column;align-items:flex-start">
-    <details class="curator-details" style="width:100%">
-      <summary><span class="curator-expand-btn">Rewritten prompt (${rewrMsgs.length} messages, ${rewrTok}t)</span></summary>
-      <div style="margin-top:6px">${msgRows}</div>
-    </details>
+    ${renderRewrittenMessages(rewrMsgs, rewrTok, 'Rewritten prompt')}
   </div>`;
     }
 
     curatorHtml += `</div>`;
   }
 
-  // Facts chips
-  const extractedFacts = (tr && tr.extracted_facts) ? tr.extracted_facts.slice(0, 6) : [];
+  // Recall panel — shown when synthetic recall tool was invoked
+  const recallHtml = renderRecallPanel(tr);
+
+  // Facts chips — first 6 visible, remainder in collapsible
+  const allExtractedFacts = (tr && tr.extracted_facts) ? tr.extracted_facts : [];
+  const fCount = factsStored || allExtractedFacts.length;
   let factsHtml = '';
-  if (factsStored > 0) {
-    factsHtml = `<div class="section-label">Facts Extracted (${factsStored})</div><div class="facts-strip">`;
-    for (const f of extractedFacts) {
+  if (fCount > 0 || allExtractedFacts.length > 0) {
+    const visibleFacts = allExtractedFacts.slice(0, 6);
+    const hiddenFacts = allExtractedFacts.slice(6);
+    factsHtml = `<div class="section-label">Facts Extracted (${fCount})</div><div class="facts-strip">`;
+    for (const f of visibleFacts) {
       const content = (f.content || '').slice(0, 80);
       factsHtml += `<span class="fact-chip" title="${esc(f.content || '')}">${esc(content)}${content.length < (f.content||'').length ? '…' : ''}</span>`;
     }
-    if (factsStored > extractedFacts.length) {
-      factsHtml += `<span class="fact-chip" style="background:var(--bg3);color:var(--text3)">+${factsStored - extractedFacts.length} more</span>`;
-    }
     factsHtml += `</div>`;
+    if (hiddenFacts.length > 0) {
+      factsHtml += `<details style="margin-top:4px"><summary style="font-size:11px;color:var(--text3);cursor:pointer">+${hiddenFacts.length} more facts</summary><div class="facts-strip" style="margin-top:6px">`;
+      for (const f of hiddenFacts) {
+        const content = (f.content || '').slice(0, 80);
+        factsHtml += `<span class="fact-chip" title="${esc(f.content || '')}">${esc(content)}${content.length < (f.content||'').length ? '…' : ''}</span>`;
+      }
+      factsHtml += `</div></details>`;
+    }
   }
 
   // Response
@@ -831,8 +1022,12 @@ function renderTurnCard(turnRecord, idx) {
   <span>in: <span class="v">${fmt(origTok)}t</span></span>
   <span>rewritten: <span class="v ${savings>0?'good':''}">${fmt(rewrTok)}t</span></span>
   <span>savings: <span class="v ${savings>0?'good':'warn'}">${fmt(savings)}t (${savingsPct}%)</span></span>
-  ${factsStored > 0 ? `<span>facts: <span class="v good">+${factsStored}</span></span>` : ''}
+  ${fCount > 0 ? `<span>facts: <span class="v good">+${fCount}</span></span>` : ''}
   <span>asm: <span class="v">${(asmLatency/1000).toFixed(1)}s</span></span>
+  ${extractionLatencyMs > 0 ? `<span>extract: <span class="v">${(extractionLatencyMs/1000).toFixed(2)}s</span></span>` : ''}
+  ${dupSkipped > 0 ? `<span>dedup: <span class="v">${dupSkipped} skip</span></span>` : ''}
+  ${compressionRatio < 0.99 && compressionRatio > 0 ? `<span>compress: <span class="v good">${(compressionRatio*100).toFixed(0)}%</span></span>` : ''}
+  ${invalidationsMatched > 0 ? `<span>invalidated: <span class="v warn">${invalidationsMatched}</span></span>` : ''}
   <span>total: <span class="v">${(latencyMs/1000).toFixed(1)}s</span></span>
 </div>`;
 
@@ -847,6 +1042,7 @@ function renderTurnCard(turnRecord, idx) {
     <span class="turn-num">Turn ${n}</span>
     ${modeBadge(mode)}
     ${degradedBadge(degradedReason)}
+    ${fallbackBadge(fallbackReason)}
     <span class="turn-user-preview">${esc((turnRecord.user_msg || '').slice(0,120).replace(/\n/g,' '))}</span>
     <span class="savings-chip ${savingsChipCls}">${fmt(savings)}t saved</span>
     <span class="turn-tokens">${fmt(origTok)}t &rarr; ${fmt(rewrTok)}t</span>
@@ -855,6 +1051,9 @@ function renderTurnCard(turnRecord, idx) {
   <div id="${bodyId}" class="turn-body ${openByDefault ? 'open' : ''}">
     ${ctxHtml}
     ${curatorHtml}
+    ${rewriteHtml}
+    ${graphCtxHtml}
+    ${recallHtml}
     ${factsHtml}
     ${responseHtml}
     ${metricsHtml}
