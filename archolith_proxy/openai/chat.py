@@ -92,6 +92,24 @@ def _extract_file_reads(messages: list[dict]) -> list[dict]:
                     args = {}
                 call_map[tc["id"]] = (tc["function"]["name"], args)
 
+    # Debug: log message structure when call_map is empty to diagnose extraction misses
+    role_counts = {}
+    for m in messages:
+        r = m.get("role", "unknown")
+        role_counts[r] = role_counts.get(r, 0) + 1
+    tool_msg_ids = [m.get("tool_call_id", "") for m in messages if m.get("role") == "tool"]
+    sample_args = [(name, list(args.keys())) for name, args in list(call_map.values())[:4]]
+    logger.info(
+        "file_cache_extract_debug",
+        total_messages=len(messages),
+        role_counts=role_counts,
+        call_map_size=len(call_map),
+        tool_result_count=len(tool_msg_ids),
+        sample_call_names=list({v[0] for v in call_map.values()})[:8],
+        sample_tool_ids_match=[tid for tid in tool_msg_ids[:4] if tid in call_map],
+        sample_args=sample_args,
+    )
+
     # Match tool results to calls
     results = []
     for msg in messages:
@@ -108,7 +126,8 @@ def _extract_file_reads(messages: list[dict]) -> list[dict]:
             continue
         path = (
             args.get("path") or args.get("file_path")
-            or args.get("filename") or args.get("target_file") or ""
+            or args.get("filePath") or args.get("filename")
+            or args.get("target_file") or ""
         )
         if not path:
             continue
