@@ -103,10 +103,13 @@ def _extract_file_reads(messages: list[dict]) -> list[dict]:
         name, args = call_map[tc_id]
         if _is_compressible_tool(name):
             continue  # search/grep/web — not file content
-        content = msg.get("content", "")
-        if not isinstance(content, str) or not content.strip():
+        content = _normalize_message_content(msg.get("content", ""))
+        if not content.strip():
             continue
-        path = args.get("path") or args.get("file_path") or args.get("filename") or ""
+        path = (
+            args.get("path") or args.get("file_path")
+            or args.get("filename") or args.get("target_file") or ""
+        )
         if not path:
             continue
         results.append({
