@@ -1464,8 +1464,22 @@ async def _run_extraction(
         if fc_settings.file_cache_enabled:
             try:
                 file_reads = _extract_file_reads(messages)
+                logger.info(
+                    "file_cache_extract_result",
+                    session_id=session_id,
+                    turn=turn_number,
+                    found=len(file_reads),
+                    paths=[fr["path"] for fr in file_reads],
+                )
                 if file_reads:
                     await _upsert_file_cache(session_id, file_reads, turn_number)
+                    logger.info(
+                        "file_cache_upserted",
+                        session_id=session_id,
+                        turn=turn_number,
+                        count=len(file_reads),
+                        paths=[fr["path"] for fr in file_reads],
+                    )
             except Exception:
                 logger.warning("file_cache_capture_failed", session_id=session_id, turn=turn_number, exc_info=True)
 
