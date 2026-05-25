@@ -677,6 +677,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         # tool calls, then convert the final JSON response to SSE so the streaming client
         # (opencode) gets the format it expects.
         body["stream"] = False
+        body.pop("stream_options", None)  # stream_options is only valid with stream=true
         request_body = json.dumps(body).encode("utf-8")
         ns_resp = await _handle_non_streaming(
             request, background_tasks, upstream_url, upstream_headers, request_body,
