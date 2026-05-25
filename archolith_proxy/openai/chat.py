@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import time
+from uuid import uuid4
 
 import httpx
 import structlog
