@@ -397,6 +397,15 @@ def create_app() -> FastAPI:
         }
 
     # --- Metrics endpoint ---
+
+    def _get_circuit_states() -> dict[str, dict]:
+        """Return per-session circuit breaker states for /metrics."""
+        try:
+            from archolith_proxy.proxy.circuit_breaker import get_all_circuit_states
+            return get_all_circuit_states()
+        except Exception:
+            return {}
+
     @app.get("/metrics")
     async def metrics() -> dict:
         active_sessions = 0
@@ -463,6 +472,12 @@ def create_app() -> FastAPI:
             "curator_calls": get_metrics()["curator_calls"],
             "curator_timeouts": get_metrics()["curator_timeouts"],
             "curator_fallbacks": get_metrics()["curator_fallbacks"],
+            "synthetic_tool_successes": get_metrics()["synthetic_tool_successes"],
+            "synthetic_tool_failures": get_metrics()["synthetic_tool_failures"],
+            "synthetic_circuit_opens": get_metrics()["synthetic_circuit_opens"],
+            "synthetic_circuit_hard_disables": get_metrics()["synthetic_circuit_hard_disables"],
+            "synthetic_injections_skipped": get_metrics()["synthetic_injections_skipped"],
+            "synthetic_circuit_states": _get_circuit_states(),
             "trace_records": trace_store.total_traces,
             "trace_sessions": trace_store.session_count,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,

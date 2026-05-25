@@ -71,6 +71,15 @@ class Settings(BaseSettings):
     # the proxy from trace store + graph backend -- never forwarded upstream.
     synthetic_tools_enabled: bool = False
 
+    # Synthetic tool circuit breaker — prevents runaway re-injection loops
+    synthetic_circuit_max_consecutive: int = 3     # consecutive failures before cooldown
+    synthetic_circuit_cooldown_s: float = 300.0   # cooldown duration in seconds
+    synthetic_circuit_max_total: int = 10          # total failures before session-lifetime disable
+
+    # Hard token cap per session — stop context management when exceeded
+    max_input_tokens_per_session: int = 2_000_000  # 0 = unlimited
+    session_token_budget_action: str = "passthrough"  # "passthrough" (forward raw) or "reject"
+
     # RTK output filtering for outbound tool-role messages
     rtk_enabled: bool = False
 

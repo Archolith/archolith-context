@@ -37,6 +37,11 @@ _metrics: dict = {
     "curator_calls": 0,
     "curator_timeouts": 0,
     "curator_fallbacks": 0,
+    "synthetic_circuit_opens": 0,
+    "synthetic_circuit_hard_disables": 0,
+    "synthetic_tool_failures": 0,
+    "synthetic_tool_successes": 0,
+    "synthetic_injections_skipped": 0,
 }
 
 

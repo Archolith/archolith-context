@@ -563,6 +563,7 @@ class SyntheticResult:
     final_data: dict[str, Any] | None
     synthetic_used: bool = False
     tool_name: str = ""
+    fallback_used: bool = False  # True when re-send failed and fallback strip was applied
 
 
 def _fallback_strip_synthetic(data: dict[str, Any]) -> SyntheticResult:
@@ -583,7 +584,7 @@ def _fallback_strip_synthetic(data: dict[str, Any]) -> SyntheticResult:
         if not remaining_tool_calls and not msg.get("content"):
             # Model only called synthetic tools — nothing useful remains.
             # Set a non-null content so the response is well-formed for OpenCode.
-            msg["content"] = "(Context recall unavailable — continuing task.)"
+            msg["content"] = "(Session recall is temporarily unavailable. Continue your task without context recall — use file tools directly.)"
             choice["finish_reason"] = "stop"
         elif remaining_tool_calls:
             # Non-synthetic tool calls remain — preserve finish_reason=tool_calls
@@ -708,7 +709,9 @@ async def handle_non_streaming_synthetic(
         # Strip synthetic tool calls from original response to prevent loop.
         # Returning raw model response with synthetic tool call would cause OpenCode
         # to handle it as an unknown tool, triggering another turn → infinite loop.
-        return _fallback_strip_synthetic(data)
+        result = _fallback_strip_synthetic(data)
+        result.fallback_used = True
+        return result
 
     if resend_resp.status_code >= 400:
         logger.warning(
@@ -718,7 +721,9 @@ async def handle_non_streaming_synthetic(
             error_body=resend_resp.text[:500],
         )
         # Same loop-prevention: strip synthetic tool calls from original response.
-        return _fallback_strip_synthetic(data)
+        result = _fallback_strip_synthetic(data)
+        result.fallback_used = True
+        return result
 
     final_data = resend_resp.json()
     # Strip any leftover synthetic tool calls from final response

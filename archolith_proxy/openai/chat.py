@@ -389,6 +389,27 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     record_metric("total_input_tokens_seen", input_tokens)
     user_turn_count = sum(1 for m in messages if m.get("role") == "user")
 
+    # Per-session token budget — stop context management when exceeded
+    session_over_budget = False
+    if session_id and settings.max_input_tokens_per_session > 0:
+        from archolith_proxy.proxy.circuit_breaker import add_session_tokens, is_session_over_budget
+        add_session_tokens(session_id, input_tokens)
+        session_over_budget = is_session_over_budget(session_id, settings.max_input_tokens_per_session)
+        if session_over_budget:
+            logger.warning(
+                "session_over_token_budget",
+                session_id=session_id,
+                input_tokens=input_tokens,
+                budget=settings.max_input_tokens_per_session,
+                action=settings.session_token_budget_action,
+            )
+            if settings.session_token_budget_action == "reject":
+                from archolith_proxy.openai.errors import UpstreamError
+                raise UpstreamError(
+                    f"Session {session_id} exceeded token budget "
+                    f"({settings.max_input_tokens_per_session:,} tokens)"
+                )
+
     # Trace: record request arrival
     trace_builder.set_request(
         session_id=session_id,
@@ -408,7 +429,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         stream=req.stream, input_tokens=input_tokens,
     )
 
-    if session_id and graph_ready:
+    if session_id and graph_ready and not session_over_budget:
         try:
             # Wait for prior turn's extraction to commit before reading graph state
             from archolith_proxy.proxy.locks import wait_for_prior_extraction
@@ -654,9 +675,14 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     # Inject synthetic session-summary tools (recall_session_work, recall_files_read)
     synthetic_injected = False
     if settings.synthetic_tools_enabled and session_id:
-        from archolith_proxy.proxy.synthetic_tools import inject_synthetic_tools
-        body = inject_synthetic_tools(body)
-        synthetic_injected = True
+        from archolith_proxy.proxy.circuit_breaker import is_synthetic_allowed
+        if is_synthetic_allowed(session_id):
+            from archolith_proxy.proxy.synthetic_tools import inject_synthetic_tools
+            body = inject_synthetic_tools(body)
+            synthetic_injected = True
+        else:
+            record_metric("synthetic_injections_skipped")
+            logger.info("synthetic_tools_circuit_open", session_id=session_id)
 
     # Inject no-DSML hint for DeepSeek models without tools.
     # DeepSeek infers tool-enabled sessions from context and emits DSML markup.
@@ -714,7 +740,12 @@ def _wrap_response_as_sse(resp: Response) -> StreamingResponse:
 
     Used when synthetic tools were intercepted (required non-streaming upstream) but
     the original client requested streaming. Produces a well-formed SSE stream with
-    role, content, and finish_reason deltas so the streaming client parses it normally.
+    role, content, tool_calls, and finish_reason deltas so the streaming client
+    parses it normally.
+
+    Tool calls are emitted as separate name and argument deltas with proper ``index``
+    keys, matching the OpenAI streaming spec (see ``_non_streaming_to_sse`` in
+    streaming.py for the reference implementation).
 
     When upstream returns an error (status >= 400), propagates the error body as a
     data event followed by [DONE] — mirrors the streaming path's error forwarding
@@ -746,14 +777,57 @@ def _wrap_response_as_sse(resp: Response) -> StreamingResponse:
         for i, choice in enumerate(choices):
             msg = choice.get("message", {})
             content = msg.get("content") or ""
+            tool_calls = msg.get("tool_calls")
             finish_reason = choice.get("finish_reason") or "stop"
             base = {"id": rid, "object": "chat.completion.chunk", "model": model, "created": created}
 
             # Role delta
             yield "data: " + json.dumps({**base, "choices": [{"index": i, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]}) + "\n\n"
+
             # Content delta (single chunk — fake streaming)
             if content:
                 yield "data: " + json.dumps({**base, "choices": [{"index": i, "delta": {"content": content}, "finish_reason": None}]}) + "\n\n"
+
+            # Tool call deltas — each tool call is emitted as two separate chunks:
+            # 1) Name delta: index, id, type, function.name (arguments="")
+            # 2) Arguments delta: index, function.arguments
+            # This matches the OpenAI streaming spec and the reference implementation
+            # in _non_streaming_to_sse (streaming.py L330-374).
+            if tool_calls:
+                for tc_idx, tc in enumerate(tool_calls):
+                    # Name delta
+                    tc_id = tc.get("id", f"call_{tc_idx}")
+                    tc_type = tc.get("type", "function")
+                    func = tc.get("function", {})
+                    name_delta = {**base, "choices": [{
+                        "index": i,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": tc_idx,
+                                "id": tc_id,
+                                "type": tc_type,
+                                "function": {"name": func.get("name", ""), "arguments": ""},
+                            }],
+                        },
+                        "finish_reason": None,
+                    }]}
+                    yield "data: " + json.dumps(name_delta) + "\n\n"
+
+                    # Arguments delta
+                    args = func.get("arguments", "")
+                    if args:
+                        args_delta = {**base, "choices": [{
+                            "index": i,
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": tc_idx,
+                                    "function": {"arguments": args},
+                                }],
+                            },
+                            "finish_reason": None,
+                        }]}
+                        yield "data: " + json.dumps(args_delta) + "\n\n"
+
             # Finish delta
             yield "data: " + json.dumps({**base, "choices": [{"index": i, "delta": {}, "finish_reason": finish_reason}]}) + "\n\n"
         yield "data: [DONE]\n\n"
@@ -1344,6 +1418,19 @@ async def _handle_non_streaming(
             if synthetic_result.synthetic_used and synthetic_result.final_data is not None:
                 final_data = synthetic_result.final_data
 
+                # Circuit breaker: record success or failure
+                from archolith_proxy.proxy.circuit_breaker import record_synthetic_success, record_synthetic_failure
+                if synthetic_result.fallback_used:
+                    # Re-send failed; fallback strip was applied
+                    record_synthetic_failure(
+                        session_id,
+                        max_consecutive=settings.synthetic_circuit_max_consecutive,
+                        cooldown_seconds=settings.synthetic_circuit_cooldown_s,
+                        max_total=settings.synthetic_circuit_max_total,
+                    )
+                else:
+                    record_synthetic_success(session_id)
+
                 # Schedule extraction for the final re-sent response
                 if trace_builder:
                     trace_builder.set_response(
@@ -1369,6 +1456,14 @@ async def _handle_non_streaming(
 
         except Exception as e:
             logger.warning("synthetic_interception_failed", session_id=session_id, error=str(e), exc_info=True)
+            # Circuit breaker: record failure
+            from archolith_proxy.proxy.circuit_breaker import record_synthetic_failure
+            record_synthetic_failure(
+                session_id,
+                max_consecutive=settings.synthetic_circuit_max_consecutive,
+                cooldown_seconds=settings.synthetic_circuit_cooldown_s,
+                max_total=settings.synthetic_circuit_max_total,
+            )
             # Fall through to use original response
 
     # Live stream: broadcast response event (non-streaming — always, for both recall and normal)
