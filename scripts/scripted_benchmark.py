@@ -43,6 +43,7 @@ _dotenv = _load_dotenv(_here / ".env")
 PROXY_URL = os.getenv("PROXY_URL", _dotenv.get("PROXY_URL", "http://localhost:9801"))
 PROXY_BASE = PROXY_URL.rstrip("/").removesuffix("/v1")
 HARNESS_URL = os.getenv("HARNESS_URL", _dotenv.get("HARNESS_URL", "http://localhost:3485"))
+HARNESS_WORKTREE_ROOT = os.getenv("HARNESS_WORKTREE_ROOT", _dotenv.get("HARNESS_WORKTREE_ROOT", "C:/Users/thron/IdeaProjects/.agent/worktrees"))
 STATE_FILE = _here / ".scripted_bench_state.json"
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -208,21 +209,111 @@ def cmd_setup(args: argparse.Namespace) -> None:
     except Exception as e:
         print(f"WARNING: Could not set proxy trace session: {e}")
 
+    # ── Create worktrees via harness API ──────────────────────────────────────
+    worktree_root = HARNESS_WORKTREE_ROOT.replace("\\", "/")
+    proxy_worktree_path = f"{worktree_root}/archolith-bench-proxy-{ts}"
+    passthrough_worktree_path = f"{worktree_root}/archolith-bench-pass-{ts}"
+    repo_path = str(_here)
+
+    try:
+        with httpx.Client(timeout=15) as c:
+            # Proxy worktree
+            r = c.post(
+                f"{HARNESS_URL}/api/worktrees",
+                json={
+                    "repoPath": repo_path,
+                    "worktreePath": proxy_worktree_path,
+                    "branch": f"bench/proxy-{ts}",
+                    "taskDescription": scenario["task_prompt"],
+                },
+            )
+            if r.status_code >= 300:
+                print(f"ERROR: harness worktree creation failed for proxy: {r.status_code} {r.text}", file=sys.stderr)
+                sys.exit(1)
+
+            # Passthrough worktree
+            r = c.post(
+                f"{HARNESS_URL}/api/worktrees",
+                json={
+                    "repoPath": repo_path,
+                    "worktreePath": passthrough_worktree_path,
+                    "branch": f"bench/pass-{ts}",
+                    "taskDescription": scenario["task_prompt"],
+                },
+            )
+            if r.status_code >= 300:
+                print(f"ERROR: harness worktree creation failed for passthrough: {r.status_code} {r.text}", file=sys.stderr)
+                sys.exit(1)
+    except httpx.ConnectError as e:
+        print(f"ERROR: Cannot reach harness at {HARNESS_URL} — is it running?", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: harness worktree creation failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # ── Start sessions via harness API ────────────────────────────────────────
+    proxy_model = args.proxy_model or "deepseek-proxy/deepseek-v4-flash"
+    passthrough_model = args.passthrough_model or "deepseek-passthrough/deepseek-v4-flash-passthrough"
+
+    try:
+        with httpx.Client(timeout=15) as c:
+            # Proxy session
+            r = c.post(
+                f"{HARNESS_URL}/api/sessions",
+                json={
+                    "id": proxy_sid,
+                    "agent": "opencode",
+                    "model": proxy_model,
+                    "cwd": proxy_worktree_path,
+                    "task": scenario["task_prompt"],
+                    "cols": 220,
+                    "rows": 50,
+                },
+            )
+            if r.status_code >= 300:
+                print(f"ERROR: harness session start failed for proxy: {r.status_code} {r.text}", file=sys.stderr)
+                sys.exit(1)
+
+            # Passthrough session
+            r = c.post(
+                f"{HARNESS_URL}/api/sessions",
+                json={
+                    "id": pass_sid,
+                    "agent": "opencode",
+                    "model": passthrough_model,
+                    "cwd": passthrough_worktree_path,
+                    "task": scenario["task_prompt"],
+                    "cols": 220,
+                    "rows": 50,
+                },
+            )
+            if r.status_code >= 300:
+                print(f"ERROR: harness session start failed for passthrough: {r.status_code} {r.text}", file=sys.stderr)
+                sys.exit(1)
+    except httpx.ConnectError as e:
+        print(f"ERROR: Cannot reach harness at {HARNESS_URL} — is it running?", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: harness session start failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    started_at = time.time()
+
     state = {
         "scenario": scenario["name"],
         "scenario_file": str(scenario_path),
         "proxy_session_id": proxy_sid,
         "passthrough_session_id": pass_sid,
-        "proxy_model": args.proxy_model or "deepseek-proxy/deepseek-v4-flash",
-        "passthrough_model": args.passthrough_model or "deepseek-passthrough/deepseek-v4-flash-passthrough",
+        "proxy_model": proxy_model,
+        "passthrough_model": passthrough_model,
         "task_prompt": scenario["task_prompt"],
         "follow_up_turns": scenario.get("follow_up_turns", []),
         "checkpoints": scenario["checkpoints"],
         "total_timeout_seconds": scenario.get("total_timeout_seconds", 600),
         "ts": ts,
-        "started_at": None,
-        "proxy_worktree": None,
-        "passthrough_worktree": None,
+        "started_at": started_at,
+        "proxy_worktree": proxy_worktree_path,
+        "passthrough_worktree": passthrough_worktree_path,
         "proxy_terminated_at": None,
         "passthrough_terminated_at": None,
         "checkpoint_results": [],
@@ -235,6 +326,8 @@ def cmd_setup(args: argparse.Namespace) -> None:
     print(f"PASSTHROUGH_SESSION_ID={pass_sid}")
     print(f"PROXY_MODEL={state['proxy_model']}")
     print(f"PASSTHROUGH_MODEL={state['passthrough_model']}")
+    print(f"PROXY_WORKTREE={proxy_worktree_path}")
+    print(f"PASSTHROUGH_WORKTREE={passthrough_worktree_path}")
     print(f"TASK_PROMPT_FILE={STATE_FILE}")
     print(f"STATE_FILE={STATE_FILE}")
 
@@ -244,6 +337,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_start(args: argparse.Namespace) -> None:
+    print("WARNING: 'start' is deprecated — 'setup' now creates worktrees and starts sessions automatically.")
     state = load_state(Path(args.state) if args.state else None)
 
     # Verify proxy is reachable and record baseline uptime
