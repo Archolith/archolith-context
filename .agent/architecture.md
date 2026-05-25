@@ -186,6 +186,8 @@ Cache methods on `LadybugBackend`: `upsert_file_content`, `get_file_content`,
 - Promotion settings (if wired to long-term memory)
 - Memory engine config (JSON array of engine definitions)
 - Promotion policy defaults (min confidence, dry-run mode)
+- Synthetic tools: enabled, circuit breaker thresholds, file recall limits
+- Session token budget: max input tokens per session, budget action (passthrough/reject)
 - Settings singleton caching (get_settings / reset_settings)
 
 ### Memory Engine & Promotion (`archolith_proxy/memory/`)
@@ -194,6 +196,57 @@ Cache methods on `LadybugBackend`: `upsert_file_content`, `get_file_content`,
 - **Adapter base** (`adapters/base.py`): Abstract contract — validate_config, capabilities, healthcheck, promote_fact, optional batch/dedupe/CRUD
 - **Concrete adapters** (`adapters/`): cth_mcp_memory, mem0, zep, generic_http
 - **Promotion service** (`promotion.py`): Policy layer (confidence threshold, fact type allowlist, multi-turn survival), dedupe, dry-run, audit trail
+
+### Synthetic Session-Summary Tools (`archolith_proxy/proxy/synthetic_tools.py`)
+
+Agent-initiated tools that the proxy injects into every request when a session is active
+and `SYNTHETIC_TOOLS_ENABLED=true`. The model can call these to get structured summaries
+of session work and files accessed without the harness needing to support custom tools.
+
+**Three synthetic tools:**
+
+| Tool | What it returns |
+|------|----------------|
+| `recall_session_work` | Structured summary of all work done this session |
+| `recall_files_read` | List of files accessed, to skip redundant re-reads |
+| `recall_file` | Content of a specific file (line-limited, from proxy cache) |
+
+**How it works:**
+1. `inject_synthetic_tools(body)` — add tool definitions before forwarding upstream
+2. Upstream responds with tool_calls containing a synthetic name
+3. `handle_non_streaming_synthetic()` detects the call, generates the result, re-sends
+4. `strip_synthetic_tools` / `strip_synthetic_from_response` clean up so client never sees internal tooling
+5. On re-send failure: `_fallback_strip_synthetic()` strips synthetic calls and normalizes `finish_reason`
+
+**Non-streaming path only** (same limitation as `__archolith_recall`).
+When the original client requested streaming, the forced-non-streaming path converts
+the result to SSE via `_wrap_response_as_sse()`.
+
+**Critical bug fixed (2026-05-25):** `_wrap_response_as_sse()` previously only emitted
+`role`, `content`, and `finish_reason` deltas — never `tool_calls`. When the model
+made mixed calls (synthetic + real), OpenCode received `finish_reason: "tool_calls"`
+but no tool call data, causing an infinite retry loop. Fixed by emitting tool_calls as
+separate name+argument deltas with proper `index` keys (matching the OpenAI streaming spec).
+
+### Circuit Breaker (`archolith_proxy/proxy/circuit_breaker.py`)
+
+Per-session circuit breaker that prevents runaway synthetic tool re-injection loops.
+State is in-memory only (resets on proxy restart).
+
+**Thresholds (configurable via env):**
+- `SYNTHETIC_CIRCUIT_MAX_CONSECUTIVE` (default 3): consecutive failures before opening circuit
+- `SYNTHETIC_CIRCUIT_COOLDOWN_S` (default 300): seconds to keep circuit open
+- `SYNTHETIC_CIRCUIT_MAX_TOTAL` (default 10): total failures before session-lifetime hard-disable
+
+**Flow:**
+1. Before calling `inject_synthetic_tools()`, `chat.py` checks `is_synthetic_allowed(session_id)`
+2. If circuit is open → skip injection, increment `synthetic_injections_skipped` metric
+3. On success → `record_synthetic_success()` resets consecutive counter
+4. On failure (exception or fallback) → `record_synthetic_failure()` increments counters
+5. After 3 consecutive → circuit opens for 5 min; after 10 total → hard-disable for session lifetime
+
+**Also tracks per-session token budget:** `add_session_tokens()` / `is_session_over_budget()`
+for the `MAX_INPUT_TOKENS_PER_SESSION` hard cap.
 
 ## Isolation from Long-term Memory
 
@@ -261,6 +314,19 @@ UPSTREAM_RETRY_BACKOFF_BASE_S=0.5
 NEO4J_MAX_RETRIES=3
 NEO4J_RETRY_BACKOFF_BASE_S=1.0
 
+# Synthetic session-summary tools
+SYNTHETIC_TOOLS_ENABLED=false         # inject recall_session_work, recall_files_read, recall_file
+SYNTHETIC_CIRCUIT_MAX_CONSECUTIVE=3   # consecutive failures before circuit opens
+SYNTHETIC_CIRCUIT_COOLDOWN_S=300      # cooldown duration in seconds
+SYNTHETIC_CIRCUIT_MAX_TOTAL=10        # total failures before session-lifetime disable
+RECALL_FILE_MAX_LINES=200             # max lines returned per recall_file call
+RECALL_FILE_MAX_BYTES=24000           # secondary byte cap
+RECALL_FILE_CONTEXT_LINES=3           # padding lines around a symbol
+
+# Session token budget
+MAX_INPUT_TOKENS_PER_SESSION=2000000  # 0 = unlimited; stop context management when exceeded
+SESSION_TOKEN_BUDGET_ACTION=passthrough  # "passthrough" (forward raw) or "reject"
+
 # Optional: promotion to long-term memory
 MEMORY_API_URL=http://localhost:8200
 MEMORY_API_KEY=...
@@ -277,7 +343,7 @@ PROMOTION_DRY_RUN=false
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /health` | Health check: Neo4j status, upstream status, version, uptime |
-| `GET /metrics` | Process-level counters: total_requests, assembly_modes, extraction_successes/empties/failures, upstream_errors, neo4j_errors, active_sessions, token_savings_estimated, total_input_tokens_seen, trace_records, trace_sessions, uptime, curator_calls, curator_timeouts, curator_fallbacks |
+| `GET /metrics` | Process-level counters: total_requests, assembly_modes, extraction_successes/empties/failures, upstream_errors, neo4j_errors, active_sessions, token_savings_estimated, total_input_tokens_seen, trace_records, trace_sessions, uptime, curator_calls, curator_timeouts, curator_fallbacks, synthetic_tool_successes, synthetic_tool_failures, synthetic_circuit_opens, synthetic_circuit_hard_disables, synthetic_injections_skipped, synthetic_circuit_states (per-session) |
 | `GET /sessions` | List active sessions (admin, 503 if Neo4j down) |
 | `GET /sessions/{id}` | Session stats (admin, 404 if not found, 503 if Neo4j down) |
 | `GET /trace/sessions` | List all sessions with trace records |
