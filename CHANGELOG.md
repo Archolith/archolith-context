@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **CRITICAL FIX:** `_wrap_response_as_sse()` now emits `tool_calls` deltas with proper `index` keys when converting non-streaming responses to SSE. Previously only emitted `role`, `content`, and `finish_reason` — any response with `finish_reason: "tool_calls"` but no tool call data caused OpenCode to error/retry infinitely, burning tokens until compaction killed the session.
+- Added per-session circuit breaker for synthetic tool re-injection: after 3 consecutive failures, synthetic injection is disabled for 5 minutes; after 10 total failures, disabled for session lifetime.
+- Added per-session token budget (`MAX_INPUT_TOKENS_PER_SESSION`, default 2M) with configurable action (`SESSION_TOKEN_BUDGET_ACTION`: "passthrough" or "reject").
+- Added synthetic tool metrics to `/metrics`: `synthetic_tool_successes`, `synthetic_tool_failures`, `synthetic_circuit_opens`, `synthetic_circuit_hard_disables`, `synthetic_injections_skipped`, `synthetic_circuit_states`.
+- Improved synthetic tool fallback message to redirect the agent to use file tools directly instead of leaving it confused.
+- Added `SyntheticResult.fallback_used` flag to distinguish fallback-stripped responses from successful re-sends (enables circuit breaker feedback).
+- Added 18 unit tests for SSE tool_calls conversion, circuit breaker, and token budget.
+
 - Updated `.agent/architecture.md` to document `archolith-context` as the new project name, the Curator LLM subsystem (entry point, loop, 7 tools, result type), File Content Cache (FileContent schema, SHA-256 dedup pipeline), updated data flow with curator-then-heuristic path, new env vars (`CURATOR_*`, `FILE_CACHE_*`), and curator metrics counters. Removed RTK references (RTK belongs in `archolith-rtk`).
 
 ## 2026-05-23 — Phases 1–4: File Content Cache + LLM-driven Curator
