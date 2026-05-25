@@ -36,7 +36,7 @@ logger = structlog.get_logger()
 
 # ── Tool names ─────────────────────────────────────────────────────────────────
 
-SYNTHETIC_TOOL_NAMES = {"recall_session_work", "recall_files_read"}
+SYNTHETIC_TOOL_NAMES = {"recall_session_work", "recall_files_read", "recall_file"}
 
 # ── Tool definitions ───────────────────────────────────────────────────────────
 
@@ -78,7 +78,38 @@ _RECALL_FILES_READ_DEF = {
     },
 }
 
-SYNTHETIC_TOOL_DEFINITIONS = [_RECALL_SESSION_WORK_DEF, _RECALL_FILES_READ_DEF]
+_RECALL_FILE_DEF = {
+    "type": "function",
+    "function": {
+        "name": "recall_file",
+        "description": (
+            "Retrieve cached file content from session memory. "
+            "Use this instead of re-reading files from disk after context compression. "
+            "Provide start_line and end_line for targeted retrieval. "
+            "Without a line range, returns a 10-line preview and the total line count."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "File path exactly as previously read in this session.",
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "1-indexed start line (inclusive).",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "1-indexed end line (inclusive).",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+}
+
+SYNTHETIC_TOOL_DEFINITIONS = [_RECALL_SESSION_WORK_DEF, _RECALL_FILES_READ_DEF, _RECALL_FILE_DEF]
 
 
 # ── Injection / stripping ──────────────────────────────────────────────────────
@@ -417,10 +448,70 @@ async def _generate_recall_files_read(session_id: str, turn_number: int) -> str:
     return "\n".join(lines)
 
 
+async def _generate_recall_file(
+    session_id: str,
+    path: str,
+    start_line: int | None,
+    end_line: int | None,
+) -> str:
+    """Return cached file content for the requested path and optional line range.
+
+    Behavior:
+    - Cache miss: plain message telling the agent to read normally.
+    - No range: 10-line preview + total line count + hint to use a range.
+    - Range provided: numbered lines clamped to recall_file_max_lines.
+    """
+    from archolith_proxy.config import get_settings
+    from archolith_proxy.graph.backend import get_backend, is_graph_ready
+
+    if not path:
+        return "(recall_file: path is required)"
+
+    if not is_graph_ready():
+        return "(recall_file: graph backend unavailable — cannot retrieve cached file)"
+
+    settings = get_settings()
+    backend = get_backend()
+
+    file_info = await backend.get_file_content(session_id, path)
+    if not file_info:
+        return f"(not cached: {path} — read it normally)"
+
+    line_count = file_info.get("line_count", 0)
+    sha_prefix = (file_info.get("sha256") or "")[:8]
+
+    # No range: preview + metadata only
+    if start_line is None and end_line is None:
+        preview_end = min(10, line_count)
+        preview = await backend.get_file_lines(session_id, path, 1, preview_end) or ""
+        return (
+            f"{path} — {line_count} lines (sha256:{sha_prefix})\n\n"
+            f"{preview}\n\n"
+            f"[{line_count} lines total — provide start_line/end_line to retrieve a range]"
+        )
+
+    # Range recall — enforce max_lines cap
+    start = max(1, start_line or 1)
+    raw_end = end_line or (start + settings.recall_file_max_lines - 1)
+    end = min(raw_end, start + settings.recall_file_max_lines - 1)
+
+    result = await backend.get_file_lines(session_id, path, start, end)
+    if not result:
+        return f"(no content in range {start}–{end} for {path})"
+
+    actual_end = min(end, line_count)
+    was_clamped = (end_line is not None) and (end < end_line)
+    header = f"{path} lines {start}–{actual_end} of {line_count} (sha256:{sha_prefix})"
+    if was_clamped:
+        header += f" [clamped to {settings.recall_file_max_lines} lines — request next range to continue]"
+    return f"{header}\n\n{result}"
+
+
 async def handle_synthetic_tool_call(
     session_id: str,
     tool_name: str,
     turn_number: int,
+    args: dict | None = None,
 ) -> str:
     """Dispatch a synthetic tool call to its generator.
 
@@ -445,6 +536,20 @@ async def handle_synthetic_tool_call(
                 session_id=session_id, error=str(e), exc_info=True,
             )
             return f"Error generating files-read list: {e}"
+
+    elif tool_name == "recall_file":
+        call_args = args or {}
+        path = call_args.get("path", "")
+        start_line = call_args.get("start_line")
+        end_line = call_args.get("end_line")
+        try:
+            return await _generate_recall_file(session_id, path, start_line, end_line)
+        except Exception as e:
+            logger.warning(
+                "synthetic_tool_recall_file_failed",
+                session_id=session_id, path=path, error=str(e), exc_info=True,
+            )
+            return f"Error retrieving cached file: {e}"
 
     return f"Unknown synthetic tool: {tool_name}"
 
@@ -498,13 +603,20 @@ async def handle_non_streaming_synthetic(
     tool_name = tool_call.get("function", {}).get("name", "")
     tool_call_id = tool_call.get("id", "synthetic_0")
 
+    # Parse tool call arguments (present for parameterized tools like recall_file)
+    raw_args = tool_call.get("function", {}).get("arguments", "{}")
+    try:
+        tool_args: dict = json.loads(raw_args) if raw_args else {}
+    except json.JSONDecodeError:
+        tool_args = {}
+
     logger.info(
         "synthetic_tool_intercepted",
         session_id=session_id, turn=turn_number, tool=tool_name,
     )
 
     # Generate the summary result
-    result_text = await handle_synthetic_tool_call(session_id, tool_name, turn_number)
+    result_text = await handle_synthetic_tool_call(session_id, tool_name, turn_number, args=tool_args)
 
     # Build re-send messages:
     # original messages + model assistant message + synthetic tool result

@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     file_cache_enabled: bool = True
     file_cache_max_file_bytes: int = 500_000  # skip caching files larger than this
 
+    # File recall tool (recall_file synthetic tool)
+    recall_file_max_lines: int = 200    # max lines returned per call
+    recall_file_max_bytes: int = 24_000  # secondary byte cap
+    recall_file_context_lines: int = 3  # padding lines around a symbol (Phase 3)
+
     # Context assembly aggressiveness
     # B: drop the entire middle when assembled context is present — the assembly
     #    digest replaces raw history; no need to keep compressed turns alongside it.
