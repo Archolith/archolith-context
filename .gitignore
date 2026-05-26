@@ -54,7 +54,16 @@ data/
 
 # Benchmark execution outputs
 scripts/*.json
+scripts/results/
 audit_results.json
+
+# Runtime state files
+.bench_state.json
+.scripted_bench_state.json
+
+# Harness task/worktree artifacts
+TASK-*.md
+.agent/worktrees/
 
 # Internal agent docs (not for public repo)
 .agent/audits/
