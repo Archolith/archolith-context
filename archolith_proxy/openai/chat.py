@@ -30,7 +30,7 @@ from archolith_proxy.proxy.live import (
 from archolith_proxy.proxy.session import get_benchmark_passthrough_session_id
 from archolith_proxy.proxy.streaming import ResponseCapture, stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _non_streaming_to_sse
 from archolith_proxy.proxy.upstream import RETRYABLE_STATUS_CODES, upstream_request_with_retry
-from archolith_proxy.rtk import filter_request_body
+from archolith_proxy.rtk import filter_request_body, filter_single_tool_result
 from archolith_proxy.trace.builder import TraceBuilder
 from archolith_proxy.trace.store import get_trace_store
 
@@ -152,6 +152,9 @@ def _collect_recent_tool_results(messages: list[dict], max_chars: int = 4000) ->
             continue
 
         tool_name = msg.get("name", "unknown_tool")
+        # Apply RTK Layer 1 filter before packing into the extraction budget —
+        # strips noise/boilerplate so the extractor LLM sees signal, not lint.
+        content = filter_single_tool_result(content, tool_name=tool_name)
         entry = f"Tool [{tool_name}]:\n{content}"
         remaining = max_chars - used
         if remaining <= 0:

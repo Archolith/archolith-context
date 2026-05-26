@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 
+from archolith_proxy.rtk import shrink_tail_tool_results
+
 # Pattern for stripping model reasoning/thinking blocks before extraction
 _REASONING_PATTERN = re.compile(
     r"<(?:thinking|reasoning|inner_monologue)>.*?</(?:thinking|reasoning|inner_monologue)>",
@@ -222,9 +224,12 @@ def rewrite_messages(
             # user messages and any other roles — keep intact
             result.append(msg)
 
-    # Append the coherence tail intact
+    # Append the coherence tail — shrink oversized tool results first so large
+    # file reads / command outputs don't dominate the context window even when
+    # kept for structural integrity.  Fail-open: if RTK absent, tail is intact.
     tail_validated = _validate_tail(tail)
-    result.extend(tail_validated)
+    tail_shrunk = shrink_tail_tool_results(tail_validated)
+    result.extend(tail_shrunk)
 
     # Final validation: ensure first non-system is user
     first_non_system = next((i for i, m in enumerate(result) if m.get("role") != "system"), None)

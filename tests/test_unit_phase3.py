@@ -47,7 +47,7 @@ class TestFormatContextBlock:
         )
         assert "SESSION OVERVIEW" in result
         assert "RELEVANT CONTEXT" in result
-        assert "current turn: 5" in result
+        assert "[Turn: 5]" in result
         assert ratio == 1.0
 
     def test_with_goal(self):
