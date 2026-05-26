@@ -16,6 +16,9 @@ are relative to the current system baseline.
 | RTK Layer 1 filter on extraction budget | `fb76ddc` | `filter_single_tool_result` in `_collect_recent_tool_results` — extractor LLM sees clean signal |
 | RTK Layer 2 shrink on coherence tail | `fb76ddc` | `shrink_tail_tool_results` in `rewrite_messages()` — tail tool msgs capped at 2000 tokens |
 | RTK Layer 2 shrink on outbound tool_call args | `fb76ddc` | `shrink_tool_call_args` in `filter_request_body` — Write/Edit file content collapsed |
+| Unify `_wrap_response_as_sse` / `_non_streaming_to_sse` | `2b021da` | All SSE formatting in `streaming.py`; `yield_as_sse` helper removes last `\n\n` site from `chat.py` |
+| LadybugDB WAL corruption — base fix | `78e2d81` | `throw_on_wal_replay_failure=False`; partial WAL replay on force-kill |
+| LadybugDB WAL resilience — four improvements | `5fe067b` | WAL detection logging, auto-rotate on failed probe, 16 MB checkpoint threshold, atexit registration |
 
 ---
 
