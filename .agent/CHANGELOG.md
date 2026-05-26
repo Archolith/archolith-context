@@ -1,5 +1,39 @@
 # Changelog — cth.context-engine
 
+## 2026-05-26 — RTK Deep Integration + Curator One-Liners
+
+### RTK integration (archolith_proxy/rtk.py, chat.py, rewrite.py)
+- **rtk.py rewritten** as a first-class RTK adapter.  Added three new fail-open wrappers
+  backed by `archolith-rtk` (our canonical token reduction library, optional peer):
+  - `filter_single_tool_result(content, tool_name)` — Layer 1 per-string filter
+  - `shrink_tool_call_args(messages, max_tokens, enabled)` — Layer 2 collapse of Write/Edit args
+  - `shrink_tail_tool_results(messages, max_tokens_per_result)` — Layer 2 token cap per tail message
+  - Lazy-load split into independent sentinels: `_load_filter_output()` and `_load_shrink_functions()`
+  - `filter_request_body()` now chains `filter_tool_messages()` → `shrink_tool_call_args()`
+- **chat.py** `_collect_recent_tool_results()`: applies `filter_single_tool_result` per tool
+  result before packing into the 4000-char extraction budget — extractor LLM sees clean signal
+- **rewrite.py** tail append: applies `shrink_tail_tool_results` on validated coherence tail —
+  large file reads kept for structural integrity no longer bloat the context window
+- **architecture.md** updated with full RTK section: layer reference, adapter API table,
+  integration point diagram, project relationship, install instructions
+- **Data Flow section** updated to show RTK passes inline at each pipeline step
+
+### Curator one-liners (curator/__init__.py, curator/prompts.py)
+- Pre-fetch checkpoint from graph backend and inject directly into curator user prompt —
+  saves one full LLM tool-call iteration (~1-2s) per curator run
+- `build_curator_user_prompt()` accepts `checkpoint: dict | None`; formats as inline block
+- System prompt rule 1 updated: skip `get_checkpoint` since checkpoint is pre-loaded
+
+### Assembler prompt cache fix (assembler/context.py)
+- Removed per-turn counter from stable `=== SESSION OVERVIEW ===` section — was busting
+  prompt cache every turn.  Turn marker moved to `[Turn: N]` in the facts footer (which
+  changes every turn anyway, so no cache benefit lost)
+
+### Write tool cache (chat.py)
+- `_extract_file_writes()`: scans the most recent assistant message for Write/create_file
+  tool_calls and extracts file content directly from the JSON arguments — content reaches
+  the file cache without requiring the agent to do a subsequent Read
+
 ## 2026-05-22 — Benchmark Suite, Experiment Framework, RTK Plan
 
 - **Benchmark suite** (`scripts/benchmark.py`): 5 scenarios (code_review, debugging, long_agent, ruler_recall, taskflow) with fact probes for recall measurement. Features: 429 retry with exponential backoff, checkpoint/resume, full response saving, markdown transcript generation, `--api-key` and `--resume` flags.

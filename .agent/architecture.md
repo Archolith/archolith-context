@@ -65,15 +65,22 @@ Harness → POST /v1/chat/completions → Proxy
 │ 4. Heuristic assembler (fallback or when curator disabled):
 │    a. Query session graph: goal, active files, decisions, relevant facts
 │    b. Score and budget facts to CONTEXT_TOKEN_BUDGET tokens
-│ 5. Forward curated payload to real upstream API
+│ 5. rewrite_messages(): merge graph context + coherence tail
+│    a. RTK Layer 1: filter_tool_messages() strips noise from tool-role messages
+│    b. RTK Layer 2: shrink_tool_call_args() collapses large Write/Edit args
+│    c. RTK Layer 2: shrink_tail_tool_results() caps token footprint of tail tool msgs
+│ 6. Forward curated payload to real upstream API
 │
 ├─ ON RESPONSE:
-│ 6. Stream response back to harness (unchanged)
-│ 7. Async: extract facts from response + tool results
-│ 8. Store facts in session graph with temporal edges
-│ 8b. Cache file content: pair tool_call_id → file path → content (SHA-256 dedup)
+│ 7. Stream response back to harness (unchanged)
+│ 8. Async: extract facts from response + tool results
+│    a. RTK Layer 1: filter_single_tool_result() denoises each tool result
+│       before packing into the 4000-char extractor budget
+│ 9. Store facts in session graph with temporal edges
+│ 9b. Cache file content: pair tool_call_id → file path → content (SHA-256 dedup)
 │     Update FileContent table; skip if content hash unchanged
-│ 9. Invalidate superseded facts
+│     Also cache Write/create_file tool_call args directly (no re-read needed)
+│ 10. Invalidate superseded facts
 │
 └─ LIFECYCLE:
   - Session created on first request (keyed by conversation fingerprint)
@@ -398,6 +405,66 @@ Metrics are in-memory (`_metrics` dict surfaced via `archolith_proxy/metrics.py`
 - `docker-compose.yml`: proxy + neo4j:5-community with APOC plugin, healthchecks, volumes, dependency ordering
 - Override file: `docker-compose.override.yml` (gitignored)
 
+## Token Reduction — archolith-rtk Integration
+
+Token reduction is handled by `archolith-rtk`, a standalone Python library that lives
+in a sibling project (`projects/archolith/archolith-rtk`).  It is the **preferred and
+canonical** token reduction toolkit for this workspace.  archolith-context treats it as
+a first-class peer: when installed, it is used deeply at every pipeline point where
+token reduction matters; when absent, all RTK paths are fail-open and the proxy operates
+without RTK passes.
+
+### Layers
+
+| Layer | Module | What it does |
+|-------|--------|-------------|
+| Layer 1 — Output Filtering | `archolith_rtk.filter_output` | Strips noise/boilerplate from tool results: git diffs, test output, build logs, lint, directory trees, JSON payloads, search results. 13 named categories + cross-turn deduplication via `DedupeTracker`. ANSI stripping is always applied. Fail-open: exceptions return ANSI-stripped input unchanged. |
+| Layer 2 — Shrink | `archolith_rtk.shrink` | Deterministic token budgeting: `shrink_oversized_tool_call_args_by_tokens` collapses large string values in assistant tool_call JSON (Write/Edit file content); `shrink_oversized_tool_results_by_tokens` truncates tool-role messages over a per-message token cap. |
+
+### Adapter (`archolith_proxy/rtk.py`)
+
+A thin adapter that lazy-loads archolith-rtk with independent per-function sentinels
+(sentinel = `False` → unresolved, `None` → unavailable, callable → loaded).  Each
+wrapper is **fail-open**: if archolith-rtk is not installed, `ImportError` sets the
+sentinel to `None` and the wrapper returns its input unchanged.
+
+**Public API exposed by the adapter:**
+
+| Function | RTK call | Where used |
+|----------|----------|-----------|
+| `filter_tool_messages(messages, enabled)` | Layer 1 `filter_output` per tool-role message | `filter_request_body()` — applied to every outbound request |
+| `filter_single_tool_result(content, tool_name)` | Layer 1 `filter_output` on one string | `_collect_recent_tool_results()` in `chat.py` — denoises tool output before extractor LLM sees it |
+| `shrink_tool_call_args(messages, max_tokens, enabled)` | Layer 2 `shrink_oversized_tool_call_args_by_tokens` | `filter_request_body()` — collapses large Write/Edit args in assistant history |
+| `shrink_tail_tool_results(messages, max_tokens_per_result)` | Layer 2 `shrink_oversized_tool_results_by_tokens` | `rewrite_messages()` in `rewrite.py` — caps each tool-role message in the coherence tail |
+
+### Integration Points
+
+```
+REQUEST PATH:
+  filter_request_body()
+    └── filter_tool_messages()          ← Layer 1: strip noise from tool-role history
+    └── shrink_tool_call_args()         ← Layer 2: collapse Write/Edit file content args
+
+EXTRACTION (async, off critical path):
+  _collect_recent_tool_results()
+    └── filter_single_tool_result()     ← Layer 1: denoise before extractor LLM budget
+
+CONTEXT ASSEMBLY:
+  rewrite_messages() — tail append
+    └── shrink_tail_tool_results()      ← Layer 2: cap token footprint of each tail tool msg
+```
+
+### Relationship Between Projects
+
+archolith-rtk is **not a dependency** of archolith-context in the `pyproject.toml` sense — it is an optional peer.  This preserves the ability to run archolith-context standalone without the RTK library installed.  When both are present in the same virtualenv, RTK is used automatically with no configuration required.
+
+To install both together:
+```bash
+uv pip install -e ../archolith-rtk  # from inside archolith-context
+```
+
+archolith-rtk has zero dependency on archolith-context and can be used independently.
+
 ## External Dependencies
 
 | Service | Purpose | Required |
@@ -407,6 +474,7 @@ Metrics are in-memory (`_metrics` dict surfaced via `archolith_proxy/metrics.py`
 | OpenAI API (embeddings) | Semantic similarity for retrieval | Yes (future) |
 | Upstream LLM API | Target for proxied requests | Yes |
 | cth.mcp.memory API | Promotion target for durable facts | Optional |
+| archolith-rtk | Token reduction (Layer 1 + Layer 2) | Optional peer (fail-open) |
 
 ## Port Assignment
 
