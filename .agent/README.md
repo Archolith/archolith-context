@@ -7,6 +7,7 @@ Read everything in this directory before starting work.
 | File | Purpose |
 |------|---------|
 | `architecture.md` | System design, data flow, tech stack, config/env reference |
+| `ROADMAP.md` | Context quality improvement backlog — Next / Plan / Later / Done |
 | `data_models.md` | Entities, DTOs, enums, converters, repository reference |
 | `CHANGELOG.md` | Running log of changes, most recent first |
 | `workflows/code_conventions.md` | Language-specific style and formatting rules |
