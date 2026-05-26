@@ -15,6 +15,9 @@ Cypher dialect notes:
 
 from __future__ import annotations
 
+import atexit
+import os
+import time
 from uuid import uuid4
 
 import structlog
@@ -123,6 +126,19 @@ CREATE NODE TABLE IF NOT EXISTS Verification(
 """
 
 
+def _rotate_db_path(original_path: str) -> str:
+    """Generate a fresh timestamped DB path alongside the original.
+
+    Called when WAL recovery fails — produces a clean path guaranteed to have
+    no corresponding .wal file so connect() can start fresh without recursion risk.
+
+    Example: ./data/context.lbug → ./data/context_20260526_143022_recovered.lbug
+    """
+    base = original_path.removesuffix(".lbug") if original_path.endswith(".lbug") else original_path
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    return f"{base}_{timestamp}_recovered.lbug"
+
+
 class LadybugBackend:
     """LadybugDB (embedded columnar graph) implementation of GraphBackend.
 
@@ -153,37 +169,76 @@ class LadybugBackend:
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     async def connect(self) -> None:
-        import os
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
-        # throw_on_wal_replay_failure=False: if a previous force-kill left the WAL
-        # in a partially-written state, LadybugDB replays as far as it can and opens
-        # the DB in a consistent (though possibly slightly stale) state rather than
-        # throwing and refusing to open.  Data loss is bounded to transactions that
-        # were in-flight at kill time — acceptable for session context.
-        # A clean SIGTERM shutdown still flushes fully via close(), so there is no
-        # data loss on graceful restarts.
-        self._db = ladybug.Database(self._db_path, throw_on_wal_replay_failure=False)
+
+        # Gap 1: WAL detection — log clearly when recovering from an unclean shutdown.
+        wal_path = self._db_path + ".wal"
+        wal_existed = os.path.exists(wal_path)
+        if wal_existed:
+            logger.warning(
+                "ladybug_wal_detected",
+                path=self._db_path,
+                wal_path=wal_path,
+                note="previous unclean shutdown detected — attempting WAL recovery",
+            )
+
+        # throw_on_wal_replay_failure=False: replay WAL up to last parseable transaction
+        # rather than throwing and refusing to open.  Data loss is bounded to transactions
+        # in-flight at kill time.  A clean SIGTERM shutdown still flushes fully via close().
+        #
+        # checkpoint_threshold=16MB: checkpoint aggressively to keep the WAL small and
+        # reduce the transactions-in-flight window on kill.  Default (-1) defers too long.
+        self._db = ladybug.Database(
+            self._db_path,
+            throw_on_wal_replay_failure=False,
+            checkpoint_threshold=16 * 1024 * 1024,  # 16 MB
+        )
         self._aconn = ladybug.AsyncConnection(
             self._db, max_concurrent_queries=self._max_concurrent
         )
         self._ready = True
-        # Create tables on first connect (matches Neo4j connect() calling ensure_indexes())
+
+        # Gap 4: atexit registration — belt-and-suspenders close if FastAPI lifespan
+        # doesn't complete (e.g. startup exception after DB init).
+        atexit.register(self._close_sync)
+
+        # Create tables on first connect.
         await self.ensure_schema()
 
-        # Startup health probe — confirm the DB is actually queryable after WAL replay.
-        # Logs a warning (not error) if the probe fails; proxy continues in degraded mode.
+        # Startup health probe — confirm the DB is queryable after WAL replay.
         try:
             await self._aconn.execute("RETURN 1 AS ok")
-            logger.info("ladybug_connected", path=self._db_path, max_concurrent=self._max_concurrent)
+            if wal_existed:
+                logger.info("ladybug_wal_recovered", path=self._db_path)
+            else:
+                logger.info("ladybug_connected", path=self._db_path, max_concurrent=self._max_concurrent)
         except Exception as e:
-            logger.warning(
-                "ladybug_connected_degraded",
-                path=self._db_path,
-                error=str(e),
-                note="DB opened after WAL replay but health probe failed — context may be incomplete",
-            )
+            if wal_existed:
+                # Gap 2: WAL replay succeeded but DB is still broken — auto-rotate to fresh path.
+                logger.warning(
+                    "ladybug_wal_recovery_failed",
+                    path=self._db_path,
+                    error=str(e),
+                    note="rotating to fresh DB path",
+                )
+                await self.close()
+                self._db_path = _rotate_db_path(self._db_path)
+                logger.info("ladybug_rotating_to_fresh", new_path=self._db_path)
+                await self.connect()  # recurse once with the fresh path (no WAL present)
+            else:
+                logger.warning(
+                    "ladybug_connected_degraded",
+                    path=self._db_path,
+                    error=str(e),
+                    note="health probe failed on clean DB — context may be unavailable",
+                )
 
     async def close(self) -> None:
+        self._close_sync()
+        logger.info("ladybug_disconnected")
+
+    def _close_sync(self) -> None:
+        """Synchronous close — safe to call from atexit or signal handlers."""
         if self._aconn:
             try:
                 self._aconn.close()
@@ -197,7 +252,6 @@ class LadybugBackend:
                 pass
             self._db = None
         self._ready = False
-        logger.info("ladybug_disconnected")
 
     async def ensure_schema(self) -> None:
         if not self._aconn:
