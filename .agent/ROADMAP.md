@@ -20,7 +20,7 @@ are relative to the current system baseline.
 | LadybugDB WAL corruption — base fix | `78e2d81` | `throw_on_wal_replay_failure=False`; partial WAL replay on force-kill |
 | LadybugDB WAL resilience — four improvements | `5fe067b` | WAL detection logging, auto-rotate on failed probe, 16 MB checkpoint threshold, atexit registration |
 | File structure index on cache ingest | `94e182d` | `FileOutline` table, `_build_outline` (AST + regex), `get_file_outline` as 12th curator tool; rule 3 updated |
-| Semantic search over facts | `TBD` | `search_facts_semantic` (13th tool) — cosine similarity on stored embeddings; falls back to substring; 15 tests |
+| Semantic search over facts | `c149306` | `search_facts_semantic` (13th tool) — cosine similarity on stored embeddings; falls back to substring; 15 tests |
 
 ---
 
