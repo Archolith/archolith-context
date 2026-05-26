@@ -112,11 +112,6 @@ class Settings(BaseSettings):
     file_cache_enabled: bool = True
     file_cache_max_file_bytes: int = 500_000  # skip caching files larger than this
 
-    # File recall tool (recall_file synthetic tool)
-    recall_file_max_lines: int = 200    # max lines returned per call
-    recall_file_max_bytes: int = 24_000  # secondary byte cap
-    recall_file_context_lines: int = 3  # padding lines around a symbol (Phase 3)
-
     # Transparent native Read call interception — serves Read results from file cache
     # when the file has been previously read this session. Rides on synthetic_tools_enabled.
     native_read_intercept_enabled: bool = True

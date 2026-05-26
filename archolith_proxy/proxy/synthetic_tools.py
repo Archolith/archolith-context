@@ -432,7 +432,7 @@ async def handle_non_streaming_synthetic(
     tool_name = tool_call.get("function", {}).get("name", "")
     tool_call_id = tool_call.get("id", "synthetic_0")
 
-    # Parse tool call arguments (present for parameterized tools like recall_file)
+    # Parse tool call arguments
     raw_args = tool_call.get("function", {}).get("arguments", "{}")
     try:
         tool_args: dict = json.loads(raw_args) if raw_args else {}
