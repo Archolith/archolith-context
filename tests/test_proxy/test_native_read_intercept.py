@@ -711,3 +711,88 @@ class TestNativeReadIntercept:
         assert m["native_read_intercept_errors"] > errors_before, (
             "Expected native_read_intercept_errors to increase"
         )
+
+    @pytest.mark.asyncio
+    async def test_write_in_history_skips_intercept(self) -> None:
+        """If messages history contains a write/edit tool call, intercept is skipped.
+
+        Prevents serving stale cache content when a file was edited earlier in
+        the same session but the background invalidation hasn't run yet.
+        """
+        SESSION_ID = "nri-test-write-guard"
+        reset_circuit(SESSION_ID)
+
+        m = get_metrics()
+        hits_before = m["native_read_cache_hits"]
+        misses_before = m["native_read_cache_misses"]
+
+        call_count = 0
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            call_count += 1
+            return httpx.Response(200, json=_READ_TOOL_CALL_RESPONSE)
+
+        settings = get_settings()
+        original_synthetic = settings.synthetic_tools_enabled
+        original_nri = settings.native_read_intercept_enabled
+        settings.synthetic_tools_enabled = True
+        settings.native_read_intercept_enabled = True
+
+        try:
+            mock_backend = _make_mock_backend(cached_files={"config.py": _CACHED_CONFIG_PY})
+            app, transport = _make_app_with_handler(mock_handler)
+
+            # Messages contain a prior edit tool call — should block interception
+            messages_with_edit = [
+                {"role": "user", "content": "edit config"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call_edit_001",
+                        "type": "function",
+                        "function": {
+                            "name": "edit",  # lowercase — actual opencode tool name
+                            "arguments": json.dumps({"file_path": "config.py", "old_string": "x", "new_string": "y"}),
+                        },
+                    }],
+                },
+                {"role": "tool", "tool_call_id": "call_edit_001", "content": "edited successfully"},
+                {"role": "user", "content": "now read config again"},
+            ]
+
+            with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+                 patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+                 patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
+
+                mock_resolve.return_value = (SESSION_ID, False)
+
+                async with app.router.lifespan_context(app):
+                    app.state.http_client = httpx.AsyncClient(transport=transport)
+                    app.state.extractor_client = AsyncMock()
+                    asgi_transport = ASGITransport(app=app)
+                    async with httpx.AsyncClient(transport=asgi_transport, base_url="http://test") as ac:
+                        resp = await ac.post(
+                            "/v1/chat/completions",
+                            json={
+                                "model": "test-model",
+                                "messages": messages_with_edit,
+                                "stream": False,
+                            },
+                            headers={"X-Session-ID": SESSION_ID},
+                        )
+
+        finally:
+            settings.synthetic_tools_enabled = original_synthetic
+            settings.native_read_intercept_enabled = original_nri
+
+        assert resp.status_code == 200
+        # No re-send should have fired — intercepted path skipped
+        assert call_count == 1, f"Expected exactly 1 upstream call (no re-send), got {call_count}"
+        # Cache hits should not have increased
+        assert m["native_read_cache_hits"] == hits_before, "Cache hits should not increase when write is in history"

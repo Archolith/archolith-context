@@ -36,6 +36,18 @@ NATIVE_INTERCEPTABLE_TOOLS: frozenset[str] = frozenset({
     "Read", "read_file", "read", "ReadFile",
 })
 
+# Write/edit tools that invalidate the file cache.
+# If any of these appear in the inbound messages, the current turn may have
+# modified files that are cached — skip interception entirely so the model
+# always gets a fresh read from disk. Invalidation runs in the background
+# extraction task; the intercept must not race against it.
+NATIVE_WRITE_TOOLS: frozenset[str] = frozenset({
+    "Write", "write", "write_file",
+    "Edit", "edit", "edit_file",
+    "create_file", "create",
+    "patch", "str_replace_editor", "str_replace_based_edit_tool",
+})
+
 # Known argument keys for the file path in Read-like tools
 _PATH_ARG_KEYS = ("file_path", "path", "filePath", "filename", "target_file")
 
@@ -166,6 +178,21 @@ async def handle_native_read_intercept(
     # Gate: graph backend must be ready for cache lookups
     if not is_graph_ready():
         return NativeInterceptResult(final_data=None)
+
+    # Gate: if the inbound messages contain any write/edit tool call, skip
+    # interception entirely. The file cache may be stale (write happened this
+    # turn or a recent turn whose background invalidation hasn't run yet).
+    # Safer to let the model get a fresh read from disk.
+    for msg in original_messages:
+        if msg.get("role") == "assistant":
+            for tc in (msg.get("tool_calls") or []):
+                tc_name = tc.get("function", {}).get("name", "")
+                if tc_name in NATIVE_WRITE_TOOLS:
+                    logger.debug(
+                        "native_read_intercept_skipped_write_in_history",
+                        session_id=session_id, turn=turn_number, write_tool=tc_name,
+                    )
+                    return NativeInterceptResult(final_data=None)
 
     # Parse the model's response
     try:

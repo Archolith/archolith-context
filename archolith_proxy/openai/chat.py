@@ -1596,7 +1596,7 @@ async def _upsert_file_cache(session_id: str, file_reads: list[dict], turn: int)
 
 def _invalidate_written_files(messages: list[dict]) -> list[str]:
     """Return paths of files written/edited in this turn's tool calls."""
-    WRITE_TOOLS = frozenset({"Write", "Edit", "write_file", "edit_file", "create_file"})
+    WRITE_TOOLS = frozenset({"Write", "Edit", "write", "edit", "write_file", "edit_file", "create_file", "create"})
     paths: list[str] = []
     # Build lookup: tool_call_id → (name, args)
     call_map: dict[str, tuple[str, dict]] = {}
