@@ -234,18 +234,19 @@ async def _extract_with_semaphore(
     turn_number: int,
     session_goal: str | None,
 ) -> PartialExtractionResult:
-    """Run an extractor's extract() with the LLM semaphore if it uses LLM.
+    """Run an extractor's extract() — gating behind the LLM semaphore only when needed.
 
-    The semaphore is only acquired for LLM-backed extractors. No-LLM extractors
-    run without the semaphore since they don't consume API quota.
+    Extractors that declare ``may_use_llm = True`` (BashExtractor, WebFetchExtractor,
+    DefaultExtractor) are gated behind the concurrency semaphore so they don't
+    exhaust API quota in parallel. Pure no-LLM extractors (Grep, Glob, LS, Find,
+    Read, WriteEdit, WebSearch, MemoryRecall) run without the semaphore and can
+    proceed fully concurrently.
     """
-    # We don't know in advance if this extractor will use LLM (BashExtractor
-    # decides dynamically). We wrap all extractors that COULD use LLM
-    # with the semaphore. For pure no-LLM extractors (Grep, Glob, etc.),
-    # the semaphore adds negligible overhead.
-    sem = _get_llm_semaphore()
-    async with sem:
-        return await extractor.extract(record, http_client, turn_number, session_goal)
+    if extractor.may_use_llm:
+        sem = _get_llm_semaphore()
+        async with sem:
+            return await extractor.extract(record, http_client, turn_number, session_goal)
+    return await extractor.extract(record, http_client, turn_number, session_goal)
 
 
 async def extract_facts_per_tool(
@@ -303,6 +304,7 @@ async def extract_facts_per_tool(
     )
 
     # Step 3: Run turn-level LLM call for decisions, checkpoint, issues, verifications
+    _turn_level_facts_count = 0  # used for logging; avoids fragile "turn_result" in dir() guard
     settings = get_settings()
     turn_level_prompt = build_turn_level_extraction_prompt(
         turn_number=turn_number,
@@ -334,6 +336,7 @@ async def extract_facts_per_tool(
         data = resp.json()
         turn_content = data["choices"][0]["message"]["content"]
         turn_result = _parse_extraction_response(turn_content, turn_number)
+        _turn_level_facts_count = len(turn_result.facts)
 
         # Step 4: Merge — add turn-level facts that don't duplicate per-tool facts
         per_tool_hashes = {hashlib.md5(f.get("content", "").encode()).hexdigest() for f in all_facts}
@@ -372,8 +375,8 @@ async def extract_facts_per_tool(
         "per_tool_extraction_complete",
         turn=turn_number,
         total_facts=len(all_facts),
-        per_tool_facts=len(all_facts) - len(turn_result.facts) if "turn_result" in dir() else len(all_facts),
-        turn_level_facts=len(turn_result.facts) if "turn_result" in dir() else 0,
+        per_tool_facts=len(all_facts) - _turn_level_facts_count,
+        turn_level_facts=_turn_level_facts_count,
         files=len(all_files),
         decisions=len(decisions),
     )

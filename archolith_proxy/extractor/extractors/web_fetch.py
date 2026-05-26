@@ -21,6 +21,7 @@ class WebFetchExtractor(ToolExtractor):
     """Handles WebFetch tool calls — LLM extracts technical observations."""
 
     tool_names = ("WebFetch", "web_fetch", "webfetch", "fetch")
+    may_use_llm = True  # always makes one LLM call
 
     async def extract(
         self,

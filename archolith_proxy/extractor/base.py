@@ -47,6 +47,9 @@ class ToolExtractor(ABC):
     """
 
     tool_names: tuple[str, ...] = ()
+    may_use_llm: bool = False  # True for extractors that make API calls (BashExtractor,
+    # WebFetchExtractor, DefaultExtractor). The orchestrator uses this to decide
+    # whether to gate the extractor behind the LLM concurrency semaphore.
 
     @abstractmethod
     async def extract(

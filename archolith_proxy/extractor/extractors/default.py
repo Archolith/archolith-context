@@ -21,6 +21,7 @@ class DefaultExtractor(ToolExtractor):
     """
 
     tool_names = ()  # registered via set_default, not by name
+    may_use_llm = True  # always makes one LLM call
 
     async def extract(
         self,

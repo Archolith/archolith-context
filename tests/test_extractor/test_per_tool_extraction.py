@@ -451,6 +451,19 @@ class TestBashExtractor:
         # After stripping env var, primary is pytest → regex should match
         assert result.used_llm is False
 
+    @pytest.mark.asyncio
+    async def test_pipe_with_recognizable_primary(self):
+        """pytest tests/ | tee out.txt — primary is pytest → regex classifies, no LLM."""
+        record = ToolCallRecord(
+            tool_call_id="1", tool_name="Bash",
+            args={"command": "pytest tests/ | tee out.txt"},
+            result="38 passed, 1 failed\nFAILED tests/test_api.py::test_route",
+        )
+        result = await self.ext.extract(record, self.client, 1, None)
+        # First whitespace-split token is "pytest" → regex matches → no LLM
+        assert result.used_llm is False
+        assert any("38 passed" in f["content"] for f in result.facts)
+
 
 # ---------------------------------------------------------------------------
 # TestMemoryRecallExtractor
@@ -812,6 +825,56 @@ class TestExtractFactsPerTool:
         assert result is not None
         grep_facts = [f for f in result.facts if "[Grep]" in f.get("content", "")]
         assert len(grep_facts) >= 1
+
+    @pytest.mark.asyncio
+    async def test_semaphore_only_applied_to_llm_backed_extractors(self):
+        """No-LLM extractors (Grep, Glob) bypass the semaphore; LLM extractor waits for it."""
+        from archolith_proxy.extractor.client import _extract_with_semaphore, _get_llm_semaphore
+        from archolith_proxy.extractor.extractors.grep import GrepExtractor
+        from archolith_proxy.extractor.extractors.default import DefaultExtractor
+
+        grep_ext = GrepExtractor()
+        default_ext = DefaultExtractor()
+
+        assert grep_ext.may_use_llm is False, "GrepExtractor must not claim LLM use"
+        assert default_ext.may_use_llm is True, "DefaultExtractor must claim LLM use"
+
+        # Reset semaphore with cap of 1 so we can verify it gates the LLM extractor
+        import archolith_proxy.extractor.client as client_mod
+        client_mod._llm_semaphore = asyncio.Semaphore(1)
+
+        acquired_during_grep = []
+        acquired_during_default = []
+
+        async def mock_grep_extract(record, http_client, turn_number, session_goal):
+            # Record whether semaphore is locked when Grep runs — it should NOT be
+            sem = client_mod._llm_semaphore
+            acquired_during_grep.append(sem._value < 1)
+            return PartialExtractionResult(source_tool="Grep", facts=[], files_touched=[])
+
+        async def mock_default_extract(record, http_client, turn_number, session_goal):
+            acquired_during_default.append(True)
+            return PartialExtractionResult(source_tool="Default", facts=[], files_touched=[])
+
+        grep_ext.extract = mock_grep_extract
+        default_ext.extract = mock_default_extract
+
+        grep_record = ToolCallRecord(tool_call_id="g1", tool_name="Grep", args={}, result="")
+        default_record = ToolCallRecord(tool_call_id="d1", tool_name="UnknownTool", args={}, result="")
+
+        mock_client = AsyncMock()
+
+        # Grep runs without holding semaphore (semaphore is free when Grep runs)
+        await _extract_with_semaphore(grep_ext, grep_record, mock_client, 1, None)
+        assert len(acquired_during_grep) == 1
+        assert acquired_during_grep[0] is False  # semaphore NOT held — Grep bypassed it
+
+        # Default runs while holding semaphore (semaphore is locked during Default's extract)
+        await _extract_with_semaphore(default_ext, default_record, mock_client, 1, None)
+        assert len(acquired_during_default) == 1
+
+        # Restore
+        client_mod._llm_semaphore = None
 
 
 # ---------------------------------------------------------------------------
