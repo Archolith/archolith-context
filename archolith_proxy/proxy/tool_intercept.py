@@ -179,20 +179,25 @@ async def handle_native_read_intercept(
     if not is_graph_ready():
         return NativeInterceptResult(final_data=None)
 
-    # Gate: if the inbound messages contain any write/edit tool call, skip
-    # interception entirely. The file cache may be stale (write happened this
-    # turn or a recent turn whose background invalidation hasn't run yet).
-    # Safer to let the model get a fresh read from disk.
+    # Gate: if the IMMEDIATELY PRECEDING assistant turn contained a write/edit
+    # tool call, skip interception. The extraction background task that
+    # re-caches the written file runs after the response is returned — if we
+    # intercept in the very next turn the cache may still be stale.
+    # We only check the last assistant message, not all of history: earlier
+    # writes have already been processed and the cache is fresh again.
+    last_assistant: dict | None = None
     for msg in original_messages:
         if msg.get("role") == "assistant":
-            for tc in (msg.get("tool_calls") or []):
-                tc_name = tc.get("function", {}).get("name", "")
-                if tc_name in NATIVE_WRITE_TOOLS:
-                    logger.debug(
-                        "native_read_intercept_skipped_write_in_history",
-                        session_id=session_id, turn=turn_number, write_tool=tc_name,
-                    )
-                    return NativeInterceptResult(final_data=None)
+            last_assistant = msg
+    if last_assistant is not None:
+        for tc in (last_assistant.get("tool_calls") or []):
+            tc_name = tc.get("function", {}).get("name", "")
+            if tc_name in NATIVE_WRITE_TOOLS:
+                logger.debug(
+                    "native_read_intercept_skipped_write_in_history",
+                    session_id=session_id, turn=turn_number, write_tool=tc_name,
+                )
+                return NativeInterceptResult(final_data=None)
 
     # Parse the model's response
     try:
