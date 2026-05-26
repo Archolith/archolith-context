@@ -1,5 +1,23 @@
 # Changelog — cth.context-engine
 
+## 2026-05-26 — Per-Tool Extraction Post-Review Fixes
+
+- **`archolith_proxy/extractor/base.py`**: Added `may_use_llm: bool = False` class attribute to `ToolExtractor` ABC. Extractors that can make API calls declare `may_use_llm = True`; no-LLM extractors inherit the `False` default.
+- **`archolith_proxy/extractor/extractors/bash.py`**, **`web_fetch.py`**, **`default.py`**: Set `may_use_llm = True` — these three extractors may make LLM API calls.
+- **`archolith_proxy/extractor/client.py`**: `_extract_with_semaphore()` now gates only on `extractor.may_use_llm`. No-LLM extractors (Grep, Glob, LS, Find, Read, WriteEdit, WebSearch, MemoryRecall) bypass the semaphore and run fully concurrently. Replaced fragile `"turn_result" in dir()` logger guard with explicit `_turn_level_facts_count` counter variable.
+- **`tests/test_extractor/test_per_tool_extraction.py`**: Added `TestBashExtractor.test_pipe_with_recognizable_primary` and `TestExtractFactsPerTool.test_semaphore_only_applied_to_llm_backed_extractors`. 588 tests passing (commit `30ccc98`).
+
+## 2026-05-26 — Per-Tool Extraction Dispatch System
+
+- **`archolith_proxy/extractor/base.py`**: New — `ToolCallRecord` dataclass (tool_call_id, tool_name, args, result), `PartialExtractionResult` dataclass (source_tool, facts, files_touched, used_llm), `ToolExtractor` ABC with `tool_names` tuple and abstract `extract()`.
+- **`archolith_proxy/extractor/registry.py`**: New — `ToolExtractorRegistry` with exact-match + longest-prefix-match routing (prevents ambiguity for overlapping prefix sentinels). `build_default()` factory, `get_registry()` process-level singleton.
+- **`archolith_proxy/extractor/extractors/`**: 10 new extractors — `GrepExtractor` (path:line:match parsing, no LLM), `GlobExtractor` (file list, no LLM), `LsExtractor` (directory entries, no LLM), `FindExtractor` (path count, no LLM), `WebSearchExtractor` (JSON-first + regex fallback, no LLM), `WebFetchExtractor` (LLM with `WEB_FETCH_SYSTEM_PROMPT`), `BashExtractor` (regex pre-pass — pytest/jest/cargo/go/git patterns + universal error; LLM fallback; ANSI stripping; builtin fallthrough), `MemoryRecallExtractor` (JSON parse, score filter <0.5, cap 20, prefix sentinel `mcp__memory__recall`), `DefaultExtractor` (LLM catch-all using existing `SYSTEM_PROMPT`). Plus existing `ReadExtractor` and `WriteEditExtractor` untouched.
+- **`archolith_proxy/extractor/prompts.py`**: Added `BASH_SYSTEM_PROMPT` + `build_bash_extraction_prompt()`, `WEB_FETCH_SYSTEM_PROMPT` + `build_web_fetch_extraction_prompt()`, `TURN_LEVEL_SYSTEM_PROMPT` + `build_turn_level_extraction_prompt()`. Turn-level prompt explicitly forbids `tool_result`/`file_state` fact types and prevents LLM from inferring tool output.
+- **`archolith_proxy/extractor/client.py`**: New `extract_facts_per_tool()` orchestrator — async fan-out via `asyncio.gather(return_exceptions=True)`, semaphore-capped LLM concurrency (`extractor_llm_concurrency`, default 3), explicit `isinstance(r, Exception)` merge guard, turn-level LLM call for decisions/checkpoint/issues/verifications, MD5 dedup between per-tool and turn-level facts. Old `extract_facts()` kept unchanged.
+- **`archolith_proxy/openai/chat.py`**: Added `_build_call_map()` shared utility; refactored `_extract_file_reads()` to use it; new `_collect_tool_call_records()` (applies RTK Layer 1 filter); feature-flag gate routes to `extract_facts_per_tool()` when `per_tool_extraction_enabled=True`.
+- **`archolith_proxy/config.py`**: Added `per_tool_extraction_enabled: bool = False` and `extractor_llm_concurrency: int = 3`.
+- **`tests/test_extractor/test_per_tool_extraction.py`**: 52 new tests across 16 test classes covering all extractors, registry routing, `_build_call_map`, `_collect_tool_call_records`, orchestrator exception handling, turn-level prompt validation, and integration gate. 586 tests passing (commit `30d7dde`).
+
 ## 2026-05-26 — Archolith Ecosystem Docs + Per-Tool Extraction Plan
 
 - **`.agent/architecture.md`**: Added *Archolith Ecosystem* section — archolith-rtk / archolith-memory / archolith-context module table with roles and dependency models. Design constraints: standalone `pip install`, fail-open peer imports, MCP as thin wrapper. Captures planned archolith-memory integration shape (read=proxy recall, write=promotion pipeline, explicit=MCP).
