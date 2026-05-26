@@ -631,6 +631,34 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=404, content={"error": f"Promotion {promotion_id} not found"})
         return JSONResponse(status_code=200, content={"note": "Retry requires resubmission with the original PromotionRecord"})
 
+    # --- Graceful shutdown endpoint ---
+    @app.post("/admin/shutdown")
+    async def graceful_shutdown(
+        background_tasks: BackgroundTasks,
+        admin: None = Depends(require_admin_token),
+    ) -> dict:
+        """Gracefully shut down the proxy.
+
+        Sends SIGTERM to the current process, triggering the lifespan cleanup
+        path (closes LadybugDB with WAL flush, drains HTTP clients, etc.).
+        Use this instead of SIGKILL / Stop-Process -Force to avoid WAL corruption.
+
+        Returns immediately; shutdown completes in the background.
+        """
+        import os
+        import signal
+
+        pid = os.getpid()
+        logger.info("graceful_shutdown_requested", pid=pid)
+
+        async def _send_sigterm() -> None:
+            import asyncio
+            await asyncio.sleep(0.1)  # let the HTTP response flush first
+            os.kill(pid, signal.SIGTERM)
+
+        background_tasks.add_task(_send_sigterm)
+        return {"ok": True, "pid": pid, "note": "SIGTERM sent — proxy will shut down after current requests complete"}
+
     # --- WebSocket live stream endpoint ---
     @app.websocket("/ws/stream")
     async def ws_live_stream(websocket: WebSocket) -> None:
