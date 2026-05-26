@@ -28,7 +28,7 @@ from archolith_proxy.proxy.live import (
     broadcast_extraction, broadcast_session_event, broadcast_recall,
 )
 from archolith_proxy.proxy.session import get_benchmark_passthrough_session_id
-from archolith_proxy.proxy.streaming import ResponseCapture, stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _non_streaming_to_sse
+from archolith_proxy.proxy.streaming import ResponseCapture, stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _wrap_response_as_sse, yield_as_sse
 from archolith_proxy.proxy.upstream import RETRYABLE_STATUS_CODES, upstream_request_with_retry
 from archolith_proxy.rtk import filter_request_body, filter_single_tool_result
 from archolith_proxy.trace.builder import TraceBuilder
@@ -737,49 +737,6 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         )
 
 
-def _wrap_response_as_sse(resp: Response) -> StreamingResponse:
-    """Convert a non-streaming JSON chat completion response to SSE streaming format.
-
-    Used when synthetic tools were intercepted (required non-streaming upstream) but
-    the original client requested streaming. Produces a well-formed SSE stream with
-    role, content, tool_calls, and finish_reason deltas so the streaming client
-    parses it normally.
-
-    The SSE body is produced by ``_non_streaming_to_sse`` (streaming.py) — the
-    canonical reference for the OpenAI streaming format.  This function adds only
-    the error-propagation wrapper on top: when upstream returns status >= 400 it
-    forwards the error body as a data event followed by [DONE] so the client can
-    see and handle the error instead of receiving a silent empty stream.
-    """
-    # Propagate upstream error responses as SSE error events (mirrors streaming path)
-    if resp.status_code >= 400:
-        error_body = resp.body.decode("utf-8") if isinstance(resp.body, bytes) else (resp.body or b"{}").decode("utf-8")
-        async def _sse_error():
-            yield f"data: {error_body}\n\n"
-            yield "data: [DONE]\n\n"
-        return StreamingResponse(
-            _sse_error(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-        )
-
-    try:
-        data = json.loads(resp.body.decode("utf-8") if isinstance(resp.body, bytes) else resp.body)
-    except Exception:
-        data = {}
-
-    async def _sse():
-        for line in _non_streaming_to_sse(data):
-            yield line + "\n\n"
-
-    return StreamingResponse(
-        _sse(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-        background=resp.background,
-    )
-
-
 async def _handle_streaming(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -1125,9 +1082,8 @@ async def _handle_streaming(
                             strip_recall_from_response(second_data)
 
                             # Convert the non-streaming response to SSE format and yield
-                            sse_lines = _non_streaming_to_sse(second_data)
-                            for sse_line in sse_lines:
-                                yield sse_line + "\n\n"
+                            async for sse_chunk in yield_as_sse(second_data):
+                                yield sse_chunk
 
                             # Set up capture from the final response for extraction
                             # The re-send was non-streaming, so use set_non_streaming_response

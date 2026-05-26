@@ -19,6 +19,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 import structlog
+from starlette.responses import Response, StreamingResponse
 
 logger = structlog.get_logger()
 
@@ -389,6 +390,58 @@ def _non_streaming_to_sse(response_data: dict) -> list[str]:
     lines.append("data: [DONE]")
 
     return lines
+
+
+async def yield_as_sse(response_data: dict) -> AsyncGenerator[str, None]:
+    """Yield SSE-formatted chunks from a non-streaming response dict.
+
+    Each yielded string is a complete ``data: {...}\\n\\n`` event ready to
+    write to the client.  Use this inside async generators that are already
+    yielding SSE lines — it keeps all ``\\n\\n`` formatting in one place.
+    """
+    for line in _non_streaming_to_sse(response_data):
+        yield line + "\n\n"
+
+
+def _wrap_response_as_sse(resp: Response) -> StreamingResponse:
+    """Convert a non-streaming JSON chat completion response to SSE streaming format.
+
+    Used when an interception path required non-streaming upstream but the
+    original client requested streaming.  Produces a well-formed SSE stream
+    with role, content, tool_calls, and finish_reason deltas so the streaming
+    client parses it normally.
+
+    Error propagation: when upstream returns status >= 400 the error body is
+    forwarded as a data event followed by [DONE] so the client can see and
+    handle the error instead of receiving a silent empty stream.
+    """
+    if resp.status_code >= 400:
+        error_body = (
+            resp.body.decode("utf-8") if isinstance(resp.body, bytes)
+            else (resp.body or b"{}").decode("utf-8")
+        )
+
+        async def _sse_error() -> AsyncGenerator[str, None]:
+            yield f"data: {error_body}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            _sse_error(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    try:
+        data = json.loads(resp.body.decode("utf-8") if isinstance(resp.body, bytes) else resp.body)
+    except Exception:
+        data = {}
+
+    return StreamingResponse(
+        yield_as_sse(data),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        background=resp.background,
+    )
 
 
 async def stream_with_capture(
