@@ -19,53 +19,14 @@ are relative to the current system baseline.
 | Unify `_wrap_response_as_sse` / `_non_streaming_to_sse` | `2b021da` | All SSE formatting in `streaming.py`; `yield_as_sse` helper removes last `\n\n` site from `chat.py` |
 | LadybugDB WAL corruption — base fix | `78e2d81` | `throw_on_wal_replay_failure=False`; partial WAL replay on force-kill |
 | LadybugDB WAL resilience — four improvements | `5fe067b` | WAL detection logging, auto-rotate on failed probe, 16 MB checkpoint threshold, atexit registration |
+| File structure index on cache ingest | `94e182d` | `FileOutline` table, `_build_outline` (AST + regex), `get_file_outline` as 12th curator tool; rule 3 updated |
+| Semantic search over facts | `TBD` | `search_facts_semantic` (13th tool) — cosine similarity on stored embeddings; falls back to substring; 15 tests |
 
 ---
 
 ## Next
 
 Scoped, medium-effort items.  Each is self-contained and can land in a single session.
-
-### Semantic search over facts (embedding-based `search_facts`)
-
-**Value:** High | **Effort:** Medium
-
-The curator's `search_facts` tool currently does substring matching.  Embedding-based
-retrieval would let the curator find facts that are conceptually related to the current
-question but don't share keywords — e.g., "JWT expiry" finding "token TTL" facts.
-
-**Shape:**
-- Add `embed_fact(text) -> list[float]` to `graph/backend.py` using the existing
-  `EMBEDDING_MODEL` setting (text-embedding-3-small)
-- Store embedding vector alongside each fact on upsert
-- Add `search_facts_semantic(query, session_id, limit) -> list[dict]` to backend
-- Expose as second curator tool `search_facts_semantic` (keep substring as fallback)
-- LadybugDB: store as JSON blob; cosine similarity in Python
-- Neo4j: store as property; cosine similarity via GDS or Python post-filter
-
-**Gate:** `EMBEDDING_BASE_URL` must be set; falls back to substring if embedding fails.
-
----
-
-### File structure index on cache ingest
-
-**Value:** High | **Effort:** Medium
-
-When a file is upserted into the `FileContent` cache, extract a lightweight outline
-(function/class names + line numbers) and store it alongside the content.  The curator
-can then call `get_file_outline(path)` to understand file structure without fetching
-full content — useful for large files where the curator currently has to guess at line
-ranges.
-
-**Shape:**
-- Add `outline: str | None` column to `FileContent` table (LadybugDB schema migration)
-- `_build_outline(content, path) -> str`: language-aware (Python AST for `.py`; regex
-  fallback for other extensions); returns `"line N: def foo"` lines
-- Call in `_upsert_file_cache()` on write; skip on ImportError (ast is stdlib)
-- Add `get_file_outline` as a new curator tool (11th tool)
-- System prompt: "Call get_file_outline before get_file_lines on any file over 100 lines"
-
----
 
 ### RTK inter-turn compression of coherence tail inner messages
 
@@ -90,7 +51,10 @@ across turns.
 - The singleton `DedupeTracker` is process-level, so cross-turn dedup between the
   middle pass and the later `filter_request_body` pass is automatic — no explicit
   threading required
-- Covered by the `archolith-rtk-cross-turn-dedupe-plan` workspace plan
+- **Blocked on archolith-rtk**: the `archolith-rtk-cross-turn-dedupe-plan` workspace plan improves
+  the `DedupeTracker` within RTK first (fingerprinting, compact markers, recovery IDs). The
+  archolith-context wiring (swap compressible-tool loop for `filter_output` call) is a follow-on
+  once the RTK-side plan lands — it will inherit the improved dedup automatically.
 
 ---
 

@@ -107,6 +107,97 @@ async def search_facts(session_id: str, query: str = "", **kwargs) -> str:
     return "\n".join(lines)
 
 
+async def search_facts_semantic(
+    session_id: str, query: str = "", limit: int = 10, **kwargs
+) -> str:
+    """Search active facts by embedding similarity.
+
+    Ranks facts by cosine similarity to the query embedding, returning
+    the top matches sorted by relevance. Falls back to substring matching
+    when the embedding API is unavailable or no facts have embeddings.
+
+    Returns a bullet list of matching facts, sorted by relevance.
+    """
+    if not query:
+        return "(no query specified)"
+
+    from archolith_proxy.config import get_settings
+    settings = get_settings()
+
+    facts = await get_backend().get_active_facts(session_id, limit=200)
+    if not facts:
+        return "(no facts stored for this session)"
+
+    # --- helpers -----------------------------------------------------------
+    def _cosine(a: list, b: list) -> float:
+        if not a or not b or len(a) != len(b):
+            return 0.0
+        dot = sum(x * y for x, y in zip(a, b))
+        mag_a = sum(x * x for x in a) ** 0.5
+        mag_b = sum(x * x for x in b) ** 0.5
+        if mag_a == 0.0 or mag_b == 0.0:
+            return 0.0
+        return dot / (mag_a * mag_b)
+
+    def _substring_fallback(reason: str) -> str:
+        query_lower = query.lower()
+        matches = [
+            f.get("content", "")
+            for f in facts
+            if query_lower in f.get("content", "").lower()
+        ]
+        if not matches:
+            return f"(no matching facts — {reason}, substring fallback also empty)"
+        lines = [f"- {m}" for m in matches[:limit]]
+        lines.append(f"(substring fallback — {reason})")
+        return "\n".join(lines)
+
+    # --- compute query embedding -------------------------------------------
+    query_embedding: list[float] | None = None
+    if settings.embedding_api_key:
+        try:
+            import httpx
+            from archolith_proxy.extractor.embeddings import compute_embeddings_batch
+            async with httpx.AsyncClient(timeout=10.0) as _client:
+                results = await compute_embeddings_batch(_client, [query[:8000]])
+            query_embedding = results[0] if results else None
+        except Exception as exc:
+            logger.warning(
+                "search_facts_semantic_embed_failed",
+                session_id=session_id,
+                error=str(exc),
+            )
+
+    if query_embedding is None:
+        reason = "no embedding API key" if not settings.embedding_api_key else "embedding call failed"
+        return _substring_fallback(reason)
+
+    # --- score facts by cosine similarity ----------------------------------
+    scored: list[tuple[float, str]] = []
+    no_embed_count = 0
+    for f in facts:
+        fact_emb = f.get("embedding")
+        if fact_emb:
+            sim = _cosine(query_embedding, fact_emb)
+            scored.append((sim, f.get("content", "")))
+        else:
+            no_embed_count += 1
+
+    if not scored:
+        return _substring_fallback("no facts have stored embeddings")
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = [(s, c) for s, c in scored[:limit] if s > 0.05]
+
+    if not top:
+        return "(no facts above similarity threshold)"
+
+    lines = [f"- {c}" for _, c in top]
+    if no_embed_count > 0:
+        lines.append(f"({no_embed_count} facts had no stored embedding and were excluded)")
+    return "\n".join(lines)
+
+
 async def get_session_goal(session_id: str, **kwargs) -> str:
     """Get the session goal string."""
     session = await get_backend().find_session_by_id(session_id)
@@ -235,6 +326,7 @@ TOOL_HANDLERS: dict[str, callable] = {
     "get_file_outline": get_file_outline,
     "get_file_lines": get_file_lines,
     "search_facts": search_facts,
+    "search_facts_semantic": search_facts_semantic,
     "get_session_goal": get_session_goal,
     "get_recent_decisions": get_recent_decisions,
     "get_touched_files": get_touched_files,

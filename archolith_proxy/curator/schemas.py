@@ -104,6 +104,34 @@ ALL_CURATOR_TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "search_facts_semantic",
+            "description": (
+                "Search active facts by semantic similarity — finds facts conceptually "
+                "related to the query even when they share no keywords. Use this when "
+                "search_facts returns nothing or when the question uses different "
+                "terminology than the stored facts (e.g. 'JWT expiry' finding "
+                "'token TTL' facts). Falls back to substring matching if embeddings "
+                "are unavailable."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language phrase describing what to find",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of facts to return (default 10)",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_session_goal",
             "description": "Get the session goal string — the overall task the coding agent is working on.",
             "parameters": {
