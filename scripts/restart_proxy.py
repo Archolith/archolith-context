@@ -113,7 +113,7 @@ def main() -> None:
         time.sleep(0.5)
 
     if up:
-        print(f"[restart_proxy] Proxy is up at {base_url} ✓", flush=True)
+        print(f"[restart_proxy] Proxy is up at {base_url} OK", flush=True)
     else:
         print(f"[restart_proxy] WARNING: proxy did not come up within 20s — check logs", flush=True)
 

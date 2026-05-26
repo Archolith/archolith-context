@@ -6,16 +6,25 @@ a cached singleton — Settings() is constructed once per process.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Module-level singleton
 _settings: Settings | None = None
 
+# Resolve .env relative to this file's directory (archolith_proxy/),
+# then walk up one level to the project root. This ensures .env loads
+# correctly regardless of the process working directory.
+_PROJECT_ROOT = Path(__file__).parent.parent
+_ENV_FILE = str(_PROJECT_ROOT / ".env")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )
