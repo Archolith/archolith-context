@@ -531,6 +531,11 @@ details.curator-details:not([open]) .curator-expand-btn::after { content: " ▼"
 .msg-preview { flex: 1; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; cursor: pointer; font-family: monospace; }
 .msg-preview:hover { color: var(--text2); }
 .msg-preview.expanded { white-space: pre-wrap; overflow: visible; color: var(--text2); }
+.msg-row.is-dup { background: rgba(227, 179, 65, 0.06); border-left: 2px solid var(--yellow); padding-left: 6px; }
+.dup-tag { font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 2px; background: var(--yellow); color: #000; margin-left: 4px; vertical-align: middle; flex-shrink: 0; }
+.dup-warning { background: #1a1200; border: 1px solid #7a4000; border-radius: var(--radius-sm); padding: 8px 10px; margin-bottom: 8px; }
+.dup-warning-title { color: var(--yellow); font-weight: 600; font-size: 11px; margin-bottom: 4px; }
+.dup-warning-item { color: var(--text2); font-size: 11px; padding: 1px 0; }
 
 /* Assembly reason */
 .reason-text { font-size: 11px; color: var(--text3); font-style: italic; margin-top: 4px; margin-bottom: 6px; }
@@ -803,6 +808,46 @@ function renderChart() {
 
 // ── Messages Breakdown ────────────────────────────────────────────────────────
 
+function findDuplicateToolCalls(msgs) {
+  // Returns which tool call IDs are duplicates within this message array.
+  // Normalise: name + JSON-canonical args. Second+ occurrence = duplicate.
+  const seen = {};      // normKey -> [call_id, ...]
+  const callMeta = {};  // call_id -> {name, normKey}
+
+  for (const msg of (msgs || [])) {
+    if (msg.role === 'assistant' && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        const name = (tc.function && tc.function.name) || '?';
+        let raw = (tc.function && tc.function.arguments) || '';
+        let norm = raw;
+        try { norm = JSON.stringify(JSON.parse(raw)); } catch(e) {}
+        const key = `${name}:${norm}`;
+        if (!seen[key]) seen[key] = [];
+        seen[key].push(tc.id);
+        callMeta[tc.id] = { name, key };
+      }
+    }
+  }
+
+  // dupCallIds: 2nd+ occurrences of a repeated call
+  const dupCallIds = new Set();
+  // dupResultIds: tool_call_ids whose RESULTS are therefore duplicates
+  const dupResultIds = new Set();
+  const dupGroups = [];  // [{name, count, ids}]
+
+  for (const [key, ids] of Object.entries(seen)) {
+    if (ids.length > 1) {
+      for (const id of ids.slice(1)) {
+        dupCallIds.add(id);
+        dupResultIds.add(id);
+      }
+      dupGroups.push({ name: callMeta[ids[0]].name, count: ids.length, ids });
+    }
+  }
+
+  return { dupCallIds, dupResultIds, dupGroups, callMeta };
+}
+
 function renderMessagesBreakdown(msgs) {
   if (!msgs || !msgs.length) return '';
 
@@ -817,6 +862,8 @@ function renderMessagesBreakdown(msgs) {
       }
     }
   }
+
+  const { dupCallIds, dupResultIds, dupGroups } = findDuplicateToolCalls(msgs);
 
   // Rough token estimate: ~4 chars per token
   function estimateTok(msg) {
@@ -858,14 +905,43 @@ function renderMessagesBreakdown(msgs) {
     return '';
   }
 
+  // Determine which messages are duplicates (call or result)
+  function isDup(msg, i) {
+    if (msg.role === 'assistant' && msg.tool_calls) {
+      return msg.tool_calls.some(tc => dupCallIds.has(tc.id));
+    }
+    if (msg.role === 'tool') {
+      return dupResultIds.has(msg.tool_call_id);
+    }
+    return false;
+  }
+
   const tokCounts = msgs.map(estimateTok);
   const total = tokCounts.reduce((a, b) => a + b, 0);
   const maxTok = Math.max(...tokCounts, 1);
-  // "hot" = top cost contributor; "warm" = notable but not worst
   const hotThreshold  = Math.max(400, total * 0.15);
   const warmThreshold = Math.max(150, total * 0.07);
 
+  // Estimate wasted tokens from duplicate tool results
+  let wastedTok = 0;
+  msgs.forEach((msg, i) => {
+    if (msg.role === 'tool' && dupResultIds.has(msg.tool_call_id)) {
+      wastedTok += tokCounts[i];
+    }
+  });
+
   let html = `<div class="msgs-breakdown">`;
+
+  // Duplicate warning banner
+  if (dupGroups.length > 0) {
+    html += `<div class="dup-warning">`;
+    html += `<div class="dup-warning-title">&#9888; ${dupGroups.length} duplicate tool call${dupGroups.length > 1 ? 's' : ''} — ~${fmt(wastedTok)}t wasted in redundant results</div>`;
+    for (const g of dupGroups) {
+      html += `<div class="dup-warning-item">${esc(g.name)} called ${g.count}× with identical arguments</div>`;
+    }
+    html += `</div>`;
+  }
+
   html += `<div style="font-size:10px;color:var(--text3);margin-bottom:6px">${msgs.length} messages · ${fmt(total)}t total (estimated)</div>`;
 
   msgs.forEach((msg, i) => {
@@ -875,12 +951,15 @@ function renderMessagesBreakdown(msgs) {
     const isWarm = !isHot && tok >= warmThreshold;
     const heatCls = isHot ? 'hot' : isWarm ? 'warm' : '';
     const role = (msg.role || 'unknown');
+    const dup = isDup(msg, i);
     const label = msgLabel(msg);
     const preview = msgPreview(msg).replace(/\n+/g, ' ↵ ').slice(0, 300);
     const pid = `mp${i}-${Math.random().toString(36).slice(2,7)}`;
+    const dupTag = dup ? ' <span class="dup-tag">DUP</span>' : '';
+    const rowCls = dup ? ' is-dup' : '';
 
-    html += `<div class="msg-row">
-  <span class="msg-role-badge msg-role-${esc(role)}" title="${esc(label)}">${esc(label.slice(0, 26))}</span>
+    html += `<div class="msg-row${rowCls}">
+  <span class="msg-role-badge msg-role-${esc(role)}" title="${esc(label)}">${esc(label.slice(0, 26))}${dupTag}</span>
   <span class="msg-tok-count ${heatCls}">${fmt(tok)}t</span>
   <div class="msg-bar-wrap"><div class="msg-bar ${heatCls}" style="width:${barPct}%"></div></div>
   <span class="msg-preview" id="${pid}" onclick="this.classList.toggle('expanded')" title="click to expand/collapse">${esc(preview)}</span>
