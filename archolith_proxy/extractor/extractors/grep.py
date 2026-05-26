@@ -8,7 +8,10 @@ import httpx
 
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord, ToolExtractor
 
-_GREP_LINE_RE = re.compile(r"^([^:\n]+):(\d+):(.+)$", re.MULTILINE)
+# Lazy path match before :line_number: — handles both Unix (/path/file.py:42:match)
+# and Windows (C:\path\file.py:42:match) paths. The lazy .+? naturally finds the
+# first :digits: boundary, correctly treating the Windows drive colon as path content.
+_GREP_LINE_RE = re.compile(r"^(.+?):(\d+):(.+)$", re.MULTILINE)
 _MAX_LINES_PER_FILE = 5
 _MAX_FILES = 10
 

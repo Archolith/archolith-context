@@ -76,6 +76,22 @@ class TestGrepExtractor:
         assert "no structured matches" in result.facts[0]["content"]
         assert result.files_touched == []
 
+    @pytest.mark.asyncio
+    async def test_windows_path_parsing(self):
+        """C:\\path\\file.py:42:match — drive colon must not confuse line-number split."""
+        record = ToolCallRecord(
+            tool_call_id="1", tool_name="Grep",
+            args={"pattern": "authenticate"},
+            result=r"C:\Users\dev\project\src\auth.py:42:def authenticate(user):" + "\n"
+                   + r"C:\Users\dev\project\src\routes.py:10:from auth import authenticate",
+        )
+        result = await self.ext.extract(record, self.client, 1, None)
+        # Both paths extracted correctly — not split at the drive colon
+        paths = result.files_touched
+        assert any("auth.py" in p for p in paths)
+        assert any("routes.py" in p for p in paths)
+        assert len(result.facts) == 2
+
 
 # ---------------------------------------------------------------------------
 # TestGlobExtractor
@@ -109,6 +125,19 @@ class TestGlobExtractor:
         )
         result = await self.ext.extract(record, self.client, 2, None)
         assert "0 files" in result.facts[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_windows_absolute_paths_not_filtered(self):
+        """C:\\Users\\... paths must survive the path filter (colon at index 1)."""
+        record = ToolCallRecord(
+            tool_call_id="1", tool_name="Glob",
+            args={"pattern": "**/*.py"},
+            result=r"C:\Users\dev\project\src\main.py" + "\n"
+                   + r"C:\Users\dev\project\src\utils.py",
+        )
+        result = await self.ext.extract(record, self.client, 1, None)
+        assert "2 files" in result.facts[0]["content"]
+        assert "main.py" in result.facts[0]["content"]
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +736,30 @@ class TestCollectToolCallRecords:
 
         records = _collect_tool_call_records(messages)
         assert len(records) == 20
+
+    def test_scoped_to_current_turn_only(self):
+        """Prior-turn tool results must not be re-extracted on subsequent turns."""
+        from archolith_proxy.openai.chat import _collect_tool_call_records
+
+        messages = [
+            # Turn 1 — already extracted
+            {"role": "assistant", "tool_calls": [
+                {"id": "old1", "function": {"name": "Read", "arguments": '{"file_path": "old.py"}'}},
+            ]},
+            {"role": "tool", "tool_call_id": "old1", "content": "old file content"},
+            {"role": "assistant", "content": "I read old.py"},
+            {"role": "user", "content": "now do something else"},
+            # Turn 2 — current turn
+            {"role": "assistant", "tool_calls": [
+                {"id": "new1", "function": {"name": "Bash", "arguments": '{"command": "pytest"}'}},
+            ]},
+            {"role": "tool", "tool_call_id": "new1", "content": "42 passed"},
+        ]
+        records = _collect_tool_call_records(messages)
+        # Only the current turn's tool call should be returned
+        assert len(records) == 1
+        assert records[0].tool_call_id == "new1"
+        assert records[0].tool_name == "Bash"
 
 
 # ---------------------------------------------------------------------------

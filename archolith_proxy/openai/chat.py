@@ -81,27 +81,46 @@ def _build_call_map(messages: list[dict]) -> dict[str, tuple[str, dict]]:
 
 
 def _collect_tool_call_records(messages: list[dict]) -> list:
-    """Build ToolCallRecord list from messages for per-tool extraction.
+    """Build ToolCallRecord list from the CURRENT TURN's tool calls only.
 
-    Uses _build_call_map() to pair tool calls with their results via
-    tool_call_id. Applies RTK Layer 1 filter to each result — the
-    messages array passed to extraction is the ORIGINAL (pre-rewrite)
-    messages; the outbound RTK filter runs on a copy in
+    "Current turn" = tool messages paired with the most recent assistant message
+    that has tool_calls. Scoped to this turn to avoid re-processing tool calls
+    from previous turns (which have already been extracted and stored).
+
+    Applies RTK Layer 1 filter — the messages array passed to extraction is the
+    ORIGINAL (pre-rewrite) array; the outbound RTK filter runs on a copy in
     filter_request_body() and does not mutate the source array.
-    Therefore the RTK filter here is the first (and only) filter
-    application for extraction.
     """
     from archolith_proxy.extractor.base import ToolCallRecord
 
-    call_map = _build_call_map(messages)
+    # Find the most recent assistant message with tool_calls — that defines the current turn.
+    # Older turns' tool results have already been extracted in prior calls.
+    last_assistant: dict | None = None
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            last_assistant = msg
+            break
+
+    if not last_assistant:
+        return []
+
+    # Build id → (name, args) from the current-turn assistant message only
+    current_turn_map: dict[str, tuple[str, dict]] = {}
+    for tc in (last_assistant.get("tool_calls") or []):
+        try:
+            args = json.loads(tc["function"]["arguments"])
+        except (KeyError, json.JSONDecodeError):
+            args = {}
+        current_turn_map[tc.get("id", "")] = (tc["function"]["name"], args)
+
     records = []
     for msg in messages:
         if msg.get("role") != "tool":
             continue
         tc_id = msg.get("tool_call_id", "")
-        if tc_id not in call_map:
+        if tc_id not in current_turn_map:
             continue
-        tool_name, args = call_map[tc_id]
+        tool_name, args = current_turn_map[tc_id]
         content = _normalize_message_content(msg.get("content", ""))
         # Apply RTK Layer 1 filter — same as _collect_recent_tool_results()
         content = filter_single_tool_result(content, tool_name=tool_name)
@@ -111,7 +130,7 @@ def _collect_tool_call_records(messages: list[dict]) -> list:
             args=args,
             result=content,
         ))
-    return records  # all tool results, no cap — extractors size-limit individually
+    return records  # all results from current turn, no cap — extractors size-limit individually
 
 
 def _extract_response_text(response_data: dict) -> str:

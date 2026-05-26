@@ -24,8 +24,10 @@ class GlobExtractor(ToolExtractor):
         pattern = record.args.get("pattern", "")
         # Split on newlines; filter blank/header lines
         lines = [l.strip() for l in record.result.splitlines() if l.strip()]
-        # Filter obvious non-path lines (e.g. "Found X files:")
-        paths = [l for l in lines if not l.startswith("Found") and ":" not in l[:10]]
+        # Filter obvious non-path lines (e.g. "Found X files:").
+        # The colon check is intentionally absent: Windows absolute paths start with
+        # a drive letter and colon (C:\...), so a blanket colon filter would drop them.
+        paths = [l for l in lines if not l.startswith("Found")]
 
         count = len(paths)
         display = paths[:_MAX_DISPLAY_PATHS]
