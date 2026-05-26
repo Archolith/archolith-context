@@ -159,21 +159,30 @@ class CuratorResult:
     estimated_tokens: int   # rough token estimate of context_text
 ```
 
-**7 curator tools** (`curator/tools.py`):
+**13 curator tools** (`curator/tools.py`):
 
 | Tool | What it returns |
 |------|----------------|
+| `get_checkpoint` | Current session checkpoint (summary, next_step, confidence) |
+| `get_open_issues` | Active issues (open blockers and errors) |
+| `get_last_verification` | Most recent command run + pass/fail/partial status |
 | `list_session_files` | Markdown table: path, lines, last-turn |
 | `get_file` | Full content (≤200 lines) or 10-line preview + hint to use `get_file_lines` |
 | `get_file_lines` | 1-indexed line slice with line numbers; clamps to EOF |
+| `get_file_outline` | Symbol index (functions/classes with line numbers) for large files — use before `get_file_lines` |
 | `search_facts` | Keyword substring match over active facts, up to 20 results |
+| `search_facts_semantic` | Cosine similarity search over fact embeddings; falls back to substring when embeddings unavailable |
 | `get_session_goal` | Session goal string |
 | `get_recent_decisions` | Numbered list of decisions with turn numbers |
 | `get_touched_files` | Path / status / turn table for all files touched in session |
+| `select_relevant_turns` | Prune the middle-section turn inventory — mark which historical turns to retain |
 
 **System prompt** (`curator/prompts.py`):
-- Rules: prefer `get_file_lines` over `get_file` for files >50 lines, 2–4 tool calls max
-- Output format: structured block with `=== SESSION GOAL ===`, `=== RELEVANT CODE ===`, `=== KEY FACTS ===`, `=== DECISIONS ===`
+- Pre-loaded checkpoint in user prompt — skip `get_checkpoint` unless a refresh is needed
+- For files >100 lines: call `get_file_outline` first, then `get_file_lines` for relevant range
+- Use `search_facts` for keyword lookups; use `search_facts_semantic` when terminology may differ
+- 3–6 tool calls per run; hard latency cap via `CURATOR_LATENCY_BUDGET_MS`
+- Output format: `=== SESSION GOAL ===`, `=== CURRENT STATE ===`, `=== OPEN ISSUES ===`, `=== LAST VERIFICATION ===`, `=== RELEVANT CODE ===`, `=== KEY FACTS ===`, `=== DECISIONS ===`
 
 ### File Content Cache (LadybugDB `FileContent` table)
 
@@ -285,15 +294,17 @@ for the `MAX_INPUT_TOKENS_PER_SESSION` hard cap.
 
 ## Isolation from Long-term Memory
 
-| | Long-term memory (cth.mcp.memory) | Session context (this project) |
-|--|-----------------------------------|-------------------------------|
-| Neo4j database | `neo4j` (default) | `neo4j` (same, label-based isolation) |
-| Isolation | `:Memory` label on all nodes | `:ContextSession` label on all nodes |
-| Lifecycle | Persistent, decays over months | Ephemeral, TTL per session |
-| Write path | Agent stores explicitly | Proxy extracts automatically |
-| Read path | MCP tools (recall, build_context) | Proxy assembler (internal) |
+| | Long-term memory (archolith-memory) | Session context (this project) |
+|--|-------------------------------------|-------------------------------|
+| Storage backend | Library-defined (PostgreSQL, SQLite, or custom adapter) | LadybugDB (default, embedded) or Neo4j |
+| Isolation | Separate store entirely — no shared tables or labels | Session-scoped; all nodes carry `session_id` |
+| Lifecycle | Persistent, cross-session, survives proxy restarts | Ephemeral, TTL per session (default 24h) |
+| Write path | Proxy promotion pipeline (high-confidence facts) + agent via MCP `add_memory` | Proxy extracts automatically every turn |
+| Read path | Proxy injects via `archolith_memory.recall()` (planned); MCP `recall_memories` / `build_context` today | Proxy assembler (internal, no agent tool call needed) |
 
-No shared indices, no cross-contamination. All queries are label-scoped (`MATCH (n:ContextSession ...)` vs `MATCH (n:Memory ...)`). Session data is bulk-droppable by label (`MATCH (n:ContextSession) DETACH DELETE n`).
+When running without archolith-memory, long-term memory is handled by whatever the agent's MCP server provides (`cth.mcp.memory` or equivalent). The proxy promotion pipeline writes to whichever memory backend is configured via `MEMORY_ENGINES_JSON`.
+
+**Neo4j isolation note (when used as session backend):** Session nodes carry the `:ContextSession` label; any long-term memory nodes in the same Neo4j instance use `:Memory`. All queries are label-scoped. Session data is bulk-droppable: `MATCH (n:ContextSession) DETACH DELETE n`.
 
 ## Configuration / Environment Variables
 
@@ -484,25 +495,29 @@ CONTEXT ASSEMBLY:
 
 ### Relationship Between Projects
 
+archolith-rtk is the first concrete module in the [Archolith Ecosystem](#archolith-ecosystem) —
+the same optional-peer pattern applies to archolith-memory (planned) and any future modules.
+
 archolith-rtk is **not a dependency** of archolith-context in the `pyproject.toml` sense — it is an optional peer.  This preserves the ability to run archolith-context standalone without the RTK library installed.  When both are present in the same virtualenv, RTK is used automatically with no configuration required.
 
-To install both together:
 ```bash
 uv pip install -e ../archolith-rtk  # from inside archolith-context
 ```
 
-archolith-rtk has zero dependency on archolith-context and can be used independently.
+archolith-rtk has zero dependency on archolith-context and can be used independently as a standalone token-reduction library in any Python project.
 
 ## External Dependencies
 
 | Service | Purpose | Required |
 |---------|---------|----------|
-| Neo4j | Session graph storage | Yes (graceful fallback if down) |
-| OpenAI API (gpt-4.1-mini) | Fact extraction | Yes (extraction skipped on failure) |
-| OpenAI API (embeddings) | Semantic similarity for retrieval | Yes (future) |
-| Upstream LLM API | Target for proxied requests | Yes |
-| cth.mcp.memory API | Promotion target for durable facts | Optional |
+| LadybugDB | Session graph + file cache (default backend — embedded, zero infra) | Default — no infra needed |
+| Neo4j | Session graph alternative for production deployments | Optional — only when `GRAPH_BACKEND=neo4j` |
+| OpenAI API (gpt-4.1-mini) | Fact extraction + curator LLM | Optional — extraction skipped on failure |
+| OpenAI API (embeddings) | Semantic similarity for `search_facts_semantic` | Optional — falls back to substring search |
+| Upstream LLM API | Target for proxied requests | **Yes — required** |
 | archolith-rtk | Token reduction (Layer 1 + Layer 2) | Optional peer (fail-open) |
+| archolith-memory | Long-term cross-session memory | Optional peer (planned — fail-open) |
+| Memory backend API (e.g. cth.mcp.memory) | Promotion target for durable facts | Optional — only when `PROMOTION_ENABLED=true` |
 
 ## Port Assignment
 
