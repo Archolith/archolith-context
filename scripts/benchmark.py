@@ -35,7 +35,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROXY_URL = os.getenv("PROXY_URL", "http://localhost:9800/v1")
+_proxy_port = os.getenv("PROXY_PORT", "9801")
+PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{_proxy_port}/v1")
 DIRECT_URL = os.getenv("UPSTREAM_BASE_URL", "https://integrate.api.nvidia.com/v1")
 API_KEY = os.getenv("UPSTREAM_API_KEY", "")
 MODEL = os.getenv("BENCHMARK_MODEL", "gpt-4o-mini")
@@ -305,6 +306,10 @@ def _load_checkpoint(path: Path) -> dict | None:
     return None
 
 
+COLLAPSE_TOKEN_THRESHOLD = 50
+COLLAPSE_CONSECUTIVE_LIMIT = 2
+
+
 def run_benchmark(
     scenario: Scenario,
     max_turns: int | None,
@@ -324,6 +329,7 @@ def run_benchmark(
     proxy_history: list[dict] = []
     proxy_session_id: str | None = None
     start_turn = 0
+    consecutive_collapses = 0
 
     ckpt_path = _checkpoint_path(output_dir, scenario.name, budget)
 
@@ -417,6 +423,14 @@ def run_benchmark(
                   f"savings={savings_tokens} ({savings_ratio:.1%}), "
                   f"facts_stored={facts_stored}")
 
+            # Detect output collapse — model producing stub responses
+            if proxy_output < COLLAPSE_TOKEN_THRESHOLD:
+                consecutive_collapses += 1
+                print(f"  [WARN]   Proxy output collapse: {proxy_output} tokens "
+                      f"(consecutive: {consecutive_collapses}/{COLLAPSE_CONSECUTIVE_LIMIT})")
+            else:
+                consecutive_collapses = 0
+
             direct_history.append({"role": "assistant", "content": direct_text})
             proxy_history.append({"role": "assistant", "content": proxy_text})
 
@@ -466,6 +480,13 @@ def run_benchmark(
                 direct_history, proxy_history, proxy_session_id,
             )
 
+            # Abort if model has collapsed — consecutive stub responses
+            if consecutive_collapses >= COLLAPSE_CONSECUTIVE_LIMIT:
+                print(f"\n  [ABORT]  Proxy output collapsed for {COLLAPSE_CONSECUTIVE_LIMIT} "
+                      f"consecutive turns (<{COLLAPSE_TOKEN_THRESHOLD} tokens each). "
+                      f"Stopping benchmark — model is not producing usable output.")
+                break
+
     # Clean up checkpoint on successful completion
     if ckpt_path.exists():
         ckpt_path.unlink()
@@ -486,18 +507,30 @@ def run_benchmark(
             "recall_preservation": round(avg_proxy_recall / avg_direct_recall, 3) if avg_direct_recall > 0 else 0,
         }
 
+    # Detect which turns had output collapse
+    collapsed_turns = [
+        r["turn"] for r in results
+        if r["proxy"]["output_tokens"] < COLLAPSE_TOKEN_THRESHOLD
+    ]
+    aborted = consecutive_collapses >= COLLAPSE_CONSECUTIVE_LIMIT
+
     return {
         "scenario": scenario.name,
         "description": scenario.description,
         "model": model,
         "budget": budget,
         "turns_run": len(results),
+        "turns_total": len(turns),
+        "aborted": aborted,
+        "abort_reason": f"output_collapse_{COLLAPSE_CONSECUTIVE_LIMIT}_consecutive" if aborted else "",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "summary": {
             "total_direct_input_tokens": total_direct_input,
             "total_proxy_input_tokens": total_proxy_input,
             "total_savings_tokens": total_savings,
             "overall_savings_ratio": round(total_savings / total_direct_input, 4) if total_direct_input else 0,
+            "collapsed_turns": collapsed_turns,
+            "collapse_rate": round(len(collapsed_turns) / len(results), 3) if results else 0,
         },
         "quality": probe_summary,
         "turns": results,
@@ -619,16 +652,18 @@ def print_summary(data: dict) -> None:
     header = (
         f"{'Turn':>4}  {'Direct In':>10}  {'Proxy In':>10}  {'Trace In':>10}  "
         f"{'Rewritten':>10}  {'Savings':>14}  {'Assembly':>14}  {'Facts':>5}  "
+        f"{'D Out':>6}  {'P Out':>6}  "
         f"{'D ms':>7}  {'P ms':>7}"
     )
     print(header)
-    print("-" * 110)
+    print("-" * 126)
 
     for r in results:
         d = r["direct"]
         p = r["proxy"]
         t = r["trace"]
         savings_str = f"{t['savings_tokens']:>5} ({t['savings_ratio']:.0%})"
+        collapse_marker = " !!" if p["output_tokens"] < COLLAPSE_TOKEN_THRESHOLD else ""
         print(
             f"{r['turn']:>4}  "
             f"{d['input_tokens']:>10}  "
@@ -638,16 +673,22 @@ def print_summary(data: dict) -> None:
             f"{savings_str:>14}  "
             f"{t['assembly_mode']:>14}  "
             f"{t['facts_stored']:>5}  "
+            f"{d['output_tokens']:>6}  "
+            f"{p['output_tokens']:>6}{collapse_marker}  "
             f"{d['latency_ms']:>7.0f}  "
             f"{p['latency_ms']:>7.0f}"
         )
 
     s = data["summary"]
     print("-" * 110)
+    if data.get("aborted"):
+        print(f"  *** ABORTED: {data['abort_reason']} (ran {data['turns_run']}/{data['turns_total']} turns) ***")
     print(f"  Total direct input tokens: {s['total_direct_input_tokens']:,}")
     print(f"  Total proxy input tokens:  {s['total_proxy_input_tokens']:,}")
     print(f"  Total savings:             {s['total_savings_tokens']:,}")
     print(f"  Overall savings ratio:     {s['overall_savings_ratio']:.1%}")
+    if s.get("collapsed_turns"):
+        print(f"  Output collapses:          {len(s['collapsed_turns'])} turns ({s['collapse_rate']:.0%}) — turns {s['collapsed_turns']}")
 
     if data.get("quality"):
         q = data["quality"]

@@ -144,14 +144,15 @@ How the chat handler resolved context for a request.
 | `passthrough` | Neo4j not configured — always passthrough |
 
 ### Metrics (in-memory, process-level)
-`_metrics` dict in `src/main.py` — exposed via `GET /metrics`:
+`_metrics` dict in `archolith_proxy/metrics.py` — exposed via `GET /metrics`:
 
 | Key | Type | Description |
 |-----|------|-------------|
 | total_requests | int | All HTTP requests processed |
 | assembly_modes | dict[str, int] | Count per assembly_mode |
-| extraction_successes | int | Successful fact extractions |
-| extraction_failures | int | Failed fact extractions |
+| extraction_successes | int | Turns where extraction produced and stored one or more facts |
+| extraction_empties | int | Turns where extraction ran successfully but produced zero facts |
+| extraction_failures | int | Extraction task failures or unavailable extractor responses |
 | upstream_errors | int | Upstream API errors (5xx, timeout, connection) |
 | neo4j_errors | int | Neo4j query failures |
 | active_sessions | int | Sessions currently in graph |

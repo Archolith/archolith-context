@@ -75,11 +75,18 @@ repeated patterns (repeated grep results, repeated file content fragments) are c
 across turns.
 
 **Shape:**
-- Instantiate `DedupeTracker` (from `archolith_rtk`) at the start of `rewrite_messages()`
-  and thread it through the middle-section tool compression pass
-- The DedupeTracker is already cross-turn aware; passing it across the middle loop is
-  the main change
-- Requires archolith-rtk to expose `DedupeTracker` publicly (check `__init__.py` exports)
+- In `rewrite_messages()`, replace the manual `_is_compressible_tool` char-truncation
+  loop with a call to `filter_output(content, tool=tool_name)` per tool-role middle
+  message — this routes each result through the correct category filter and the
+  singleton `DedupeTracker` simultaneously
+- `DedupeTracker` is already public in archolith-rtk (`__all__`); no changes to
+  archolith-rtk required — all work is in archolith-context `rewrite.py` and `rtk.py`
+- Add `filter_middle_tool_results(messages) -> list[dict]` to `rtk.py` as the
+  fail-open adapter (analogous to `filter_tool_messages` but scoped to middle-section
+  non-tail messages)
+- The singleton `DedupeTracker` is process-level, so cross-turn dedup between the
+  middle pass and the later `filter_request_body` pass is automatic — no explicit
+  threading required
 - Covered by the `archolith-rtk-cross-turn-dedupe-plan` workspace plan
 
 ---

@@ -16,11 +16,6 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-
-[project.urls]
-Homepage = "https://archolith.dev"
-Repository = "https://github.com/archolith/archolith-proxy"
-Documentation = "https://github.com/archolith/archolith-proxy#readme"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
@@ -34,6 +29,11 @@ dependencies = [
     "structlog>=24.4.0",
     "ladybug>=0.16.0",
 ]
+
+[project.urls]
+Homepage = "https://archolith.dev"
+Repository = "https://github.com/archolith/archolith-proxy"
+Documentation = "https://github.com/archolith/archolith-proxy#readme"
 
 [project.optional-dependencies]
 dev = [
