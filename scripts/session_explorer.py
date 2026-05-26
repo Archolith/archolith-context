@@ -508,6 +508,30 @@ details.curator-details:not([open]) .curator-expand-btn::after { content: " ▼"
 .legend-item { display: flex; align-items: center; gap: 5px; }
 .legend-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
 
+/* Messages breakdown */
+.msgs-breakdown { margin-top: 4px; }
+.msg-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
+.msg-row:last-child { border-bottom: none; }
+.msg-role-badge {
+  font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px;
+  width: 160px; min-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: center; flex-shrink: 0;
+}
+.msg-role-system  { background: var(--green-dim);  color: var(--green);  border: 1px solid var(--green-border); }
+.msg-role-user    { background: var(--indigo-dim); color: var(--indigo); border: 1px solid var(--indigo-border); }
+.msg-role-assistant { background: var(--purple-dim); color: var(--purple); border: 1px solid var(--purple-border); }
+.msg-role-tool    { background: var(--orange-dim); color: var(--orange); border: 1px solid var(--orange-border); }
+.msg-tok-count { font-size: 10px; color: var(--text3); width: 54px; text-align: right; flex-shrink: 0; font-family: monospace; }
+.msg-tok-count.hot  { color: var(--red); font-weight: 700; }
+.msg-tok-count.warm { color: var(--yellow); }
+.msg-bar-wrap { width: 140px; flex-shrink: 0; background: var(--bg3); border-radius: 2px; height: 6px; overflow: hidden; }
+.msg-bar { height: 100%; border-radius: 2px; background: var(--text3); min-width: 2px; }
+.msg-bar.hot  { background: var(--red); }
+.msg-bar.warm { background: var(--yellow); }
+.msg-preview { flex: 1; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; cursor: pointer; font-family: monospace; }
+.msg-preview:hover { color: var(--text2); }
+.msg-preview.expanded { white-space: pre-wrap; overflow: visible; color: var(--text2); }
+
 /* Assembly reason */
 .reason-text { font-size: 11px; color: var(--text3); font-style: italic; margin-top: 4px; margin-bottom: 6px; }
 
@@ -777,6 +801,96 @@ function renderChart() {
   `;
 }
 
+// ── Messages Breakdown ────────────────────────────────────────────────────────
+
+function renderMessagesBreakdown(msgs) {
+  if (!msgs || !msgs.length) return '';
+
+  // Build tool_call_id → function name map so tool results can show the tool name
+  const toolCallNames = {};
+  for (const msg of msgs) {
+    if (msg.role === 'assistant' && msg.tool_calls) {
+      for (const tc of (msg.tool_calls || [])) {
+        if (tc.id && tc.function && tc.function.name) {
+          toolCallNames[tc.id] = tc.function.name;
+        }
+      }
+    }
+  }
+
+  // Rough token estimate: ~4 chars per token
+  function estimateTok(msg) {
+    let chars = 0;
+    if (typeof msg.content === 'string') chars += msg.content.length;
+    else if (Array.isArray(msg.content)) {
+      chars += msg.content.reduce((s, p) => s + (p && typeof p === 'object' ? (p.text || '').length : 0), 0);
+    }
+    for (const tc of (msg.tool_calls || [])) {
+      chars += (tc.function && tc.function.name ? tc.function.name.length : 0);
+      chars += (tc.function && tc.function.arguments ? tc.function.arguments.length : 0);
+    }
+    return Math.max(1, Math.ceil(chars / 4));
+  }
+
+  function msgLabel(msg) {
+    const role = msg.role || 'unknown';
+    if (role === 'assistant' && msg.tool_calls && msg.tool_calls.length) {
+      const names = msg.tool_calls.map(tc => (tc.function && tc.function.name) || '?').join(', ');
+      return `assistant → ${names}`;
+    }
+    if (role === 'tool') {
+      const name = msg.name || toolCallNames[msg.tool_call_id] || msg.tool_call_id || 'result';
+      return `tool ← ${name}`;
+    }
+    return role;
+  }
+
+  function msgPreview(msg) {
+    if (msg.tool_calls && msg.tool_calls.length) {
+      return msg.tool_calls.map(tc => {
+        const name = (tc.function && tc.function.name) || '?';
+        const args = (tc.function && tc.function.arguments) ? tc.function.arguments.slice(0, 80) : '';
+        return `${name}(${args})`;
+      }).join('; ');
+    }
+    if (typeof msg.content === 'string') return msg.content;
+    if (Array.isArray(msg.content)) return msg.content.map(p => (p && p.text) || '').join('');
+    return '';
+  }
+
+  const tokCounts = msgs.map(estimateTok);
+  const total = tokCounts.reduce((a, b) => a + b, 0);
+  const maxTok = Math.max(...tokCounts, 1);
+  // "hot" = top cost contributor; "warm" = notable but not worst
+  const hotThreshold  = Math.max(400, total * 0.15);
+  const warmThreshold = Math.max(150, total * 0.07);
+
+  let html = `<div class="msgs-breakdown">`;
+  html += `<div style="font-size:10px;color:var(--text3);margin-bottom:6px">${msgs.length} messages · ${fmt(total)}t total (estimated)</div>`;
+
+  msgs.forEach((msg, i) => {
+    const tok = tokCounts[i];
+    const barPct = (tok / maxTok * 100).toFixed(1);
+    const isHot  = tok >= hotThreshold;
+    const isWarm = !isHot && tok >= warmThreshold;
+    const heatCls = isHot ? 'hot' : isWarm ? 'warm' : '';
+    const role = (msg.role || 'unknown');
+    const label = msgLabel(msg);
+    const preview = msgPreview(msg).replace(/\n+/g, ' ↵ ').slice(0, 300);
+    const pid = `mp${i}-${Math.random().toString(36).slice(2,7)}`;
+
+    html += `<div class="msg-row">
+  <span class="msg-role-badge msg-role-${esc(role)}" title="${esc(label)}">${esc(label.slice(0, 26))}</span>
+  <span class="msg-tok-count ${heatCls}">${fmt(tok)}t</span>
+  <div class="msg-bar-wrap"><div class="msg-bar ${heatCls}" style="width:${barPct}%"></div></div>
+  <span class="msg-preview" id="${pid}" onclick="this.classList.toggle('expanded')" title="click to expand/collapse">${esc(preview)}</span>
+</div>`;
+  });
+
+  html += `</div>`;
+  return html;
+}
+
 // ── Graph Context ─────────────────────────────────────────────────────────────
 
 function renderGraphContext(tr) {
@@ -911,6 +1025,11 @@ function renderTurnCard(turnRecord, idx) {
   } else if (assemblyReasonHtml) {
     ctxHtml = assemblyReasonHtml;
   }
+
+  // Messages breakdown — per-message token estimate; click preview to expand
+  const msgsHtml = origMsgs && origMsgs.length
+    ? `<div class="section-label">Messages Breakdown</div>` + renderMessagesBreakdown(origMsgs)
+    : '';
 
   // Graph context — facts/files/decisions pulled from graph and injected
   const graphCtxHtml = renderGraphContext(tr);
@@ -1050,6 +1169,7 @@ function renderTurnCard(turnRecord, idx) {
   </div>
   <div id="${bodyId}" class="turn-body ${openByDefault ? 'open' : ''}">
     ${ctxHtml}
+    ${msgsHtml}
     ${curatorHtml}
     ${rewriteHtml}
     ${graphCtxHtml}
