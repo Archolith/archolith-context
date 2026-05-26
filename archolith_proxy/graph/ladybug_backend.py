@@ -155,14 +155,33 @@ class LadybugBackend:
     async def connect(self) -> None:
         import os
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
-        self._db = ladybug.Database(self._db_path)
+        # throw_on_wal_replay_failure=False: if a previous force-kill left the WAL
+        # in a partially-written state, LadybugDB replays as far as it can and opens
+        # the DB in a consistent (though possibly slightly stale) state rather than
+        # throwing and refusing to open.  Data loss is bounded to transactions that
+        # were in-flight at kill time — acceptable for session context.
+        # A clean SIGTERM shutdown still flushes fully via close(), so there is no
+        # data loss on graceful restarts.
+        self._db = ladybug.Database(self._db_path, throw_on_wal_replay_failure=False)
         self._aconn = ladybug.AsyncConnection(
             self._db, max_concurrent_queries=self._max_concurrent
         )
         self._ready = True
         # Create tables on first connect (matches Neo4j connect() calling ensure_indexes())
         await self.ensure_schema()
-        logger.info("ladybug_connected", path=self._db_path, max_concurrent=self._max_concurrent)
+
+        # Startup health probe — confirm the DB is actually queryable after WAL replay.
+        # Logs a warning (not error) if the probe fails; proxy continues in degraded mode.
+        try:
+            await self._aconn.execute("RETURN 1 AS ok")
+            logger.info("ladybug_connected", path=self._db_path, max_concurrent=self._max_concurrent)
+        except Exception as e:
+            logger.warning(
+                "ladybug_connected_degraded",
+                path=self._db_path,
+                error=str(e),
+                note="DB opened after WAL replay but health probe failed — context may be incomplete",
+            )
 
     async def close(self) -> None:
         if self._aconn:
