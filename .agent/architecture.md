@@ -17,6 +17,34 @@ better continuity in long coding sessions, and — critically — a coding agent
 never re-reads a file it already knows, never loses a decision it has already made,
 and never degrades from context bloat.
 
+## Archolith Ecosystem
+
+archolith-context is one module in a broader end-to-end AI tooling platform.
+Each module is a standalone Python library — installable independently, with
+zero knowledge of its siblings.  archolith-context is the orchestration layer
+that wires them together at the proxy boundary.
+
+| Module | Role | Dependency model |
+|--------|------|-----------------|
+| **archolith-rtk** | Token reduction — filter noise, shrink oversized tool results | Optional peer; fail-open lazy import |
+| **archolith-memory** | Long-term memory — cross-session fact storage and retrieval | Optional peer; fail-open lazy import (planned) |
+| **archolith-context** | Proxy — orchestrates session context, extraction, curation | Orchestrator; imports peers when available |
+
+**Design constraint (applies to all modules):**
+- Each module ships as `pip install archolith-<name>` with no mandatory dependencies on siblings
+- archolith-context treats peers as optional: all peer integration paths are fail-open
+- Peers have zero dependency on archolith-context and are usable standalone
+- MCP servers (when they exist) are thin wrappers around the library — not the primary integration surface
+- The proxy is the primary integration surface: it imports libraries directly, not via HTTP or tool calls
+
+**archolith-memory integration shape (planned):**
+- Read path: proxy queries `archolith_memory.recall(query)` before each upstream call and injects relevant long-term memories into context automatically — no agent tool call required
+- Write path: proxy calls `archolith_memory.store(fact, confidence)` from the promotion pipeline for high-confidence session facts — no agent tool call required
+- Explicit write: MCP server exposes `add_memory` / `add_todo` as thin wrappers for agent-initiated writes when the agent wants to tag something important
+- The MCP server's recall tools (`recall_memories`, `build_context`) become optional/legacy once proxy-side injection is live
+
+---
+
 ## Technical Thesis
 
 The system is built around a simple claim: linear transcript replay is the wrong

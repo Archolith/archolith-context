@@ -1,5 +1,29 @@
 # Changelog — cth.context-engine
 
+## 2026-05-26 — Archolith Ecosystem Docs + Per-Tool Extraction Plan
+
+- **`.agent/architecture.md`**: Added *Archolith Ecosystem* section — archolith-rtk / archolith-memory / archolith-context module table with roles and dependency models. Design constraints: standalone `pip install`, fail-open peer imports, MCP as thin wrapper. Captures planned archolith-memory integration shape (read=proxy recall, write=promotion pipeline, explicit=MCP).
+- **`.agent/mcp-extractor-ideas.md`**: New reference doc for user-deployment-specific MCP extractors (cth.mcp.delegate, mcp__vps, mcp__sage-wiki) and the `register_from_config()` extension point design. Agnostic extractors remain in the main plan.
+- **`.agent/plans/archolith-per-tool-extraction-plan.md`** (workspace root): Full OOP per-tool extraction design — `ToolExtractor` ABC, `ToolCallRecord`, `PartialExtractionResult`, `ToolExtractorRegistry` with prefix-match routing. 10 concrete extractors (Read, Bash, Grep, Glob, LS, Find, WebSearch, WebFetch, WriteEdit, MemoryRecall, Default), async fan-out orchestrator, `BASH_SYSTEM_PROMPT` + `WEB_FETCH_SYSTEM_PROMPT`, config flag `per_tool_extraction_enabled=False`. Status: DRAFT — not yet implemented.
+
+## 2026-05-26 — Semantic Search Over Facts (13th Curator Tool)
+
+- **`archolith_proxy/curator/tools.py`**: Added `search_facts_semantic(session_id, query, limit=10)` — cosine similarity over stored fact embeddings. Inline `_cosine()` helper. Creates `httpx.AsyncClient` on demand. Three-tier fallback: semantic → substring (no key or embed fails) → empty. Threshold 0.05 filters near-orthogonal facts. Added to `TOOL_HANDLERS`.
+- **`archolith_proxy/curator/schemas.py`**: Added schema for `search_facts_semantic` between `search_facts` and `get_session_goal`. Parameters: `query` (required), `limit` (optional, default 10).
+- **`archolith_proxy/curator/prompts.py`**: Added tool to available list. New rule 5: prefer `search_facts_semantic` when terminology may differ from stored facts; do not call both for the same query.
+- **`tests/test_curator_tools.py`**: 15 new tests — `TestSearchFacts` (5), `TestSearchFactsSemantic` (7), `TestCosineLogic` (3). Injects openai stub to prevent local shadow import conflict.
+- **`.agent/ROADMAP.md`**: Promoted to Done tier (commit `c149306`). 534 tests passing.
+
+## 2026-05-26 — File Structure Index on Cache Ingest (12th Curator Tool)
+
+- **`archolith_proxy/graph/ladybug_backend.py`**: Added `FileOutline` node table (`outline_id`, `session_id`, `path`, `outline`, `last_updated_turn`). Added `upsert_file_outline()` and `get_file_outline()` methods.
+- **`archolith_proxy/graph/protocol.py`**: Added `upsert_file_outline` and `get_file_outline` to the `GraphBackend` protocol.
+- **File cache ingest (`chat.py`)**: `_upsert_file_cache()` now calls `_build_outline()` after writing `FileContent` — AST (ast.parse) for Python, regex fallback for all other file types. Outline captures function/class definitions with line numbers.
+- **`archolith_proxy/curator/tools.py`**: Added `get_file_outline(session_id, path)` as the 12th curator tool. Returns the stored symbol index for large files so the curator can call `get_file_lines` for targeted ranges rather than fetching the full file.
+- **`archolith_proxy/curator/schemas.py`**: Added schema for `get_file_outline`.
+- **`archolith_proxy/curator/prompts.py`**: Rule 3 updated — for files over 100 lines, call `get_file_outline` first, then `get_file_lines` for the relevant range. Skip outline only for data/config files with no symbols.
+- **`.agent/ROADMAP.md`**: Promoted to Done tier (commit `94e182d`). 519 tests passing.
+
 ## 2026-05-26 — RTK Deep Integration + Curator One-Liners
 
 ### RTK integration (archolith_proxy/rtk.py, chat.py, rewrite.py)

@@ -60,6 +60,76 @@ An explicit choice made during the session.
 | turn | int | When decided |
 | superseded_by | str? | Later decision that replaced this |
 
+### FileContent
+Cached file content stored when the agent reads or writes a file. Enables the curator to serve `get_file` and `get_file_lines` without re-reading from disk.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| file_id | str | Unique ID (`sha256` of session_id + path) |
+| session_id | str | Owning session |
+| path | str | Absolute or project-relative path |
+| content | str | Full file text |
+| sha256 | str | SHA-256 hash of content |
+| line_count | int | Number of lines |
+| last_updated_turn | int | Turn number of last cache write |
+| created_at | datetime | First ingested |
+
+> **Ingest triggers:** Write/create_file tool call args (direct content capture) and Read tool results (content from proxy intercept or result pass-through).
+
+### FileOutline
+Symbol index for a cached file. Built on ingest via AST (Python) or regex fallback (other types). Allows the curator to locate functions/classes before fetching full content.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| outline_id | str | Unique ID |
+| session_id | str | Owning session |
+| path | str | Path matching the `FileContent` entry |
+| outline | str | Newline-delimited symbol list with line numbers |
+| last_updated_turn | int | Turn number of last outline write |
+
+> **Format:** Each line: `<type> <name> L<start>[-<end>]` e.g. `def authenticate L42-58`, `class AuthService L10-140`. Cap ~100 symbols.
+
+### Checkpoint
+Single-record work state for the session. Overwritten on every extraction turn. Used by the curator's `get_checkpoint` tool and pre-injected into the curator prompt to save one tool-call iteration.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| session_id | str | Primary key — one record per session |
+| summary | str | One sentence: what state work is in right now |
+| next_step | str? | Most important next action, or null |
+| confidence | float | Extractor confidence in this summary (0–1) |
+| source_turn | int | Turn number that produced this checkpoint |
+| updated_at | datetime | Last write timestamp |
+
+### Issue
+An open or resolved blocker/error discovered during the session.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| issue_id | str | Unique ID |
+| session_id | str | Owning session |
+| status | str | `open` or `resolved` |
+| summary | str | Description of the problem |
+| related_file | str? | File path if directly relevant |
+| related_command | str? | Command that surfaced the issue |
+| resolution_ref | str? | Fact ID or description of the fix (if resolved) |
+| source_turn | int | Turn where issue was first detected |
+| resolved_turn | int? | Turn where issue was resolved (null if still open) |
+| created_at | datetime | When first recorded |
+
+### Verification
+A test run, build, or API call with an observable outcome — recorded when the agent executes a command with known pass/fail semantics.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| verification_id | str | Unique ID |
+| session_id | str | Owning session |
+| command | str | Exact command that was run |
+| status | str | `pass`, `fail`, or `partial` |
+| summary | str | What was tested and the key outcome |
+| source_turn | int | Turn where verification ran |
+| created_at | datetime | When recorded |
+
 ## Graph Edges
 
 | Edge Type | From → To | Meaning |
@@ -124,13 +194,16 @@ class AssembledContext(BaseModel):
 What the extractor produces after parsing a response.
 
 ```python
-@dataclass
-class ExtractionResult:
-    facts: list[Fact]
-    files_touched: list[str]
-    decisions: list[Decision]
-    invalidated_fact_ids: list[str]  # facts superseded by this turn
+class ExtractionResult(BaseModel):
+    facts: list[dict]               # [{content, fact_type, confidence}]
+    files_touched: list[str]        # file paths
+    decisions: list[dict]           # [{summary, rationale}]
+    invalidated_fact_ids: list[str] # description strings matched via Jaccard similarity
     turn_number: int
+    session_goal: str | None        # inferred or updated goal
+    checkpoint: dict | None         # {summary, next_step, confidence}
+    issues: list[dict]              # [{summary, status, related_file, related_command}]
+    verifications: list[dict]       # [{command, status, summary}]
 ```
 
 ### AssemblyMode
@@ -159,19 +232,6 @@ How the chat handler resolved context for a request.
 | token_savings_estimated | int | Estimated tokens saved by context assembly |
 | total_input_tokens_seen | int | Total input tokens across all requests |
 | uptime_s | float | Seconds since process start |
-
-### ExtractionResult
-What the extractor produces after parsing a response.
-
-```python
-@dataclass
-class ExtractionResult:
-    facts: list[Fact]
-    files_touched: list[str]
-    decisions: list[Decision]
-    invalidated_fact_ids: list[str]  # facts superseded by this turn
-    turn_number: int
-```
 
 ## Repository / Storage
 
