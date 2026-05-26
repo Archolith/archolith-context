@@ -209,9 +209,30 @@ async def select_relevant_turns(
 
 
 # Tool name → implementation mapping (used by loop.py for dispatch)
+async def get_file_outline(session_id: str, path: str = "", **kwargs) -> str:
+    """Get the structural outline of a cached file — functions, classes, and methods
+    with their line numbers.
+
+    Use this before get_file_lines on any file over 100 lines to find the exact
+    line range you need without reading the full content.
+
+    Returns a list of 'line N: def/class/function <name>' entries, or a message
+    if the file is not cached or has no indexed symbols.
+    """
+    if not path:
+        return "(no path specified — use list_session_files to see available files)"
+
+    outline = await get_backend().get_file_outline(session_id, path)
+    if not outline:
+        return f"(no outline available for: {path} — file may not be cached or has no symbols)"
+
+    return outline
+
+
 TOOL_HANDLERS: dict[str, callable] = {
     "list_session_files": list_session_files,
     "get_file": get_file,
+    "get_file_outline": get_file_outline,
     "get_file_lines": get_file_lines,
     "search_facts": search_facts,
     "get_session_goal": get_session_goal,

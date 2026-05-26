@@ -40,6 +40,28 @@ ALL_CURATOR_TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "get_file_outline",
+            "description": (
+                "Get the structural outline of a cached file — all functions, classes, and "
+                "async functions with their line numbers. Call this BEFORE get_file_lines on "
+                "any file over 100 lines to identify the exact line range you need without "
+                "reading the full content. Returns 'line N: def/class <name>' entries."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path as it appears in list_session_files",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_file_lines",
             "description": "Retrieve specific line range from cached file content. Prefer this over get_file for large files.",
             "parameters": {

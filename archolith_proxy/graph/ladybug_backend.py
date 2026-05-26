@@ -92,6 +92,14 @@ CREATE NODE TABLE IF NOT EXISTS FileContent(
     created_at        TIMESTAMP
 );
 
+CREATE NODE TABLE IF NOT EXISTS FileOutline(
+    outline_id        STRING PRIMARY KEY,
+    session_id        STRING,
+    path              STRING,
+    outline           STRING,
+    last_updated_turn INT64
+);
+
 CREATE NODE TABLE IF NOT EXISTS Checkpoint(
     session_id   STRING PRIMARY KEY,
     summary      STRING,
@@ -822,6 +830,72 @@ class LadybugBackend:
         if deleted:
             logger.debug("file_cache_deleted", path=path, session_id=session_id)
         return deleted
+
+    # ── File Outline Index ─────────────────────────────────────────────
+
+    async def upsert_file_outline(
+        self, session_id: str, path: str, outline: str, turn: int,
+    ) -> None:
+        """Store or update the structural outline for a cached file.
+
+        Called alongside upsert_file_content whenever a file is ingested.
+        Outline is a newline-separated list of 'line N: def foo' entries.
+        """
+        existing = await self._execute(
+            "MATCH (fo:FileOutline {session_id: $session_id, path: $path}) RETURN fo.outline_id AS oid",
+            {"session_id": session_id, "path": path},
+        )
+        if existing:
+            oid = existing[0].get("oid")
+            await self._execute(
+                """
+                MATCH (fo:FileOutline {outline_id: $oid})
+                SET fo.outline = $outline, fo.last_updated_turn = $turn
+                """,
+                {"oid": oid, "outline": outline, "turn": turn},
+            )
+        else:
+            oid = "fo" + uuid4().hex[:14]
+            await self._execute(
+                """
+                CREATE (fo:FileOutline {
+                    outline_id: $oid, session_id: $sid, path: $path,
+                    outline: $outline, last_updated_turn: $turn
+                })
+                """,
+                {"oid": oid, "sid": session_id, "path": path,
+                 "outline": outline, "turn": turn},
+            )
+        logger.debug("file_outline_upserted", path=path, session_id=session_id)
+
+    async def get_file_outline(self, session_id: str, path: str) -> str | None:
+        """Retrieve the structural outline for a cached file, or None if unavailable.
+
+        Tries exact path match first, then suffix fallback (same logic as
+        get_file_content) to handle absolute-vs-relative path mismatches.
+        """
+        rows = await self._execute(
+            "MATCH (fo:FileOutline {session_id: $session_id, path: $path}) RETURN fo.outline AS outline",
+            {"session_id": session_id, "path": path},
+        )
+        if rows:
+            return rows[0].get("outline") or None
+
+        # Suffix fallback
+        norm_query = path.replace("\\", "/").lstrip("/")
+        if not norm_query:
+            return None
+        all_files = await self.list_cached_files(session_id)
+        for f in all_files:
+            stored = f.get("path", "").replace("\\", "/").lstrip("/")
+            if stored.endswith(norm_query) or norm_query.endswith(stored):
+                rows2 = await self._execute(
+                    "MATCH (fo:FileOutline {session_id: $session_id, path: $path}) RETURN fo.outline AS outline",
+                    {"session_id": session_id, "path": f.get("path", "")},
+                )
+                if rows2:
+                    return rows2[0].get("outline") or None
+        return None
 
     # ── Checkpoint ─────────────────────────────────────────────────────
 

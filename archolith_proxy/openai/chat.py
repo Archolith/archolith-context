@@ -1529,6 +1529,55 @@ async def _handle_non_streaming(
     )
 
 
+def _build_outline(content: str, path: str) -> str:
+    """Build a compact structural outline of a source file.
+
+    Returns a newline-separated list of 'line N: <kind> <name>' entries
+    sorted by line number.  Returns empty string when no symbols are found
+    or when parsing fails.
+
+    Python files: parsed via stdlib ``ast`` for accurate results.
+    All others: regex-based pattern matching (function, class, const).
+    """
+    symbols: list[tuple[int, str]] = []
+
+    if path.endswith(".py"):
+        try:
+            import ast as _ast
+            tree = _ast.parse(content)
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.AsyncFunctionDef):
+                    symbols.append((node.lineno, f"async def {node.name}"))
+                elif isinstance(node, _ast.FunctionDef):
+                    symbols.append((node.lineno, f"def {node.name}"))
+                elif isinstance(node, _ast.ClassDef):
+                    symbols.append((node.lineno, f"class {node.name}"))
+        except Exception:
+            pass  # Fall through to regex on SyntaxError or any other failure
+
+    if not symbols:
+        import re
+        _PATTERNS = [
+            (re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)"), "function"),
+            (re.compile(r"^\s*(?:export\s+(?:default\s+)?)?class\s+(\w+)"), "class"),
+            (re.compile(r"^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\("), "const"),
+            (re.compile(r"^\s*def\s+(\w+)"), "def"),
+            (re.compile(r"^\s*class\s+(\w+)"), "class"),
+        ]
+        for i, line in enumerate(content.split("\n"), 1):
+            for pattern, kind in _PATTERNS:
+                m = pattern.match(line)
+                if m:
+                    symbols.append((i, f"{kind} {m.group(1)}"))
+                    break
+
+    if not symbols:
+        return ""
+
+    symbols.sort(key=lambda x: x[0])
+    return "\n".join(f"line {ln}: {sym}" for ln, sym in symbols)
+
+
 async def _upsert_file_cache(session_id: str, file_reads: list[dict], turn: int) -> None:
     """Store file-read content into the graph backend's file content cache.
 
@@ -1551,6 +1600,19 @@ async def _upsert_file_cache(session_id: str, file_reads: list[dict], turn: int)
             )
         except Exception:
             logger.warning("file_cache_upsert_failed", path=fr["path"], session_id=session_id, exc_info=True)
+            continue
+
+        # Build and store structural outline alongside content.
+        # Fail-open: a missing or empty outline is non-fatal.
+        outline = _build_outline(content, fr["path"])
+        if outline:
+            try:
+                await backend.upsert_file_outline(
+                    session_id=session_id, path=fr["path"],
+                    outline=outline, turn=turn,
+                )
+            except Exception:
+                logger.debug("file_outline_upsert_failed", path=fr["path"], session_id=session_id)
 
 
 def _extract_file_writes(messages: list[dict]) -> list[dict]:

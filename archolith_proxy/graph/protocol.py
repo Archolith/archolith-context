@@ -223,6 +223,16 @@ class GraphBackend(Protocol):
         """Retrieve a line range from cached file content (1-indexed, inclusive)."""
         ...
 
+    async def upsert_file_outline(
+        self, session_id: str, path: str, outline: str, turn: int,
+    ) -> None:
+        """Store or update a file's structural outline (line N: def foo entries)."""
+        ...
+
+    async def get_file_outline(self, session_id: str, path: str) -> str | None:
+        """Get a file's structural outline, or None if not indexed."""
+        ...
+
     async def list_cached_files(self, session_id: str) -> list[dict]:
         """List all cached files for a session."""
         ...
