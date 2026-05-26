@@ -224,6 +224,9 @@ class Neo4jBackend:
     async def list_cached_files(self, session_id: str) -> list[dict]:
         return []
 
+    async def delete_file_content(self, session_id: str, path: str) -> bool:
+        return False
+
     # ── Checkpoint / Issues / Verifications (LadybugDB-only in MVP) ───
 
     async def upsert_checkpoint(

@@ -227,6 +227,10 @@ class GraphBackend(Protocol):
         """List all cached files for a session."""
         ...
 
+    async def delete_file_content(self, session_id: str, path: str) -> bool:
+        """Delete a cached file entry. Returns True if a row was deleted."""
+        ...
+
     # ── Checkpoint ─────────────────────────────────────────────────────
 
     async def upsert_checkpoint(

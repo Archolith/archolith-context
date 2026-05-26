@@ -117,6 +117,10 @@ class Settings(BaseSettings):
     recall_file_max_bytes: int = 24_000  # secondary byte cap
     recall_file_context_lines: int = 3  # padding lines around a symbol (Phase 3)
 
+    # Transparent native Read call interception — serves Read results from file cache
+    # when the file has been previously read this session. Rides on synthetic_tools_enabled.
+    native_read_intercept_enabled: bool = True
+
     # Context assembly aggressiveness
     # B: drop the entire middle when assembled context is present — the assembly
     #    digest replaces raw history; no need to keep compressed turns alongside it.

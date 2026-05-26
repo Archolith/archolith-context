@@ -735,6 +735,21 @@ class LadybugBackend:
             {"session_id": session_id},
         )
 
+    async def delete_file_content(self, session_id: str, path: str) -> bool:
+        """Delete a cached file entry. Returns True if a row was deleted."""
+        rows = await self._execute(
+            """
+            MATCH (fc:FileContent {session_id: $session_id, path: $path})
+            DELETE fc
+            RETURN count(fc) AS deleted
+            """,
+            {"session_id": session_id, "path": path},
+        )
+        deleted = bool(rows and rows[0].get("deleted"))
+        if deleted:
+            logger.debug("file_cache_deleted", path=path, session_id=session_id)
+        return deleted
+
     # ── Checkpoint ─────────────────────────────────────────────────────
 
     async def upsert_checkpoint(

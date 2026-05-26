@@ -42,6 +42,10 @@ _metrics: dict = {
     "synthetic_tool_failures": 0,
     "synthetic_tool_successes": 0,
     "synthetic_injections_skipped": 0,
+    "native_read_cache_hits": 0,
+    "native_read_cache_misses": 0,
+    "native_read_intercept_errors": 0,
+    "file_cache_invalidations": 0,
 }
 
 

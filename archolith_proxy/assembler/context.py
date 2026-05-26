@@ -188,7 +188,6 @@ def _format_session_overview(
     decisions: list[dict],
     turn_number: int,
     active_fact_count: int = 0,
-    cached_files: list[dict] | None = None,
 ) -> str:
     """Format the stable session overview section.
 
@@ -221,15 +220,6 @@ def _format_session_overview(
             if rationale:
                 line += f" (rationale: {rationale})"
             parts.append(line)
-        parts.append("")
-
-    if cached_files:
-        parts.append("## Cached Files (use recall_file to retrieve without re-reading)")
-        for cf in cached_files[:20]:
-            path = cf.get("path", "?")
-            line_count = cf.get("line_count", 0)
-            last_turn = cf.get("last_updated_turn", 0)
-            parts.append(f"- {path} ({line_count} lines, turn {last_turn})")
         parts.append("")
 
     parts.append(f"Knowledge base: {active_fact_count} active facts | Current turn: {turn_number}")
@@ -291,7 +281,6 @@ def _format_context_block(
     decisions: list[dict],
     turn_number: int,
     active_fact_count: int = 0,
-    cached_files: list[dict] | None = None,
 ) -> tuple[str, float]:
     """Format graph data into a structured context block with three parts.
 
@@ -302,7 +291,7 @@ def _format_context_block(
     Returns:
         Tuple of (formatted_block, compression_ratio).
     """
-    overview = _format_session_overview(goal, files, decisions, turn_number, active_fact_count, cached_files=cached_files)
+    overview = _format_session_overview(goal, files, decisions, turn_number, active_fact_count)
     facts_section, compression_ratio = _format_relevant_facts(facts, turn_number)
 
     block = _MODEL_HINT + "\n\n" + overview + "\n" + facts_section + f"[End of session context — current turn: {turn_number}]"
@@ -530,14 +519,6 @@ async def assemble_context(
         logger.warning("graph_query_failed_decisions", session_id=session_id, error=str(e))
         decisions = []
 
-    # Get cached files — only when synthetic tools are enabled so the hint is actionable
-    cached_files: list[dict] = []
-    if settings.synthetic_tools_enabled and settings.file_cache_enabled:
-        try:
-            cached_files = await get_backend().list_cached_files(session_id)
-        except Exception as e:
-            logger.warning("graph_query_failed_cached_files", session_id=session_id, error=str(e))
-
     # Intent analysis — drives fact selection
     intent = classify_intent(
         user_message=user_message or "",
@@ -583,7 +564,6 @@ async def assemble_context(
         decisions=decisions,
         turn_number=turn_number,
         active_fact_count=len(all_facts),
-        cached_files=cached_files or None,
     )
 
     context_tokens = _estimate_tokens(context_text)

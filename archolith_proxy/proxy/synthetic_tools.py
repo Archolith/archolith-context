@@ -1,26 +1,29 @@
 """Agent-initiated session summary tools.
 
-Injects two synthetic tool definitions into every request when a session is
+Injects a synthetic tool definition into every request when a session is
 active and synthetic_tools_enabled=true:
 
   recall_session_work()   -- structured summary of all work done this session
-  recall_files_read()     -- list of files accessed, to skip redundant re-reads
 
-When the model calls either tool, the proxy intercepts the tool call, generates
+When the model calls the tool, the proxy intercepts the tool call, generates
 a summary from the trace store and graph backend, and re-sends to upstream with
 the synthetic result appended -- exactly like the __archolith_recall pattern.
 
 The model never talks to an external service; the proxy owns the entire response.
 
 Architecture:
-1. inject_synthetic_tools(body) -- add two tool defs before forwarding upstream
-2. Upstream responds with tool_calls containing one of the synthetic names
+1. inject_synthetic_tools(body) -- add tool def before forwarding upstream
+2. Upstream responds with tool_calls containing the synthetic name
 3. handle_non_streaming_synthetic() detects the call, generates the result, re-sends
 4. strip_synthetic_tools / strip_synthetic_from_response clean up so client never
    sees internal tooling
 
 Non-streaming path only (same limitation as __archolith_recall).
 Gated behind SYNTHETIC_TOOLS_ENABLED=true (default false -- enable via .env).
+
+Note: recall_file and recall_files_read have been superseded by transparent
+native Read interception (proxy/tool_intercept.py). The file cache is now
+served transparently when the model calls native Read tools.
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ logger = structlog.get_logger()
 
 # ── Tool names ─────────────────────────────────────────────────────────────────
 
-SYNTHETIC_TOOL_NAMES = {"recall_session_work", "recall_files_read", "recall_file"}
+SYNTHETIC_TOOL_NAMES = {"recall_session_work"}
 
 # ── Tool definitions ───────────────────────────────────────────────────────────
 
@@ -59,57 +62,7 @@ _RECALL_SESSION_WORK_DEF = {
     },
 }
 
-_RECALL_FILES_READ_DEF = {
-    "type": "function",
-    "function": {
-        "name": "recall_files_read",
-        "description": (
-            "Get the list of files that have been read or accessed in this session. "
-            "Use this to avoid re-reading files you already have context for. "
-            "Returns each file path with status (read/modified/created) and the turn "
-            "it was last accessed. If a file appears here, you have recent context on it "
-            "unless you specifically need updated content."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-}
-
-_RECALL_FILE_DEF = {
-    "type": "function",
-    "function": {
-        "name": "recall_file",
-        "description": (
-            "Retrieve cached file content from session memory. "
-            "Use this instead of re-reading files from disk after context compression. "
-            "Provide start_line and end_line for targeted retrieval. "
-            "Without a line range, returns a 10-line preview and the total line count."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "File path exactly as previously read in this session.",
-                },
-                "start_line": {
-                    "type": "integer",
-                    "description": "1-indexed start line (inclusive).",
-                },
-                "end_line": {
-                    "type": "integer",
-                    "description": "1-indexed end line (inclusive).",
-                },
-            },
-            "required": ["path"],
-        },
-    },
-}
-
-SYNTHETIC_TOOL_DEFINITIONS = [_RECALL_SESSION_WORK_DEF, _RECALL_FILES_READ_DEF, _RECALL_FILE_DEF]
+SYNTHETIC_TOOL_DEFINITIONS = [_RECALL_SESSION_WORK_DEF]
 
 
 # ── Injection / stripping ──────────────────────────────────────────────────────
@@ -379,134 +332,6 @@ async def _generate_recall_session_work(session_id: str, turn_number: int) -> st
     return "\n".join(lines)
 
 
-async def _generate_recall_files_read(session_id: str, turn_number: int) -> str:
-    """Generate a list of files accessed this session."""
-    from archolith_proxy.graph.backend import get_backend, is_graph_ready
-    from archolith_proxy.trace.store import get_trace_store
-
-    lines: list[str] = ["## Files Accessed This Session"]
-
-    if not is_graph_ready():
-        lines.append("*(Graph backend unavailable.)*")
-        return "\n".join(lines)
-
-    backend = get_backend()
-
-    # Primary source: file content cache (records actual file reads/writes)
-    try:
-        cached_files = await backend.list_cached_files(session_id)
-    except Exception:
-        cached_files = []
-
-    # Supplement with files_selected from trace store (assembler-selected files)
-    trace_store = get_trace_store()
-    try:
-        turns = await trace_store.get_session_turns(session_id, limit=200)
-    except Exception:
-        turns = []
-
-    # Build a map: path -> {turn, in_cache, line_count}
-    file_map: dict[str, dict] = {}
-    for r in cached_files:
-        p = r.get("path", "")
-        if p:
-            file_map[p] = {
-                "path": p,
-                "turn": r.get("last_updated_turn", 0),
-                "line_count": r.get("line_count"),
-                "cached": True,
-            }
-
-    for t in turns:
-        for f in (t.files_selected or []):
-            p = f.get("path") or f.get("file") or ""
-            if p and p not in file_map:
-                file_map[p] = {
-                    "path": p,
-                    "turn": t.turn_number,
-                    "line_count": None,
-                    "cached": False,
-                }
-
-    if not file_map:
-        lines.append("*(No files have been accessed yet.)*")
-        return "\n".join(lines)
-
-    # Sort by turn ascending
-    sorted_files = sorted(file_map.values(), key=lambda x: x["turn"])
-
-    for info in sorted_files:
-        p = info["path"]
-        tn = info["turn"]
-        lc = info["line_count"]
-        cached = info["cached"]
-        tag = "cached" if cached else "referenced"
-        lc_str = f", {lc} lines" if lc else ""
-        lines.append(f"- `{p}` (turn {tn}, {tag}{lc_str})")
-
-    lines.append(f"\n**Total:** {len(file_map)} files")
-    return "\n".join(lines)
-
-
-async def _generate_recall_file(
-    session_id: str,
-    path: str,
-    start_line: int | None,
-    end_line: int | None,
-) -> str:
-    """Return cached file content for the requested path and optional line range.
-
-    Behavior:
-    - Cache miss: plain message telling the agent to read normally.
-    - No range: 10-line preview + total line count + hint to use a range.
-    - Range provided: numbered lines clamped to recall_file_max_lines.
-    """
-    from archolith_proxy.config import get_settings
-    from archolith_proxy.graph.backend import get_backend, is_graph_ready
-
-    if not path:
-        return "(recall_file: path is required)"
-
-    if not is_graph_ready():
-        return "(recall_file: graph backend unavailable — cannot retrieve cached file)"
-
-    settings = get_settings()
-    backend = get_backend()
-
-    file_info = await backend.get_file_content(session_id, path)
-    if not file_info:
-        return f"(not cached: {path} — read it normally)"
-
-    line_count = file_info.get("line_count", 0)
-    sha_prefix = (file_info.get("sha256") or "")[:8]
-
-    # No range: preview + metadata only
-    if start_line is None and end_line is None:
-        preview_end = min(10, line_count)
-        preview = await backend.get_file_lines(session_id, path, 1, preview_end) or ""
-        return (
-            f"{path} — {line_count} lines (sha256:{sha_prefix})\n\n"
-            f"{preview}\n\n"
-            f"[{line_count} lines total — provide start_line/end_line to retrieve a range]"
-        )
-
-    # Range recall — enforce max_lines cap
-    start = max(1, start_line or 1)
-    raw_end = end_line or (start + settings.recall_file_max_lines - 1)
-    end = min(raw_end, start + settings.recall_file_max_lines - 1)
-
-    result = await backend.get_file_lines(session_id, path, start, end)
-    if not result:
-        return f"(no content in range {start}–{end} for {path})"
-
-    actual_end = min(end, line_count)
-    was_clamped = (end_line is not None) and (end < end_line)
-    header = f"{path} lines {start}–{actual_end} of {line_count} (sha256:{sha_prefix})"
-    if was_clamped:
-        header += f" [clamped to {settings.recall_file_max_lines} lines — request next range to continue]"
-    return f"{header}\n\n{result}"
-
-
 async def handle_synthetic_tool_call(
     session_id: str,
     tool_name: str,
@@ -526,30 +351,6 @@ async def handle_synthetic_tool_call(
                 session_id=session_id, error=str(e), exc_info=True,
             )
             return f"Error generating session work summary: {e}"
-
-    elif tool_name == "recall_files_read":
-        try:
-            return await _generate_recall_files_read(session_id, turn_number)
-        except Exception as e:
-            logger.warning(
-                "synthetic_tool_recall_files_failed",
-                session_id=session_id, error=str(e), exc_info=True,
-            )
-            return f"Error generating files-read list: {e}"
-
-    elif tool_name == "recall_file":
-        call_args = args or {}
-        path = call_args.get("path", "")
-        start_line = call_args.get("start_line")
-        end_line = call_args.get("end_line")
-        try:
-            return await _generate_recall_file(session_id, path, start_line, end_line)
-        except Exception as e:
-            logger.warning(
-                "synthetic_tool_recall_file_failed",
-                session_id=session_id, path=path, error=str(e), exc_info=True,
-            )
-            return f"Error retrieving cached file: {e}"
 
     return f"Unknown synthetic tool: {tool_name}"
 

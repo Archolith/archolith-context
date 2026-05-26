@@ -1403,16 +1403,64 @@ async def _handle_non_streaming(
             )
             # Fall through to use original response
 
+    # Handle native Read tool call interception (transparent cache serving).
+    # Only runs if neither recall nor synthetic produced a final_data.
+    native_intercept_result = None
+    if synthetic_injected and session_id and final_data is None:
+        try:
+            from archolith_proxy.proxy.tool_intercept import handle_native_read_intercept
+
+            native_intercept_result = await handle_native_read_intercept(
+                resp=resp,
+                http_client=request.app.state.http_client,
+                url=url,
+                headers=headers,
+                body=body,
+                session_id=session_id,
+                turn_number=turn_number,
+                original_messages=messages or [],
+            )
+
+            if native_intercept_result.intercepted and native_intercept_result.final_data is not None:
+                final_data = native_intercept_result.final_data
+
+                if trace_builder:
+                    trace_builder.set_response(
+                        status=resp.status_code,
+                        latency_ms=0.0,
+                        output_tokens=None,
+                        response_summary=_extract_response_text(final_data),
+                    )
+
+                response_text = _extract_response_text(final_data)
+                if session_id and response_text:
+                    background_tasks.add_task(
+                        _run_extraction,
+                        client=request.app.state.extractor_client,
+                        session_id=session_id,
+                        turn_number=turn_number,
+                        messages=messages or [],
+                        response_text=response_text,
+                        session_goal=session_goal,
+                        trace_builder=trace_builder,
+                        promotion_service=getattr(request.app.state, "promotion_service", None),
+                    )
+
+        except Exception as e:
+            logger.warning("native_read_interception_failed", session_id=session_id, error=str(e), exc_info=True)
+            # Fall through to use original response
+
     # Live stream: broadcast response event (non-streaming — always, for both recall and normal)
     await broadcast_response(
         session_id=session_id, turn_number=turn_number,
         status=resp.status_code, latency_ms=0.0, output_tokens=None,
     )
 
-    # Schedule extraction for the original response if neither recall nor synthetic was used
+    # Schedule extraction for the original response if no interception was used
     _interception_used = (
         (recall_result and recall_result.recall_used and final_data is not None)
         or (synthetic_result and synthetic_result.synthetic_used and final_data is not None)
+        or (native_intercept_result and native_intercept_result.intercepted and final_data is not None)
     )
     if session_id and not _interception_used:
         try:
@@ -1546,6 +1594,55 @@ async def _upsert_file_cache(session_id: str, file_reads: list[dict], turn: int)
             logger.warning("file_cache_upsert_failed", path=fr["path"], session_id=session_id, exc_info=True)
 
 
+def _invalidate_written_files(messages: list[dict]) -> list[str]:
+    """Return paths of files written/edited in this turn's tool calls."""
+    WRITE_TOOLS = frozenset({"Write", "Edit", "write_file", "edit_file", "create_file"})
+    paths: list[str] = []
+    # Build lookup: tool_call_id → (name, args)
+    call_map: dict[str, tuple[str, dict]] = {}
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            for tc in (msg.get("tool_calls") or []):
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except (KeyError, json.JSONDecodeError):
+                    args = {}
+                call_map[tc["id"]] = (tc["function"]["name"], args)
+    for name, args in call_map.values():
+        if name in WRITE_TOOLS:
+            path = (
+                args.get("file_path") or args.get("path")
+                or args.get("filePath") or args.get("filename")
+                or args.get("target_file") or ""
+            )
+            if path:
+                paths.append(path)
+    return paths
+
+
+async def _invalidate_file_cache(
+    session_id: str, paths: list[str], turn_number: int,
+) -> None:
+    """Remove stale cache entries for files written/edited this turn."""
+    from archolith_proxy.metrics import record_metric
+
+    backend = get_backend()
+    for path in paths:
+        try:
+            deleted = await backend.delete_file_content(session_id, path)
+            if deleted:
+                record_metric("file_cache_invalidations", 1)
+                logger.info(
+                    "file_cache_invalidated",
+                    session_id=session_id, path=path, turn=turn_number,
+                )
+        except Exception:
+            logger.warning(
+                "file_cache_invalidate_failed",
+                session_id=session_id, path=path, exc_info=True,
+            )
+
+
 async def _run_extraction(
     client,
     session_id: str,
@@ -1601,6 +1698,12 @@ async def _run_extraction(
         fc_settings = get_settings()
         if fc_settings.file_cache_enabled:
             try:
+                # Invalidate cache entries for files written/edited this turn
+                # BEFORE upserting new reads (writes invalidate stale reads)
+                written_paths = _invalidate_written_files(messages)
+                if written_paths:
+                    await _invalidate_file_cache(session_id, written_paths, turn_number)
+
                 file_reads = _extract_file_reads(messages)
                 logger.info(
                     "file_cache_extract_result",
