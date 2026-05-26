@@ -1,0 +1,38 @@
+{
+  "name": "config_multireads",
+  "description": "Force repeated reads of config.py across 5 turns to exercise native Read cache interception",
+  "task_prompt": "TURN 1 OF 5\n\nRead archolith_proxy/config.py in full. Count exactly how many fields are defined in the Settings class (not properties, not validators — only class-level fields with type annotations). Output just the count and stop.",
+  "follow_up_turns": [
+    {
+      "message": "TURN 2 OF 5\n\nRe-read archolith_proxy/config.py from scratch. List only the boolean fields (type `bool`). Output each field name and its default value. Do not use your memory of earlier turns — read the file again now.",
+      "send_after_seconds": 60
+    },
+    {
+      "message": "TURN 3 OF 5\n\nRe-read archolith_proxy/config.py from scratch. List only the integer fields (type `int`). Output each field name and its default value. Do not use your memory of earlier turns — read the file again now.",
+      "send_after_seconds": 130
+    },
+    {
+      "message": "TURN 4 OF 5\n\nRe-read archolith_proxy/config.py from scratch. List only the string fields (type `str`). Output each field name and its default value. Do not use your memory of earlier turns — read the file again now.",
+      "send_after_seconds": 200
+    },
+    {
+      "message": "TURN 5 OF 5\n\nRe-read archolith_proxy/config.py one final time. Create scripts/config_audit.py that prints every field name in the Settings class, one per line, with its type and default. The script must import nothing from archolith_proxy — use hardcoded field data from your read. Do not modify any existing file.",
+      "send_after_seconds": 270
+    }
+  ],
+  "total_timeout_seconds": 900,
+  "checkpoints": [
+    {
+      "id": "audit_script_written",
+      "description": "config_audit.py script exists and references Settings fields",
+      "check_after_seconds": 450,
+      "gate": true,
+      "filesystem_checks": [
+        {"path": "scripts/config_audit.py", "exists": true},
+        {"path": "scripts/config_audit.py", "contains": "upstream_api_key"},
+        {"path": "scripts/config_audit.py", "contains": "proxy_port"},
+        {"path": "scripts/config_audit.py", "not_empty": true}
+      ]
+    }
+  ]
+}
