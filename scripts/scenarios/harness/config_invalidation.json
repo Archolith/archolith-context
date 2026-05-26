@@ -1,0 +1,32 @@
+{
+  "name": "config_invalidation",
+  "description": "Smoke test: read config.py, edit it mid-session, then re-read to confirm the proxy serves the new version (cache invalidation path)",
+  "task_prompt": "TURN 1 OF 4\n\nRead archolith_proxy/config.py in full. Report the exact default value of `proxy_port` and `cold_start_turns`. Do not create or modify any files yet. Just output those two values and stop.",
+  "follow_up_turns": [
+    {
+      "message": "TURN 2 OF 4\n\nEdit archolith_proxy/config.py. In the Settings class, add this new field on a new line immediately after the `proxy_port: int = 9800` line:\n\n    smoke_test_marker: str = \"cache_invalidation_test\"\n\nUse the Edit tool. After the edit, re-read archolith_proxy/config.py and confirm the new field is present. Output the exact line you added.",
+      "send_after_seconds": 60
+    },
+    {
+      "message": "TURN 3 OF 4\n\nRe-read archolith_proxy/config.py from scratch now. Find smoke_test_marker and output its default value exactly as it appears in the file. Do not rely on memory — read the file fresh.",
+      "send_after_seconds": 130
+    },
+    {
+      "message": "TURN 4 OF 4\n\nRe-read archolith_proxy/config.py one final time. Count all fields defined in the Settings class and confirm smoke_test_marker is still present with value \"cache_invalidation_test\".",
+      "send_after_seconds": 200
+    }
+  ],
+  "total_timeout_seconds": 600,
+  "checkpoints": [
+    {
+      "id": "config_edited",
+      "description": "config.py was edited and contains the smoke_test_marker field",
+      "check_after_seconds": 200,
+      "gate": true,
+      "filesystem_checks": [
+        {"path": "archolith_proxy/config.py", "contains": "smoke_test_marker"},
+        {"path": "archolith_proxy/config.py", "contains": "cache_invalidation_test"}
+      ]
+    }
+  ]
+}
