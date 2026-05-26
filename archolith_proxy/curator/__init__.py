@@ -59,6 +59,16 @@ async def curate_context(
         logger.warning("curator_no_api_key", session_id=session_id)
         return None
 
+    # Pre-fetch checkpoint so the curator can skip the get_checkpoint tool call.
+    # This saves one full LLM iteration (~1-2s) on every curator run.
+    checkpoint = None
+    try:
+        from archolith_proxy.graph.backend import get_backend, is_graph_ready
+        if is_graph_ready():
+            checkpoint = await get_backend().get_checkpoint(session_id)
+    except Exception:
+        pass  # Non-fatal — curator falls back to calling get_checkpoint itself
+
     # Build prompt — include turn inventory so curator can call select_relevant_turns
     user_prompt = build_curator_user_prompt(
         session_goal,
@@ -66,6 +76,7 @@ async def curate_context(
         messages=messages,
         coherence_tail_size=settings.coherence_tail_size,
         max_tail_messages=settings.max_tail_messages,
+        checkpoint=checkpoint,
     )
 
     # Build OpenAI client

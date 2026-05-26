@@ -1594,6 +1594,56 @@ async def _upsert_file_cache(session_id: str, file_reads: list[dict], turn: int)
             logger.warning("file_cache_upsert_failed", path=fr["path"], session_id=session_id, exc_info=True)
 
 
+def _extract_file_writes(messages: list[dict]) -> list[dict]:
+    """Extract file content from Write/create_file tool call arguments.
+
+    Unlike _extract_file_reads (which reads content from tool *results*),
+    this reads content from tool call *arguments* — Write tools carry the new
+    file content in their input, not their output ("file written successfully").
+
+    Scoped to the most recent assistant message only: older Write calls have
+    already been superseded and their content should not overwrite fresher reads.
+
+    Handles: Write, write, write_file, create_file, create.
+    Skips: Edit — requires applying a patch to cached content (done separately).
+
+    Returns list of {path, content, tool_call_id, tool_name}.
+    """
+    FULL_WRITE_TOOLS = frozenset({"Write", "write", "write_file", "create_file", "create"})
+    results = []
+
+    # Only the most recent assistant message — older writes are stale
+    last_assistant: dict | None = None
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            last_assistant = msg
+    if not last_assistant:
+        return results
+
+    for tc in (last_assistant.get("tool_calls") or []):
+        try:
+            name = tc["function"]["name"]
+            if name not in FULL_WRITE_TOOLS:
+                continue
+            args = json.loads(tc["function"]["arguments"])
+            path = (
+                args.get("file_path") or args.get("path")
+                or args.get("filePath") or args.get("filename")
+                or args.get("target_file") or ""
+            )
+            content = args.get("content") or args.get("file_content") or ""
+            if path and content:
+                results.append({
+                    "path": path,
+                    "content": content,
+                    "tool_call_id": tc.get("id", ""),
+                    "tool_name": name,
+                })
+        except (KeyError, json.JSONDecodeError):
+            continue
+    return results
+
+
 def _invalidate_written_files(messages: list[dict]) -> list[str]:
     """Return paths of files written/edited in this turn's tool calls."""
     WRITE_TOOLS = frozenset({"Write", "Edit", "write", "edit", "write_file", "edit_file", "create_file", "create"})
@@ -1720,6 +1770,22 @@ async def _run_extraction(
                         turn=turn_number,
                         count=len(file_reads),
                         paths=[fr["path"] for fr in file_reads],
+                    )
+
+                # Cache written file content directly from tool arguments.
+                # Write tools carry the new content in their arguments, not their
+                # result ("file written successfully"). This populates the cache
+                # immediately so the curator can serve the fresh content without
+                # waiting for the agent to re-read the file.
+                file_writes = _extract_file_writes(messages)
+                if file_writes:
+                    await _upsert_file_cache(session_id, file_writes, turn_number)
+                    logger.info(
+                        "file_cache_writes_captured",
+                        session_id=session_id,
+                        turn=turn_number,
+                        count=len(file_writes),
+                        paths=[fw["path"] for fw in file_writes],
                     )
             except Exception:
                 logger.warning("file_cache_capture_failed", session_id=session_id, turn=turn_number, exc_info=True)

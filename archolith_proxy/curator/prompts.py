@@ -12,7 +12,7 @@ list_session_files, get_file, get_file_lines, search_facts,
 get_session_goal, get_recent_decisions, get_touched_files, select_relevant_turns.
 
 Rules:
-1. Start with get_checkpoint — it tells you where the session stands in one call.
+1. The checkpoint is pre-loaded in the user prompt — skip get_checkpoint unless you need a refresh after several tool calls.
 2. Use get_open_issues and get_last_verification when the question involves errors or tests.
 3. Use get_file_lines, not get_file, for any file over 50 lines.
 4. Retrieve only the sections directly relevant to the current question.
@@ -65,17 +65,30 @@ def build_curator_user_prompt(
     messages: list[dict] | None = None,
     coherence_tail_size: int = 3,
     max_tail_messages: int = 20,
+    checkpoint: dict | None = None,
 ) -> str:
     """Build the user prompt that drives the curator's tool calls.
 
     When messages is provided, appends a compact turn inventory so the curator
     can make an informed call to select_relevant_turns.
+
+    When checkpoint is provided, it is injected directly into the prompt so
+    the curator can skip the get_checkpoint tool call (saves one iteration).
     """
     goal = session_goal or "unknown"
     parts = [
         f"Session goal: {goal}",
         f"Current question: {user_message}",
     ]
+    if checkpoint:
+        summary = checkpoint.get("summary", "")
+        next_step = checkpoint.get("next_step", "")
+        confidence = checkpoint.get("confidence", 0.5)
+        cp_lines = [f"Checkpoint (pre-loaded — skip get_checkpoint):"]
+        cp_lines.append(f"  State (confidence {confidence:.0%}): {summary}")
+        if next_step:
+            cp_lines.append(f"  Next step: {next_step}")
+        parts.append("\n" + "\n".join(cp_lines))
     if messages:
         inventory = _build_turn_inventory(messages, coherence_tail_size, max_tail_messages)
         if inventory:

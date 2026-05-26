@@ -222,7 +222,7 @@ def _format_session_overview(
             parts.append(line)
         parts.append("")
 
-    parts.append(f"Knowledge base: {active_fact_count} active facts | Current turn: {turn_number}")
+    parts.append(f"Knowledge base: {active_fact_count} active facts")
     parts.append("")
 
     return "\n".join(parts)
@@ -294,7 +294,7 @@ def _format_context_block(
     overview = _format_session_overview(goal, files, decisions, turn_number, active_fact_count)
     facts_section, compression_ratio = _format_relevant_facts(facts, turn_number)
 
-    block = _MODEL_HINT + "\n\n" + overview + "\n" + facts_section + f"[End of session context — current turn: {turn_number}]"
+    block = _MODEL_HINT + "\n\n" + overview + "\n" + facts_section + f"[Turn: {turn_number}]"
     return block, compression_ratio
 
 
