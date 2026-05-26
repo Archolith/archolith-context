@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 
 import httpx
 import structlog
 
 from archolith_proxy.config import get_settings
-from archolith_proxy.extractor.prompts import SYSTEM_PROMPT, build_extraction_prompt
+from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord
+from archolith_proxy.extractor.prompts import (
+    SYSTEM_PROMPT,
+    TURN_LEVEL_SYSTEM_PROMPT,
+    build_extraction_prompt,
+    build_turn_level_extraction_prompt,
+)
+from archolith_proxy.extractor.registry import ToolExtractorRegistry, get_registry
 from archolith_proxy.models.dtos import ExtractionResult
 
 logger = structlog.get_logger()
@@ -196,6 +205,186 @@ def _parse_extraction_response(content: str, turn_number: int) -> ExtractionResu
         invalidated_fact_ids=invalidated_ids,
         turn_number=turn_number,
         session_goal=session_goal,
+        checkpoint=checkpoint,
+        issues=issues,
+        verifications=verifications,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-tool extraction orchestrator
+# ---------------------------------------------------------------------------
+
+_llm_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_llm_semaphore() -> asyncio.Semaphore:
+    """Lazy-init semaphore for LLM-backed extractor concurrency control."""
+    global _llm_semaphore
+    if _llm_semaphore is None:
+        settings = get_settings()
+        _llm_semaphore = asyncio.Semaphore(settings.extractor_llm_concurrency)
+    return _llm_semaphore
+
+
+async def _extract_with_semaphore(
+    extractor,
+    record: ToolCallRecord,
+    http_client: httpx.AsyncClient,
+    turn_number: int,
+    session_goal: str | None,
+) -> PartialExtractionResult:
+    """Run an extractor's extract() with the LLM semaphore if it uses LLM.
+
+    The semaphore is only acquired for LLM-backed extractors. No-LLM extractors
+    run without the semaphore since they don't consume API quota.
+    """
+    # We don't know in advance if this extractor will use LLM (BashExtractor
+    # decides dynamically). We wrap all extractors that COULD use LLM
+    # with the semaphore. For pure no-LLM extractors (Grep, Glob, etc.),
+    # the semaphore adds negligible overhead.
+    sem = _get_llm_semaphore()
+    async with sem:
+        return await extractor.extract(record, http_client, turn_number, session_goal)
+
+
+async def extract_facts_per_tool(
+    http_client: httpx.AsyncClient,
+    turn_number: int,
+    user_message: str,
+    assistant_response: str,
+    tool_records: list[ToolCallRecord],
+    session_goal: str | None = None,
+    registry: ToolExtractorRegistry | None = None,
+) -> ExtractionResult | None:
+    """Per-tool extraction: fan out to specialized extractors, then run turn-level LLM.
+
+    1. Fan out all .extract() calls concurrently with semaphore-capped LLM calls.
+    2. Merge partial results with explicit exception guard.
+    3. Run one turn-level LLM call for decisions, checkpoint, issues, etc.
+    4. Merge turn-level results with per-tool results. Dedup by content hash.
+    5. Return combined ExtractionResult.
+    """
+    if registry is None:
+        registry = get_registry()
+
+    # Step 1: Fan out per-tool extractors concurrently
+    partial_results = await asyncio.gather(
+        *[
+            _extract_with_semaphore(
+                registry.get(r.tool_name), r, http_client, turn_number, session_goal
+            )
+            for r in tool_records
+        ],
+        return_exceptions=True,
+    )
+
+    # Step 2: Merge partial results with exception guard
+    all_facts: list[dict] = []
+    all_files: list[str] = []
+    llm_calls_made = 0
+    for r in partial_results:
+        if isinstance(r, Exception):
+            logger.warning("per_tool_extractor_failed", error=str(r))
+            continue
+        all_facts.extend(r.facts)
+        all_files.extend(r.files_touched)
+        if r.used_llm:
+            llm_calls_made += 1
+
+    logger.info(
+        "per_tool_extraction_gathered",
+        turn=turn_number,
+        records=len(tool_records),
+        facts=len(all_facts),
+        files=len(all_files),
+        llm_calls=llm_calls_made,
+        failures=sum(1 for r in partial_results if isinstance(r, Exception)),
+    )
+
+    # Step 3: Run turn-level LLM call for decisions, checkpoint, issues, verifications
+    settings = get_settings()
+    turn_level_prompt = build_turn_level_extraction_prompt(
+        turn_number=turn_number,
+        user_message=user_message[:4000],
+        assistant_response=assistant_response[:8000],
+        session_goal=session_goal,
+    )
+
+    turn_payload = {
+        "model": settings.extractor_model,
+        "messages": [
+            {"role": "system", "content": TURN_LEVEL_SYSTEM_PROMPT},
+            {"role": "user", "content": turn_level_prompt},
+        ],
+        "temperature": 0.1,
+        "max_tokens": 2000,
+    }
+
+    try:
+        resp = await http_client.post(
+            f"{settings.extractor_base_url.rstrip('/')}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.extractor_api_key}",
+                "Content-Type": "application/json",
+            },
+            content=json.dumps(turn_payload).encode(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        turn_content = data["choices"][0]["message"]["content"]
+        turn_result = _parse_extraction_response(turn_content, turn_number)
+
+        # Step 4: Merge — add turn-level facts that don't duplicate per-tool facts
+        per_tool_hashes = {hashlib.md5(f.get("content", "").encode()).hexdigest() for f in all_facts}
+        for f in turn_result.facts:
+            h = hashlib.md5(f.get("content", "").encode()).hexdigest()
+            if h not in per_tool_hashes:
+                all_facts.append(f)
+                per_tool_hashes.add(h)
+
+        # Merge files
+        existing_paths = set(all_files)
+        for p in turn_result.files_touched:
+            if p not in existing_paths:
+                all_files.append(p)
+                existing_paths.add(p)
+
+        # Turn-level contributes decisions, checkpoint, issues, verifications
+        decisions = turn_result.decisions
+        checkpoint = turn_result.checkpoint
+        issues = turn_result.issues
+        verifications = turn_result.verifications
+        session_goal_result = turn_result.session_goal
+        invalidated = turn_result.invalidated_fact_ids
+
+    except Exception as e:
+        logger.warning("turn_level_extraction_failed", turn=turn_number, error=str(e))
+        # Fall back to whatever per-tool gave us
+        decisions = []
+        checkpoint = None
+        issues = []
+        verifications = []
+        session_goal_result = session_goal
+        invalidated = []
+
+    logger.info(
+        "per_tool_extraction_complete",
+        turn=turn_number,
+        total_facts=len(all_facts),
+        per_tool_facts=len(all_facts) - len(turn_result.facts) if "turn_result" in dir() else len(all_facts),
+        turn_level_facts=len(turn_result.facts) if "turn_result" in dir() else 0,
+        files=len(all_files),
+        decisions=len(decisions),
+    )
+
+    return ExtractionResult(
+        facts=all_facts,
+        files_touched=all_files,
+        decisions=decisions,
+        invalidated_fact_ids=invalidated,
+        turn_number=turn_number,
+        session_goal=session_goal_result,
         checkpoint=checkpoint,
         issues=issues,
         verifications=verifications,

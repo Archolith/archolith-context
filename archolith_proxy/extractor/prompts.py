@@ -205,3 +205,171 @@ def build_extraction_prompt(
     parts.append("\n\nExtract facts as JSON. Respond with ONLY the JSON object.")
     parts.append(f"\n{EXAMPLE_PROMPT}")
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Per-tool extraction prompts
+# ---------------------------------------------------------------------------
+
+BASH_SYSTEM_PROMPT = """You are extracting structured facts from a Bash/shell command output.
+Extract ONLY what the command output shows — not the assistant's reasoning.
+
+## Output Schema
+
+Respond with a single JSON object:
+
+```json
+{
+  "facts": [
+    {"content": "<atomic fact>", "fact_type": "tool_result|error|state", "confidence": <0.0-1.0>}
+  ],
+  "verifications": [
+    {"command": "<exact command run>", "status": "pass|fail|partial", "summary": "<one sentence>"}
+  ]
+}
+```
+
+## Rules
+
+1. Include the command name and exit status if visible.
+2. For test runners: extract EXACT counts — "42 passed, 3 failed", not "some tests passed".
+3. For errors: include the full error message with file:line if available.
+4. For state changes: "database migrated", "dependencies installed", "file created".
+5. Do NOT extract decisions, files_touched, checkpoint, or issues — those come from the
+   turn-level extractor.
+6. Each fact must be atomic and self-contained.
+7. Prefix fact content with the command name: "pytest: 42 passed, 3 failed".
+
+Respond with valid JSON only."""
+
+WEB_FETCH_SYSTEM_PROMPT = """You are extracting structured observations from a fetched web page or API response.
+Extract ONLY technical content — no navigation, ads, or boilerplate.
+
+## Output Schema
+
+Respond with a single JSON object:
+
+```json
+{
+  "facts": [
+    {"content": "<atomic observation>", "fact_type": "observation", "confidence": <0.0-1.0>}
+  ]
+}
+```
+
+## Rules
+
+1. Extract: technical claims, API details, config values, error explanations, version numbers,
+   code examples.
+2. Do NOT extract: navigation links, ads, cookie notices, footers, general descriptions.
+3. Each fact must be atomic and self-contained.
+4. Include concrete values: version numbers, endpoint URLs, parameter names, error codes.
+5. Prefix fact content with "[web_fetch] ".
+6. Do NOT extract decisions, files_touched, checkpoint, issues, or verifications.
+
+Respond with valid JSON only."""
+
+TURN_LEVEL_SYSTEM_PROMPT = """You are extracting structured state from a coding agent turn.
+
+IMPORTANT: Tool results from this turn have already been extracted by specialized extractors.
+You will NOT see tool output. DO NOT infer, fabricate, or guess at tool results from the
+assistant's summary text. If the assistant says "I found 3 files", do not emit a tool_result
+fact — that fact was already extracted.
+
+Your job is ONLY to extract from the assistant's OWN reasoning text:
+- decisions (explicit choices with rationale)
+- session_goal (what the session is about — update only if clearly changed)
+- checkpoint (one sentence: current state of work, next step)
+- issues (new errors or blockers introduced or resolved this turn)
+- verifications (test/build commands run this turn, with pass/fail)
+- observation facts from the assistant's stated reasoning (not from tool output summaries)
+
+## Output Schema
+
+Respond with a single JSON object:
+
+```json
+{
+  "facts": [
+    {"content": "<atomic fact>", "fact_type": "observation|decision|state|error", "confidence": <0.0-1.0>}
+  ],
+  "decisions": [
+    {"summary": "<what was decided>", "rationale": "<why, if stated, or null>"}
+  ],
+  "session_goal": "<one-sentence description or null>",
+  "checkpoint": {
+    "summary": "<one sentence: current state>",
+    "next_step": "<next action or null>",
+    "confidence": 0.0
+  },
+  "issues": [
+    {"summary": "<description>", "status": "open|resolved", "related_file": "<path or null>", "related_command": "<command or null>"}
+  ],
+  "verifications": [
+    {"command": "<exact command>", "status": "pass|fail|partial", "summary": "<what was tested>"}
+  ]
+}
+```
+
+## Rules
+
+1. facts[].fact_type: only "observation", "decision", "state", "error" — NOT "tool_result"
+   or "file_state" (those come from per-tool extractors).
+2. Do not emit facts that describe tool call results. Only emit facts from the assistant's
+   reasoning, analysis, or conclusions.
+3. Extract a checkpoint on every turn.
+4. Extract a session_goal on every turn — update only if clearly changed.
+5. Extract issues only for NEW problems discovered this turn.
+6. Extract verifications for test/build commands mentioned in the assistant text.
+
+Respond with valid JSON only."""
+
+
+def build_bash_extraction_prompt(command: str, output: str, turn_number: int) -> str:
+    """Build the user message for the Bash extraction model."""
+    return f"""## Turn {turn_number} — Bash command output
+
+Command: {command[:500]}
+
+Output:
+{output[:4000]}
+
+Extract facts and verifications as JSON. Respond with ONLY the JSON object."""
+
+
+def build_web_fetch_extraction_prompt(url: str, content: str, turn_number: int) -> str:
+    """Build the user message for the WebFetch extraction model."""
+    return f"""## Turn {turn_number} — Fetched web content
+
+URL: {url[:500]}
+
+Content:
+{content[:4000]}
+
+Extract observations as JSON. Respond with ONLY the JSON object."""
+
+
+def build_turn_level_extraction_prompt(
+    turn_number: int,
+    user_message: str,
+    assistant_response: str,
+    session_goal: str | None,
+) -> str:
+    """Build the user message for the turn-level extraction model.
+
+    Note: tool_results is intentionally absent — per-tool extractors
+    have already handled tool output. This call only extracts from
+    the assistant's reasoning text.
+    """
+    parts = [f"## Turn {turn_number}"]
+
+    if session_goal:
+        parts.append(f"Session goal: {session_goal}")
+
+    parts.append(f"\n### User request:\n{user_message[:4000]}")
+    parts.append(f"\n### Assistant response:\n{assistant_response[:8000]}")
+
+    parts.append("\n\nExtract facts, decisions, checkpoint, issues, and verifications as JSON.")
+    parts.append("Remember: tool results have already been extracted separately. Only extract from the assistant's reasoning.")
+    parts.append("Respond with ONLY the JSON object.")
+    return "\n".join(parts)

@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     max_input_tokens_per_session: int = 2_000_000  # 0 = unlimited
     session_token_budget_action: str = "passthrough"  # "passthrough" (forward raw) or "reject"
 
+    # Per-tool extraction dispatch (class-per-tool instead of single generic LLM call)
+    per_tool_extraction_enabled: bool = False
+    extractor_llm_concurrency: int = 3  # max concurrent LLM-backed extractor calls (turn-level excluded)
+
     # RTK output filtering for outbound tool-role messages
     rtk_enabled: bool = False
 

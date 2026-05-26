@@ -15,7 +15,7 @@ from starlette.responses import Response, StreamingResponse
 
 from archolith_proxy.assembler.context import assemble_context
 from archolith_proxy.config import get_settings
-from archolith_proxy.extractor.client import extract_facts
+from archolith_proxy.extractor.client import extract_facts, extract_facts_per_tool
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
 from archolith_proxy.metrics import get_metrics, record_assembly_mode, record_metric
 from archolith_proxy.models.graph_nodes import FactType, FileStatus
@@ -60,6 +60,60 @@ def _normalize_message_content(content: object) -> str:
     return ""
 
 
+def _build_call_map(messages: list[dict]) -> dict[str, tuple[str, dict]]:
+    """Build tool_call_id → (tool_name, args) lookup from all assistant messages.
+
+    Shared utility used by _extract_file_reads, _extract_file_writes,
+    and _collect_tool_call_records to avoid duplicating the call_map
+    construction pattern.
+    """
+    call_map: dict[str, tuple[str, dict]] = {}
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        for tc in (msg.get("tool_calls") or []):
+            try:
+                args = json.loads(tc["function"]["arguments"])
+            except (KeyError, json.JSONDecodeError):
+                args = {}
+            call_map[tc.get("id", "")] = (tc["function"]["name"], args)
+    return call_map
+
+
+def _collect_tool_call_records(messages: list[dict]) -> list:
+    """Build ToolCallRecord list from messages for per-tool extraction.
+
+    Uses _build_call_map() to pair tool calls with their results via
+    tool_call_id. Applies RTK Layer 1 filter to each result — the
+    messages array passed to extraction is the ORIGINAL (pre-rewrite)
+    messages; the outbound RTK filter runs on a copy in
+    filter_request_body() and does not mutate the source array.
+    Therefore the RTK filter here is the first (and only) filter
+    application for extraction.
+    """
+    from archolith_proxy.extractor.base import ToolCallRecord
+
+    call_map = _build_call_map(messages)
+    records = []
+    for msg in messages:
+        if msg.get("role") != "tool":
+            continue
+        tc_id = msg.get("tool_call_id", "")
+        if tc_id not in call_map:
+            continue
+        tool_name, args = call_map[tc_id]
+        content = _normalize_message_content(msg.get("content", ""))
+        # Apply RTK Layer 1 filter — same as _collect_recent_tool_results()
+        content = filter_single_tool_result(content, tool_name=tool_name)
+        records.append(ToolCallRecord(
+            tool_call_id=tc_id,
+            tool_name=tool_name,
+            args=args,
+            result=content,
+        ))
+    return records  # all tool results, no cap — extractors size-limit individually
+
+
 def _extract_response_text(response_data: dict) -> str:
     """Extract assistant text from a non-streaming chat completion response."""
     choices = response_data.get("choices", [])
@@ -81,16 +135,7 @@ def _extract_file_reads(messages: list[dict]) -> list[dict]:
     """
     from archolith_proxy.proxy.rewrite import _is_compressible_tool
 
-    # Build lookup: tool_call_id → (name, parsed_args)
-    call_map: dict[str, tuple[str, dict]] = {}
-    for msg in messages:
-        if msg.get("role") == "assistant":
-            for tc in (msg.get("tool_calls") or []):
-                try:
-                    args = json.loads(tc["function"]["arguments"])
-                except (KeyError, json.JSONDecodeError):
-                    args = {}
-                call_map[tc["id"]] = (tc["function"]["name"], args)
+    call_map = _build_call_map(messages)
 
     # Debug: log message structure when call_map is empty to diagnose extraction misses
     role_counts = {}
@@ -1812,17 +1857,34 @@ async def _run_extraction(
                 logger.warning("file_cache_capture_failed", session_id=session_id, turn=turn_number, exc_info=True)
 
         # Serialize the newest tool results first so the current turn survives truncation.
-        tool_results = _collect_recent_tool_results(messages, max_chars=4000)
-
+        extraction_settings = get_settings()
         extraction_start = time.monotonic()
-        result = await extract_facts(
-            http_client=client,
-            turn_number=turn_number,
-            user_message=user_message[:4000],
-            assistant_response=response_text[:8000],
-            tool_results=tool_results,
-            session_goal=session_goal,
-        )
+
+        if extraction_settings.per_tool_extraction_enabled:
+            # Per-tool extraction: fan out to specialized extractors
+            from archolith_proxy.extractor.registry import get_registry as _get_extractor_registry
+
+            tool_records = _collect_tool_call_records(messages)
+            result = await extract_facts_per_tool(
+                http_client=client,
+                turn_number=turn_number,
+                user_message=user_message[:4000],
+                assistant_response=response_text[:8000],
+                tool_records=tool_records,
+                session_goal=session_goal,
+                registry=_get_extractor_registry(),
+            )
+        else:
+            # Legacy single-call extraction
+            tool_results = _collect_recent_tool_results(messages, max_chars=4000)
+            result = await extract_facts(
+                http_client=client,
+                turn_number=turn_number,
+                user_message=user_message[:4000],
+                assistant_response=response_text[:8000],
+                tool_results=tool_results,
+                session_goal=session_goal,
+            )
         extraction_latency_ms = (time.monotonic() - extraction_start) * 1000
 
         # Update session goal if extractor provided one
