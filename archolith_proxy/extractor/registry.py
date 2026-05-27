@@ -15,7 +15,16 @@ logger = structlog.get_logger()
 
 
 class ToolExtractorRegistry:
-    """Routes a tool name to the correct ToolExtractor subclass."""
+    """Routes a tool name to the correct ToolExtractor subclass.
+
+    Exact match first, longest-prefix-match fallback (like IP routing).
+    This prevents ambiguity when two prefix sentinels could both match
+    the same tool name.
+
+    Override semantics: last-registered wins for the same tool name.
+    Plugins registered via entry points or ``register_extractor()`` can
+    replace built-in extractors by declaring the same ``tool_names``.
+    """
 
     def __init__(self) -> None:
         self._map: dict[str, ToolExtractor] = {}
@@ -99,8 +108,8 @@ def _discover_extractor_plugins(reg: ToolExtractorRegistry) -> None:
             extractor = ep.load()()
             reg.register(extractor)
             logger.info("rtk_plugin_loaded", entry_point=ep.name, tool_names=extractor.tool_names)
-        except Exception as exc:
-            logger.warning("rtk_plugin_load_failed", entry_point=ep.name, error=str(exc))
+        except Exception:
+            logger.exception("rtk_plugin_load_failed", entry_point=ep.name)
 
 
 def get_registry() -> ToolExtractorRegistry:
