@@ -73,10 +73,34 @@ class ToolExtractorRegistry:
         reg.register(WebFetchExtractor())
         reg.register(MemoryRecallExtractor())
         reg.set_default(DefaultExtractor())
+
+        # Discover plugins via entry points — last-registered wins for same key,
+        # so plugins can override built-ins.
+        _discover_extractor_plugins(reg)
+
         return reg
 
 
 _REGISTRY: ToolExtractorRegistry | None = None
+
+
+def _discover_extractor_plugins(reg: ToolExtractorRegistry) -> None:
+    """Discover and register extractor plugins declared via entry points.
+
+    Iterates ``archolith.tool_extractors`` entry points. Each entry point
+    must resolve to a callable that returns a ``ToolExtractor`` instance.
+    Plugins that fail to load are logged and skipped — they never prevent
+    proxy startup.
+    """
+    from importlib.metadata import entry_points
+
+    for ep in entry_points(group="archolith.tool_extractors"):
+        try:
+            extractor = ep.load()()
+            reg.register(extractor)
+            logger.info("rtk_plugin_loaded", entry_point=ep.name, tool_names=extractor.tool_names)
+        except Exception as exc:
+            logger.warning("rtk_plugin_load_failed", entry_point=ep.name, error=str(exc))
 
 
 def get_registry() -> ToolExtractorRegistry:
@@ -85,3 +109,13 @@ def get_registry() -> ToolExtractorRegistry:
     if _REGISTRY is None:
         _REGISTRY = ToolExtractorRegistry.build_default()
     return _REGISTRY
+
+
+def register_extractor(extractor: ToolExtractor) -> None:
+    """Programmatically register a ToolExtractor into the process-level singleton.
+
+    This is an alternative to entry points — useful for testing and embedded use.
+    Last-registered wins: if the extractor's ``tool_names`` overlap an existing
+    registration, the new extractor replaces it.
+    """
+    get_registry().register(extractor)

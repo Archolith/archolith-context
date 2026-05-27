@@ -1,1 +1,1 @@
-
+from archolith_proxy.extractor.registry import register_extractor as register_extractor

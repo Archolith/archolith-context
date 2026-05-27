@@ -180,3 +180,48 @@ def reset_registry() -> None:
     """Reset the registry — used in tests."""
     global _registry
     _registry = None
+
+
+def _discover_memory_plugins() -> None:
+    """Discover and register memory adapter plugins declared via entry points.
+
+    Iterates ``archolith.memory_adapters`` entry points. Each entry point
+    must resolve to a dict with ``"type"`` and ``"module"`` keys, where
+    ``"type"`` is the adapter type string and ``"module"`` is the dotted
+    module path containing the ``Adapter`` class. Plugins that fail to
+    load are logged and skipped.
+    """
+    from importlib.metadata import entry_points
+
+    for ep in entry_points(group="archolith.memory_adapters"):
+        try:
+            mapping = ep.load()
+            if isinstance(mapping, dict) and "type" in mapping and "module" in mapping:
+                _ADAPTER_TYPES[mapping["type"]] = mapping["module"]
+                logger.info("memory_plugin_loaded", entry_point=ep.name, adapter_type=mapping["type"])
+            elif isinstance(mapping, str):
+                # Simple form: entry point name is the type, resolved string is the module path
+                _ADAPTER_TYPES[ep.name] = mapping
+                logger.info("memory_plugin_loaded", entry_point=ep.name, adapter_type=ep.name)
+            else:
+                logger.warning(
+                    "memory_plugin_invalid",
+                    entry_point=ep.name,
+                    detail="entry point must resolve to a dict with 'type'/'module' keys or a module string",
+                )
+        except Exception as exc:
+            logger.warning("memory_plugin_load_failed", entry_point=ep.name, error=str(exc))
+
+
+# Auto-discover memory plugins at import time
+_discover_memory_plugins()
+
+
+def register_memory_adapter(adapter_type: str, module_path: str) -> None:
+    """Programmatically register a memory adapter type.
+
+    This is an alternative to entry points — useful for testing and embedded use.
+    The ``adapter_type`` string can then be used in engine configs, and the
+    ``module_path`` must contain an ``Adapter`` class implementing ``MemoryAdapterBase``.
+    """
+    _ADAPTER_TYPES[adapter_type] = module_path
