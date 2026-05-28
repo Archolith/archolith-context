@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Terminal client for the context-engine live stream WebSocket.
+"""Terminal client for the archolith-proxy live stream WebSocket.
 
 Connects to ws://localhost:<port>/ws/stream and displays proxy activity
 events in real-time with color-coded output.
@@ -278,7 +278,7 @@ async def monitor(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Terminal monitor for context-engine live stream",
+        description="Terminal monitor for archolith-proxy live stream",
     )
     parser.add_argument(
         "--port", type=int, default=_DEFAULT_PORT,
