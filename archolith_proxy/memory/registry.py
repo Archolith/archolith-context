@@ -209,17 +209,22 @@ def _discover_memory_plugins() -> None:
                     entry_point=ep.name,
                     detail="entry point must resolve to a dict with 'type'/'module' keys or a module string",
                 )
-        except Exception as exc:
-            logger.warning("memory_plugin_load_failed", entry_point=ep.name, error=str(exc))
+        except Exception:
+            logger.exception("memory_plugin_load_failed", entry_point=ep.name)
 
 
-# Auto-discover memory plugins at import time
+# Auto-discover memory plugins at import time.
+# Intentionally runs at module load rather than inside get_registry() so that
+# _ADAPTER_TYPES is fully populated before any MemoryEngineRegistry instance
+# resolves adapter modules — regardless of call order.
 _discover_memory_plugins()
 
 
 def register_memory_adapter(adapter_type: str, module_path: str) -> None:
     """Programmatically register a memory adapter type.
 
+    Takes a type string and a dotted module path rather than an adapter instance
+    because adapters are dynamically imported at access time (lazy instantiation).
     This is an alternative to entry points — useful for testing and embedded use.
     The ``adapter_type`` string can then be used in engine configs, and the
     ``module_path`` must contain an ``Adapter`` class implementing ``MemoryAdapterBase``.
