@@ -13,8 +13,8 @@ Assembly strategy:
 3. Format as a single system-like message injected before the coherence tail
 4. Estimate token count using tiktoken cl100k_base
 
-Cold start: when turn_number < cold_start_turns AND total input tokens
-< cold_start_token_threshold, the assembler returns None (passthrough mode).
+Cold start: passthrough when user_turns < cold_start_turns AND input
+tokens < cold_start_token_threshold. Either condition alone fires assembly.
 """
 
 from __future__ import annotations
@@ -422,16 +422,21 @@ async def assemble_context(
     """
     settings = get_settings()
 
-    # Cold start check: don't assemble until we have enough real user turns.
-    # Agentic clients (OpenCode, Claude Code) send multiple API requests per
-    # user turn (one per tool-call round trip), so the backend's request
-    # counter inflates quickly. Count actual user-role messages instead.
-    # User turn count is the PRIMARY gate — token threshold is secondary
-    # and only applies once we have enough user turns. Without this,
-    # a single user turn with large tool results (>threshold tokens)
-    # triggers assembly mid-tool-loop, destroying the tool context.
+    # Cold start gate — passthrough when BOTH conditions hold:
+    #   1. user_turn_count < cold_start_turns (default 3)
+    #   2. input tokens < cold_start_token_threshold (default 20K)
+    #
+    # Either condition alone lets assembly fire:
+    #   - 3+ user turns: always assemble (enough conversational context)
+    #   - Large token count on turn 1 or 2: assemble early (agentic clients
+    #     like OpenCode send many API requests per user turn via tool-call
+    #     round trips, so user_turn_count stays at 1-2 even as context
+    #     grows to 90K+ tokens)
     user_turn_count = sum(1 for m in (messages or []) if m.get("role") == "user")
-    if user_turn_count < settings.cold_start_turns:
+    if (
+        user_turn_count < settings.cold_start_turns
+        and input_token_estimate < settings.cold_start_token_threshold
+    ):
         logger.debug(
             "cold_start_passthrough",
             session_id=session_id,
@@ -439,6 +444,7 @@ async def assemble_context(
             user_turns=user_turn_count,
             estimated_tokens=input_token_estimate,
             threshold_turns=settings.cold_start_turns,
+            threshold_tokens=settings.cold_start_token_threshold,
         )
         return None
 
