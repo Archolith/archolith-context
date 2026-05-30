@@ -216,6 +216,48 @@ class TraceStore:
                 ))
             return summaries
 
+    async def load_from_disk(self) -> int:
+        """Reload trace records from JSONL files in trace_dir.
+
+        Called at startup to restore historical sessions. Returns the
+        number of records loaded. Skips malformed lines gracefully.
+        """
+        if not self._trace_dir or not self._trace_dir.exists():
+            return 0
+
+        import json as _json
+
+        loaded = 0
+        for jsonl_path in sorted(self._trace_dir.glob("*.jsonl")):
+            try:
+                with open(jsonl_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            trace = TurnTrace.model_validate_json(line)
+                            session_id = trace.session_id or "__no_session__"
+                            self._by_session[session_id].append(trace)
+                            self._by_turn_id[trace.turn_id] = trace
+                            self._total_traces += 1
+                            loaded += 1
+                            if session_id not in self._session_order:
+                                self._session_order.append(session_id)
+                        except Exception:
+                            continue  # Skip malformed lines
+            except Exception:
+                logger.warning("trace_disk_load_failed", path=str(jsonl_path), exc_info=True)
+
+        if loaded:
+            logger.info(
+                "trace_disk_loaded",
+                records=loaded,
+                sessions=len(self._by_session),
+                dir=str(self._trace_dir),
+            )
+        return loaded
+
     @property
     def total_traces(self) -> int:
         return self._total_traces
@@ -230,10 +272,16 @@ _instance: TraceStore | None = None
 
 
 def get_trace_store() -> TraceStore:
-    """Get the process-level TraceStore instance."""
+    """Get the process-level TraceStore instance.
+
+    On first call, reads trace_dir from settings. When set, traces are
+    persisted as per-session JSONL files and survive proxy restarts.
+    """
     global _instance
     if _instance is None:
-        _instance = TraceStore()
+        from archolith_proxy.config import get_settings
+        settings = get_settings()
+        _instance = TraceStore(trace_dir=settings.trace_dir or None)
     return _instance
 
 

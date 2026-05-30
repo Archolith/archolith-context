@@ -148,6 +148,11 @@ class Settings(BaseSettings):
     curator_max_iterations: int = 6
     curator_latency_budget_ms: int = 6000   # hard timeout; falls back to heuristic
 
+    # Trace persistence — when set, turn traces are appended as JSONL files
+    # under this directory (one file per session: <session_id>.jsonl).
+    # Without this, traces are memory-only and lost on restart.
+    trace_dir: str = ""
+
     # Admin/operator token for protecting non-proxy surfaces
     # When empty (default), admin endpoints are open (localhost-only assumption).
     # When set, all operator endpoints require X-Admin-Token or Authorization: Bearer matching this value.

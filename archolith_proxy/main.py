@@ -171,9 +171,13 @@ async def lifespan(app: FastAPI):
     from archolith_proxy.proxy.live import get_live_stream
     app.state.live_stream = get_live_stream()
 
-    # Turn trace store (in-memory per-turn inspection)
+    # Turn trace store — with optional disk persistence and reload
     from archolith_proxy.trace.store import get_trace_store
     app.state.trace_store = get_trace_store()
+    if settings.trace_dir:
+        loaded = await app.state.trace_store.load_from_disk()
+        if loaded:
+            logger.info("trace_history_restored", records=loaded)
 
     # Memory engine registry — load from config if promotion enabled
     from archolith_proxy.memory.registry import get_registry, reset_registry
