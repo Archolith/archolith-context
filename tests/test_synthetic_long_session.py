@@ -23,7 +23,9 @@ from httpx import ASGITransport
 from archolith_proxy.config import get_settings, reset_settings
 from archolith_proxy.main import create_app
 from archolith_proxy.metrics import get_metrics
+from archolith_proxy.models.dtos import AssembledContext
 from archolith_proxy.proxy.circuit_breaker import reset_all, reset_circuit
+from archolith_proxy.proxy.rewrite import estimate_input_tokens
 
 from tests.fixtures.conversations import (
     build_coding_session_long,
@@ -655,4 +657,550 @@ class TestLongSessionPipeline:
         # If the file was in cache, the native read intercept should have fired
         assert resend_count[0] >= 1, (
             f"Expected at least 1 cache-hit re-send, got {resend_count[0]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: token-aware assembly verification
+# ---------------------------------------------------------------------------
+
+
+class TestTokenAwareAssembly:
+    """Verify that context assembly actually reduces tokens on realistic conversations.
+
+    These tests capture the rewritten payload at the mock upstream and compare
+    token counts against the original input to confirm assembly is working.
+    """
+
+    @pytest.mark.asyncio
+    async def test_assembly_reduces_message_count(self):
+        """When assembly fires with turn selection, upstream gets fewer messages."""
+        SESSION_ID = "tok-msgcount-001"
+        reset_circuit(SESSION_ID)
+
+        messages = build_coding_session_long()
+        original_msg_count = len(messages)
+        captured_payloads: list[dict] = []
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            body = json.loads(request.content)
+            captured_payloads.append(body)
+            return httpx.Response(200, json=_NORMAL_RESPONSE)
+
+        # Build an AssembledContext with turn selection — keep only 3 of 9
+        # user turns. This simulates curator output, exercising the rewrite
+        # pipeline's turn-dropping path.
+        context_block = (
+            "=== SESSION OVERVIEW ===\n"
+            "Goal: Add product reviews to the e-commerce app\n\n"
+            "=== RELEVANT CONTEXT ===\n"
+            "- Review model has rating field (1-5) and body text field\n"
+            "- Order model has status transitions: pending→confirmed→shipped→delivered\n"
+            "- Review routes registered in main.py\n"
+        )
+        mock_assembled = AssembledContext(
+            system_message={"role": "system", "content": context_block},
+            graph_context=[{"role": "system", "content": context_block}],
+            coherence_tail=[],
+            token_estimate=500,
+            facts_retrieved=3,
+            session_id=SESSION_ID,
+            retained_turn_numbers=[1, 8, 9],  # Keep first, last two user turns
+        )
+
+        settings = get_settings()
+        orig_min_input = settings.assembly_min_input_tokens
+        orig_min_savings = settings.assembly_min_savings_ratio
+        settings.assembly_min_input_tokens = 0
+        settings.assembly_min_savings_ratio = 0.0
+
+        try:
+            mock_backend = _make_mock_backend()
+            mock_backend.get_turn_number = AsyncMock(return_value=15)
+            app = create_app()
+
+            async def fake_assemble(*args, **kwargs):
+                return mock_assembled
+
+            with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+                 patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+                 patch("archolith_proxy.openai.chat.assemble_context", side_effect=fake_assemble), \
+                 patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
+
+                mock_resolve.return_value = (SESSION_ID, False)
+
+                async with app.router.lifespan_context(app):
+                    app.state.http_client = httpx.AsyncClient(
+                        transport=httpx.MockTransport(mock_handler)
+                    )
+                    app.state.extractor_client = AsyncMock()
+                    transport = ASGITransport(app=app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                        resp = await ac.post(
+                            "/v1/chat/completions",
+                            json={
+                                "model": "test-model",
+                                "messages": messages,
+                                "stream": False,
+                            },
+                            headers={"X-Session-ID": SESSION_ID},
+                        )
+        finally:
+            settings.assembly_min_input_tokens = orig_min_input
+            settings.assembly_min_savings_ratio = orig_min_savings
+
+        assert resp.status_code == 200
+        assert len(captured_payloads) >= 1, "No upstream request captured"
+
+        upstream_msg_count = len(captured_payloads[0].get("messages", []))
+        assert upstream_msg_count < original_msg_count, (
+            f"Assembly with turn selection should reduce message count: "
+            f"original={original_msg_count}, upstream={upstream_msg_count}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_assembly_reduces_token_count(self):
+        """Turn selection should produce meaningful token savings."""
+        SESSION_ID = "tok-tokens-001"
+        reset_circuit(SESSION_ID)
+
+        messages = build_coding_session_long()
+        original_tokens = estimate_input_tokens(messages)
+        captured_payloads: list[dict] = []
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            body = json.loads(request.content)
+            captured_payloads.append(body)
+            return httpx.Response(200, json=_NORMAL_RESPONSE)
+
+        # Small context block — most savings come from dropping turns, not injection
+        context_block = (
+            "=== SESSION OVERVIEW ===\n"
+            "Goal: Add product reviews\n\n"
+            "=== RELEVANT CONTEXT ===\n"
+            "- Review model defined with rating, title, body fields\n"
+            "- Order model uses status transitions\n"
+            "- Pydantic schemas enforce rating 1-5\n"
+            "- All 8 tests passing\n"
+        )
+        mock_assembled = AssembledContext(
+            system_message={"role": "system", "content": context_block},
+            graph_context=[{"role": "system", "content": context_block}],
+            coherence_tail=[],
+            token_estimate=300,
+            facts_retrieved=4,
+            session_id=SESSION_ID,
+            retained_turn_numbers=[1, 8, 9],  # Keep 3 of 9 user turns
+        )
+
+        settings = get_settings()
+        orig_min_input = settings.assembly_min_input_tokens
+        orig_min_savings = settings.assembly_min_savings_ratio
+        settings.assembly_min_input_tokens = 0
+        settings.assembly_min_savings_ratio = 0.0
+
+        try:
+            mock_backend = _make_mock_backend()
+            mock_backend.get_turn_number = AsyncMock(return_value=15)
+            app = create_app()
+
+            async def fake_assemble(*args, **kwargs):
+                return mock_assembled
+
+            with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+                 patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+                 patch("archolith_proxy.openai.chat.assemble_context", side_effect=fake_assemble), \
+                 patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
+
+                mock_resolve.return_value = (SESSION_ID, False)
+
+                async with app.router.lifespan_context(app):
+                    app.state.http_client = httpx.AsyncClient(
+                        transport=httpx.MockTransport(mock_handler)
+                    )
+                    app.state.extractor_client = AsyncMock()
+                    transport = ASGITransport(app=app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                        resp = await ac.post(
+                            "/v1/chat/completions",
+                            json={
+                                "model": "test-model",
+                                "messages": messages,
+                                "stream": False,
+                            },
+                            headers={"X-Session-ID": SESSION_ID},
+                        )
+        finally:
+            settings.assembly_min_input_tokens = orig_min_input
+            settings.assembly_min_savings_ratio = orig_min_savings
+
+        assert resp.status_code == 200
+        assert len(captured_payloads) >= 1
+
+        rewritten_tokens = estimate_input_tokens(captured_payloads[0].get("messages", []))
+        savings = original_tokens - rewritten_tokens
+        savings_ratio = savings / max(original_tokens, 1)
+
+        assert rewritten_tokens < original_tokens, (
+            f"Turn selection should reduce tokens: original={original_tokens}, "
+            f"rewritten={rewritten_tokens}, savings={savings}"
+        )
+        assert savings_ratio > 0.05, (
+            f"Savings ratio too low: {savings_ratio:.3f} ({savings} tokens saved "
+            f"from {original_tokens})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_assembled_payload_contains_context_block(self):
+        """The rewritten system message should contain the injected session context."""
+        SESSION_ID = "tok-context-001"
+        reset_circuit(SESSION_ID)
+
+        messages = build_coding_session_long()
+        captured_payloads: list[dict] = []
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            body = json.loads(request.content)
+            captured_payloads.append(body)
+            return httpx.Response(200, json=_NORMAL_RESPONSE)
+
+        settings = get_settings()
+        orig_min_input = settings.assembly_min_input_tokens
+        orig_min_savings = settings.assembly_min_savings_ratio
+        # Disable savings gates entirely so the context block stays
+        settings.assembly_min_input_tokens = 0
+        settings.assembly_min_savings_ratio = 0.0
+
+        try:
+            mock_backend = _make_mock_backend(
+                facts=[
+                    {"content": "Review endpoint supports POST, GET, DELETE operations", "fact_type": "observation", "confidence": 0.9, "source_turn": 3},
+                    {"content": "Product listing includes average_rating computed via SQL AVG", "fact_type": "observation", "confidence": 0.85, "source_turn": 7},
+                ],
+                decisions=[
+                    {"summary": "Follow existing order route patterns for review routes", "rationale": "Consistency", "turn": 4},
+                ],
+            )
+            mock_backend.get_turn_number = AsyncMock(return_value=15)
+            mock_backend.find_session_by_id = AsyncMock(return_value={
+                "session_id": SESSION_ID, "goal": "Add product reviews to the e-commerce app"
+            })
+
+            app = create_app()
+
+            with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+                 patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+                 patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend), \
+                 patch("archolith_proxy.assembler.context.get_backend", return_value=mock_backend):
+
+                mock_resolve.return_value = (SESSION_ID, False)
+
+                async with app.router.lifespan_context(app):
+                    app.state.http_client = httpx.AsyncClient(
+                        transport=httpx.MockTransport(mock_handler)
+                    )
+                    app.state.extractor_client = AsyncMock()
+                    transport = ASGITransport(app=app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                        resp = await ac.post(
+                            "/v1/chat/completions",
+                            json={
+                                "model": "test-model",
+                                "messages": messages,
+                                "stream": False,
+                            },
+                            headers={"X-Session-ID": SESSION_ID},
+                        )
+        finally:
+            settings.assembly_min_input_tokens = orig_min_input
+            settings.assembly_min_savings_ratio = orig_min_savings
+
+        assert resp.status_code == 200
+        assert len(captured_payloads) >= 1
+
+        upstream_messages = captured_payloads[0].get("messages", [])
+        system_msgs = [m for m in upstream_messages if m.get("role") == "system"]
+        assert len(system_msgs) >= 1, "No system message in upstream payload"
+
+        system_content = system_msgs[0].get("content", "")
+        # Context block should contain session overview and relevant facts
+        assert "SESSION OVERVIEW" in system_content, (
+            f"System message missing SESSION OVERVIEW section. Content preview: {system_content[:300]}"
+        )
+        assert "RELEVANT CONTEXT" in system_content, (
+            f"System message missing RELEVANT CONTEXT section. Content preview: {system_content[:300]}"
+        )
+        # Should contain the goal
+        assert "product review" in system_content.lower() or "e-commerce" in system_content.lower(), (
+            f"System message missing session goal. Content preview: {system_content[:300]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_coherence_tail_preserved(self):
+        """The last N messages (coherence tail) should be kept intact in the rewritten payload."""
+        SESSION_ID = "tok-tail-001"
+        reset_circuit(SESSION_ID)
+
+        messages = build_coding_session_long()
+        captured_payloads: list[dict] = []
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            body = json.loads(request.content)
+            captured_payloads.append(body)
+            return httpx.Response(200, json=_NORMAL_RESPONSE)
+
+        settings = get_settings()
+        orig_min_input = settings.assembly_min_input_tokens
+        orig_min_savings = settings.assembly_min_savings_ratio
+        orig_tail = settings.coherence_tail_size
+        settings.assembly_min_input_tokens = 2000
+        settings.assembly_min_savings_ratio = 0.05
+        # Use a small tail so we can verify it's kept
+        settings.coherence_tail_size = 5
+
+        try:
+            mock_backend = _make_mock_backend(
+                facts=[
+                    {"content": "Test fact for tail preservation check", "fact_type": "observation", "confidence": 0.9, "source_turn": 1},
+                ],
+            )
+            mock_backend.get_turn_number = AsyncMock(return_value=15)
+
+            app = create_app()
+
+            with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+                 patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+                 patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
+
+                mock_resolve.return_value = (SESSION_ID, False)
+
+                async with app.router.lifespan_context(app):
+                    app.state.http_client = httpx.AsyncClient(
+                        transport=httpx.MockTransport(mock_handler)
+                    )
+                    app.state.extractor_client = AsyncMock()
+                    transport = ASGITransport(app=app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                        resp = await ac.post(
+                            "/v1/chat/completions",
+                            json={
+                                "model": "test-model",
+                                "messages": messages,
+                                "stream": False,
+                            },
+                            headers={"X-Session-ID": SESSION_ID},
+                        )
+        finally:
+            settings.assembly_min_input_tokens = orig_min_input
+            settings.assembly_min_savings_ratio = orig_min_savings
+            settings.coherence_tail_size = orig_tail
+
+        assert resp.status_code == 200
+        assert len(captured_payloads) >= 1
+
+        upstream_messages = captured_payloads[0].get("messages", [])
+        # The last user message in the original should appear in the upstream payload
+        original_last_user = None
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                original_last_user = msg.get("content", "")
+                break
+
+        upstream_last_user = None
+        for msg in reversed(upstream_messages):
+            if msg.get("role") == "user":
+                upstream_last_user = msg.get("content", "")
+                break
+
+        assert original_last_user is not None, "No user message in original"
+        assert upstream_last_user is not None, "No user message in upstream"
+        assert upstream_last_user == original_last_user, (
+            f"Last user message not preserved in coherence tail.\n"
+            f"  Original: {original_last_user[:100]}\n"
+            f"  Upstream: {upstream_last_user[:100]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_savings_gate_reverts_on_low_tokens(self):
+        """When input tokens are below assembly_min_input_tokens, assembly should revert to passthrough."""
+        SESSION_ID = "tok-gate-001"
+        reset_circuit(SESSION_ID)
+
+        # Use the short session — well under 50K tokens
+        messages = build_coding_session_short()
+        original_tokens = estimate_input_tokens(messages)
+        captured_payloads: list[dict] = []
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            body = json.loads(request.content)
+            captured_payloads.append(body)
+            return httpx.Response(200, json=_NORMAL_RESPONSE)
+
+        settings = get_settings()
+        # Keep default assembly_min_input_tokens (50K) — short session should NOT trigger assembly
+        assert original_tokens < settings.assembly_min_input_tokens, (
+            f"Short session has {original_tokens} tokens, expected < {settings.assembly_min_input_tokens}"
+        )
+
+        mock_backend = _make_mock_backend(
+            facts=[
+                {"content": "Fact that should NOT cause rewriting on short session", "fact_type": "observation", "confidence": 0.9, "source_turn": 1},
+            ],
+        )
+        mock_backend.get_turn_number = AsyncMock(return_value=10)
+
+        app = create_app()
+
+        with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+             patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+             patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+             patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
+             patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
+
+            mock_resolve.return_value = (SESSION_ID, False)
+
+            async with app.router.lifespan_context(app):
+                app.state.http_client = httpx.AsyncClient(
+                    transport=httpx.MockTransport(mock_handler)
+                )
+                app.state.extractor_client = AsyncMock()
+                transport = ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                    resp = await ac.post(
+                        "/v1/chat/completions",
+                        json={
+                            "model": "test-model",
+                            "messages": messages,
+                            "stream": False,
+                        },
+                        headers={"X-Session-ID": SESSION_ID},
+                    )
+
+        assert resp.status_code == 200
+        assert len(captured_payloads) >= 1
+
+        # With the savings gate, the upstream should receive the ORIGINAL messages
+        # (passthrough because input_tokens < assembly_min_input_tokens)
+        upstream_msg_count = len(captured_payloads[0].get("messages", []))
+        upstream_tokens = estimate_input_tokens(captured_payloads[0].get("messages", []))
+
+        # Token count should be approximately the same (not reduced by assembly)
+        # Allow small variance from DSML hint injection or tool injection
+        token_ratio = upstream_tokens / max(original_tokens, 1)
+        assert token_ratio > 0.9, (
+            f"Savings gate should prevent assembly: original={original_tokens}, "
+            f"upstream={upstream_tokens}, ratio={token_ratio:.3f}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_recall_resend_includes_recalled_facts(self):
+        """The recall re-send payload should contain the tool result with recalled facts."""
+        SESSION_ID = "tok-recall-facts-001"
+        reset_circuit(SESSION_ID)
+
+        messages = build_recall_trigger_session()
+        resend_payloads: list[dict] = []
+        request_count = [0]
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            if "/models" in str(request.url):
+                return httpx.Response(200, json={"object": "list", "data": []})
+            body = json.loads(request.content)
+            request_count[0] += 1
+
+            msg_list = body.get("messages", [])
+            has_recall_result = any(
+                m.get("role") == "tool" and m.get("name") == "__archolith_recall"
+                for m in msg_list
+            )
+
+            if has_recall_result:
+                resend_payloads.append(body)
+                return httpx.Response(200, json=_NORMAL_RESPONSE)
+            else:
+                return httpx.Response(200, json=_recall_tool_call_response("JWKS cache TTL"))
+
+        settings = get_settings()
+        orig_recall = settings.session_recall_tool_enabled
+        settings.session_recall_tool_enabled = True
+
+        try:
+            mock_backend = _make_mock_backend(
+                facts=[
+                    {"content": "JWKS cache TTL is 300 seconds (5 minutes)", "fact_type": "observation", "confidence": 0.95, "source_turn": 2},
+                    {"content": "JWKS endpoint at https://auth.internal/api/v2/.well-known/jwks.json", "fact_type": "observation", "confidence": 0.9, "source_turn": 2},
+                    {"content": "Auth middleware uses RS256 algorithm for JWT validation", "fact_type": "observation", "confidence": 0.9, "source_turn": 2},
+                ],
+            )
+            mock_backend.get_turn_number = AsyncMock(return_value=12)
+
+            app = create_app()
+
+            with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+                 patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+                 patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
+
+                mock_resolve.return_value = (SESSION_ID, False)
+
+                async with app.router.lifespan_context(app):
+                    app.state.http_client = httpx.AsyncClient(
+                        transport=httpx.MockTransport(mock_handler)
+                    )
+                    app.state.extractor_client = AsyncMock()
+                    transport = ASGITransport(app=app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                        resp = await ac.post(
+                            "/v1/chat/completions",
+                            json={
+                                "model": "test-model",
+                                "messages": messages,
+                                "stream": False,
+                            },
+                            headers={"X-Session-ID": SESSION_ID},
+                        )
+        finally:
+            settings.session_recall_tool_enabled = orig_recall
+
+        assert resp.status_code == 200
+        assert len(resend_payloads) >= 1, "No recall re-send captured"
+
+        # The re-send should contain a tool result with recalled facts
+        resend_msgs = resend_payloads[0].get("messages", [])
+        recall_results = [
+            m for m in resend_msgs
+            if m.get("role") == "tool" and m.get("name") == "__archolith_recall"
+        ]
+        assert len(recall_results) >= 1, "Re-send missing recall tool result"
+
+        recall_content = recall_results[0].get("content", "")
+        assert len(recall_content) > 50, (
+            f"Recall result too short ({len(recall_content)} chars) — "
+            f"should contain formatted facts"
+        )
+        assert "RELEVANT CONTEXT" in recall_content, (
+            f"Recall result missing RELEVANT CONTEXT header: {recall_content[:200]}"
+        )
+        # Should contain at least one of our mock facts
+        assert "JWKS" in recall_content or "300" in recall_content, (
+            f"Recall result doesn't contain expected fact content: {recall_content[:200]}"
         )
