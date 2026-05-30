@@ -1,6 +1,6 @@
 [project]
 name = "archolith-proxy"
-version = "0.1.0"
+version = "0.3.0"
 description = "Self-hosted context intelligence proxy for LLMs — extracts knowledge, compresses context, remembers everything"
 requires-python = ">=3.12"
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
