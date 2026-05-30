@@ -138,3 +138,12 @@ Pragmatic contributions are preferred:
 - fewer magic behaviors
 
 If you are unsure about a behavioral change, open with the architectural reasoning first.
+
+## Contributor License Agreement
+
+By submitting a pull request, you agree to the [CLA](CLA.md). In short:
+you keep your copyright, but you grant the project owner a broad license
+to use your contribution — including under commercial licenses. The project
+itself is distributed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+Every PR template includes a CLA checkbox. Please check it before submitting.

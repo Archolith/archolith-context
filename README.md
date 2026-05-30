@@ -1,6 +1,6 @@
 # archolith-context
 
-Self-hosted context intelligence for LLMs.
+Self-hosted context intelligence for LLMs. Part of the [archolith&trade;](https://archolith.dev) stack.
 
 Compress context. Extract knowledge. Remember everything.
 
@@ -97,20 +97,20 @@ Notes:
 
 ## Benchmark Results
 
-The committed benchmark audit is [`./.agent/audits/2026-05-21-gpt4omini-16turn-baseline.md`](./.agent/audits/2026-05-21-gpt4omini-16turn-baseline.md).
+| Metric | Value | Source |
+|--------|-------|--------|
+| Proxy token savings | **58.6%** | 10-turn code review, DeepSeek upstream |
+| Filter compression | **50.0%** | 12 real session samples, 8 categories |
+| MCP waste reduction | **71.5%** | Live session telemetry, 5 MCP servers |
+| Best single-turn savings | **75%** | Curator mode, turns 6+ |
+
+Full results, reproduction instructions, and corpus data are in [archolith-bench](https://github.com/ctharvey/archolith-bench).
+
+### Detailed Proxy Audit
+
+The committed per-turn audit is [`./.agent/audits/2026-05-21-gpt4omini-16turn-baseline.md`](./.agent/audits/2026-05-21-gpt4omini-16turn-baseline.md).
 
 That run used a 16-turn coding conversation against `gpt-4o-mini` with LadybugDB, `gpt-4.1-mini` extraction, embeddings enabled, and relaxed gating so assembly would activate earlier than the production defaults. It is a useful system audit, but it is not a claim that the default `.env.example` values will produce the same curve out of the box.
-
-### Aggregate Outcomes
-
-- Total direct input tokens: `138,016`
-- Total proxy savings: `49,926`
-- Overall savings ratio: `36.2%`
-- Steady-state savings range: `45-65%` across turns `7-16`
-- Peak single-turn savings: `65%` on turn `7`
-- Mean response time: `32,041 ms` direct vs `18,168 ms` through the proxy in that run
-
-### Representative Turns
 
 | Turn | Direct In | Proxy In | Rewritten | Savings | Ratio | Mode |
 |------|-----------|----------|-----------|---------|-------|------|
@@ -120,7 +120,7 @@ That run used a 16-turn coding conversation against `gpt-4o-mini` with LadybugDB
 | 12 | 13,194 | 8,971 | 4,121 | 4,850 | 54% | `graph` |
 | 16 | 18,370 | 12,828 | 5,206 | 7,622 | 59% | `graph` |
 
-The main signal from the audit is not "compression starts immediately." It is that once the conversation becomes long enough to have real replay cost, the graph-assembled form grows much more slowly than raw chat history.
+The main signal is not "compression starts immediately." It is that once the conversation has real replay cost, the graph-assembled form grows much more slowly than raw chat history.
 
 ## How It Works
 
@@ -293,4 +293,9 @@ Contributions are welcome. Start with [CONTRIBUTING.md](./CONTRIBUTING.md) for l
 
 ## License
 
-Apache 2.0. See [LICENSE](./LICENSE).
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+Free for non-commercial use; commercial use requires permission from the licensor.
+Contributions are subject to the [CLA](CLA.md).
+
+archolith&trade; is a trademark of Charles Harvey. Use of the name in
+derivative works or competing products requires explicit permission.

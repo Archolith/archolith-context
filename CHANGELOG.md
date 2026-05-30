@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-05-30 — License, CLA, and Benchmark Refresh
+
+- Switched license from Apache 2.0 to PolyForm Noncommercial 1.0.0 (consistent with archolith-bench and archolith-rtk).
+- Added CLA.md (Contributor License Agreement) and .github/pull_request_template.md with CLA checkbox.
+- Updated CONTRIBUTING.md with CLA reference.
+- Updated README benchmark section with archolith-bench headline numbers (58.6% proxy, 50% filter, 71.5% MCP waste).
+- Added archolith trademark notice to README.
+- Updated pyproject.toml: license, author email, repository URLs, benchmarks link.
+
 ## Unreleased
 
 - **CRITICAL FIX:** `_wrap_response_as_sse()` now emits `tool_calls` deltas with proper `index` keys when converting non-streaming responses to SSE. Previously only emitted `role`, `content`, and `finish_reason` — any response with `finish_reason: "tool_calls"` but no tool call data caused OpenCode to error/retry infinitely, burning tokens until compaction killed the session.
