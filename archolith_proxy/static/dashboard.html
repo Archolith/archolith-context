@@ -534,7 +534,30 @@ async function renderSessionDetail(sessionId) {
     }
     html += '</div></div>';
 
+    // Preserve expanded turn cards across polls
+    const expanded = new Set();
+    document.querySelectorAll('.turn-card.selected').forEach(el => {
+      const tid = el.querySelector('.mono');
+      if (tid) expanded.add(tid.textContent.trim());
+    });
+
     content.innerHTML = html;
+
+    // Restore expanded state
+    if (expanded.size > 0) {
+      document.querySelectorAll('.turn-card').forEach(el => {
+        const tid = el.querySelector('.mono');
+        if (tid && expanded.has(tid.textContent.trim())) {
+          el.classList.add('selected');
+        }
+      });
+    }
+
+    // Auto-scroll to bottom of timeline if user hasn't scrolled up
+    const timeline = document.getElementById('timeline');
+    if (timeline && !content._userScrolled) {
+      timeline.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   } catch (e) {
     content.innerHTML = `
       <a class="back" href="#/sessions">← sessions</a>
@@ -544,7 +567,7 @@ async function renderSessionDetail(sessionId) {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-refresh overview
+// Auto-refresh — polls current page for live updates
 // ---------------------------------------------------------------------------
 let refreshTimer = null;
 function startAutoRefresh() {
@@ -552,9 +575,20 @@ function startAutoRefresh() {
   const hash = location.hash.slice(1) || '/';
   if (hash === '/') {
     refreshTimer = setInterval(renderOverview, 10000);
+  } else if (hash === '/sessions') {
+    refreshTimer = setInterval(renderSessionList, 5000);
+  } else if (hash.startsWith('/sessions/')) {
+    const sid = hash.split('/sessions/')[1];
+    refreshTimer = setInterval(() => renderSessionDetail(sid), 3000);
   }
 }
 window.addEventListener('hashchange', () => { route(); startAutoRefresh(); });
+
+// Track user scroll to avoid fighting auto-scroll
+content.addEventListener('scroll', () => {
+  const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight < 100;
+  content._userScrolled = !atBottom;
+});
 
 // ---------------------------------------------------------------------------
 // Boot
