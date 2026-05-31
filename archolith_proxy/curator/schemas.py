@@ -224,7 +224,8 @@ ALL_CURATOR_TOOLS: list[dict] = [
                 "inventory in the user prompt. Include turns whose conversations introduced "
                 "patterns, schemas, or decisions still active in the current question. "
                 "Omit turns fully captured in facts/checkpoint. "
-                "Do NOT include coherence tail turns — they are always kept automatically."
+                "Do NOT include coherence tail turns — they are always kept automatically. "
+                "Order the list by relevance: most relevant to the current question FIRST."
             ),
             "parameters": {
                 "type": "object",
@@ -233,9 +234,9 @@ ALL_CURATOR_TOOLS: list[dict] = [
                         "type": "array",
                         "items": {"type": "integer"},
                         "description": (
-                            "Turn numbers to retain (use the t-numbers from the turn "
-                            "inventory, e.g. [3, 5, 8]). Empty list means drop all "
-                            "middle turns."
+                            "Turn numbers to retain, ordered by relevance to the current "
+                            "question (most relevant first). Example: [5, 3, 8] means t5 "
+                            "is most relevant, t8 least. Empty list = drop all middle turns."
                         ),
                     },
                 },

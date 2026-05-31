@@ -296,7 +296,8 @@ async def select_relevant_turns(
     """
     if not turn_numbers:
         return "Recorded: drop all middle turns (retain none)."
-    return f"Recorded: retaining turns {sorted(int(n) for n in turn_numbers)} in compressed history."
+    nums = [int(n) for n in turn_numbers]
+    return f"Recorded: retaining turns {nums} (relevance order, most relevant first)."
 
 
 # Tool name → implementation mapping (used by loop.py for dispatch)

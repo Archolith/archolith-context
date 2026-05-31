@@ -38,7 +38,8 @@ Rules:
    If a tool returns an error, do NOT retry with identical arguments — move on or
    try a different approach.
 7. Call select_relevant_turns with the turn numbers from the middle section (shown in
-   the user prompt) that are STILL needed in context. Keep turns that:
+   the user prompt) that are STILL needed in context. **Order them by relevance to the
+   current question — most relevant first.** Keep turns that:
    - Introduced a design pattern, schema, or API contract being extended now
    - Contain code or decisions being directly referenced or modified
    - Established an active requirement or constraint

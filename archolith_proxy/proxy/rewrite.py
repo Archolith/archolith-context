@@ -233,11 +233,21 @@ def rewrite_messages(
     result.extend(tail_shrunk)
 
     # Token ceiling: if the rewritten payload exceeds the cap, progressively
-    # compress tool results in the middle section (oldest retained turns first).
-    # This prevents the rewritten output from growing indefinitely as the
-    # curator accumulates more retained turns.
+    # compress tool results in the middle section, starting with the least
+    # relevant retained turns. Relevance order comes from the curator
+    # (first in list = most relevant) with a recency bonus.
     if max_rewritten_tokens > 0:
-        result = _enforce_token_ceiling(result, max_rewritten_tokens, len(result) - len(tail_shrunk))
+        # Build per-message compression priority for the middle section.
+        # Lower priority = compress first. Combines curator relevance rank
+        # with a recency bonus (recent turns are harder to compress).
+        middle_msg_count = len(result) - len(tail_shrunk)
+        compression_priority = _build_compression_priority(
+            result[:middle_msg_count],
+            retained_turn_numbers if retained_turn_numbers is not None else None,
+        )
+        result = _enforce_token_ceiling(
+            result, max_rewritten_tokens, middle_msg_count, compression_priority,
+        )
 
     # Final validation: ensure first non-system is user
     first_non_system = next((i for i, m in enumerate(result) if m.get("role") != "system"), None)
@@ -339,18 +349,78 @@ def _compress_assistant_message(content: str, max_chars: int = 300) -> str:
     return f"{head}\n[...{omitted} chars compressed...]\n{tail}"
 
 
+def _build_compression_priority(
+    middle_messages: list[dict],
+    retained_turn_order: list[int] | None,
+) -> list[float]:
+    """Assign a compression priority score to each middle-section message.
+
+    Lower score = compress first. Combines:
+    - Curator relevance rank (first in retained list = highest priority)
+    - Recency bonus (messages later in the conversation get +bonus)
+    - System messages get max priority (never compress)
+
+    Returns a list of floats, one per message in middle_messages.
+    """
+    n = len(middle_messages)
+    if n == 0:
+        return []
+
+    # Build a map: turn_number → relevance_rank (0 = most relevant)
+    if retained_turn_order:
+        relevance = {t: rank for rank, t in enumerate(retained_turn_order)}
+        max_rank = len(retained_turn_order)
+    else:
+        relevance = {}
+        max_rank = 1
+
+    # Assign turn numbers to messages (same logic as rewrite_messages)
+    turn_num = 0
+    msg_turns: list[int] = []
+    for msg in middle_messages:
+        if msg.get("role") == "user":
+            turn_num += 1
+        msg_turns.append(turn_num)
+
+    # Recency bonus: linear 0.0 (oldest) to 0.4 (newest) of the middle
+    recency_weight = 0.4
+
+    priorities: list[float] = []
+    for i, msg in enumerate(middle_messages):
+        role = msg.get("role", "")
+        if role == "system":
+            priorities.append(1000.0)  # never compress system
+            continue
+
+        t = msg_turns[i]
+        # Curator relevance: invert rank so most-relevant = high score
+        # Turns not in the relevance map get lowest rank
+        rank = relevance.get(t, max_rank)
+        relevance_score = (max_rank - rank) / max(max_rank, 1)  # 0.0 to 1.0
+
+        # Recency: fraction of position in the middle
+        recency_score = i / max(n - 1, 1)  # 0.0 to 1.0
+
+        priority = relevance_score + recency_weight * recency_score
+        priorities.append(priority)
+
+    return priorities
+
+
 def _enforce_token_ceiling(
     messages: list[dict],
     max_tokens: int,
     tail_start_idx: int,
+    compression_priority: list[float] | None = None,
 ) -> list[dict]:
-    """Progressively compress middle-section tool results until under the token ceiling.
+    """Progressively compress middle-section messages until under the token ceiling.
 
     When the rewritten payload exceeds max_tokens, compress tool results in the
-    middle section (between system msg and tail) from oldest to newest. Each
-    oversized tool result gets truncated to _CEILING_COMPRESS_CHARS. If still
-    over budget after compressing all tool results, compress assistant messages
-    in the middle from oldest to newest.
+    middle section, ordered by compression_priority (lowest first = least relevant).
+    If no priority provided, falls back to oldest-first.
+
+    Phase 1: compress tool results (lowest-priority first)
+    Phase 2: compress assistant messages (lowest-priority first)
 
     The tail is never modified — it needs exact content for the current turn.
     """
@@ -363,8 +433,15 @@ def _enforce_token_ceiling(
 
     result = list(messages)
 
-    # Phase 1: compress tool results in the middle (oldest first)
-    for i in range(tail_start_idx):
+    # Build compression order: indices sorted by priority ascending (compress first)
+    if compression_priority and len(compression_priority) >= tail_start_idx:
+        indexed_priority = [(i, compression_priority[i]) for i in range(tail_start_idx)]
+        compress_order = [i for i, _ in sorted(indexed_priority, key=lambda x: x[1])]
+    else:
+        compress_order = list(range(tail_start_idx))  # oldest-first fallback
+
+    # Phase 1: compress tool results (least relevant first)
+    for i in compress_order:
         if estimate_input_tokens(result) <= max_tokens:
             break
         msg = result[i]
@@ -374,9 +451,9 @@ def _enforce_token_ceiling(
         if isinstance(content, str) and len(content) > _CEILING_COMPRESS_CHARS:
             result[i] = {**msg, "content": _compress_tool_result_ceiling(content)}
 
-    # Phase 2: if still over, compress assistant messages in the middle (oldest first)
+    # Phase 2: if still over, compress assistant messages (least relevant first)
     if estimate_input_tokens(result) > max_tokens:
-        for i in range(tail_start_idx):
+        for i in compress_order:
             if estimate_input_tokens(result) <= max_tokens:
                 break
             msg = result[i]
