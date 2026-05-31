@@ -43,9 +43,12 @@ Rules:
    - Introduced a design pattern, schema, or API contract being extended now
    - Contain code or decisions being directly referenced or modified
    - Established an active requirement or constraint
-   Drop turns whose information is fully captured in your extracted facts, checkpoint,
-   or code sections. Do NOT include coherence tail turns (they are always kept).
-   If in doubt, keep more — err toward inclusion, not compression.
+   Drop turns whose information is fully captured in your context block above.
+   IMPORTANT: each retained turn keeps ALL its tool results verbatim (file reads,
+   grep output, command logs). A turn with 5 tool calls adds ~5-15K tokens. Only
+   retain turns whose RAW TOOL OUTPUT is still needed — if you already put the key
+   facts/code in your context block, DROP the turn to save tokens.
+   Do NOT include coherence tail turns (they are always kept).
    If the middle section is empty or has fewer than 3 turns, skip this tool.
 8. Your final response IS the context block. Format it exactly as:
 

@@ -419,8 +419,9 @@ def _enforce_token_ceiling(
     middle section, ordered by compression_priority (lowest first = least relevant).
     If no priority provided, falls back to oldest-first.
 
-    Phase 1: compress tool results (lowest-priority first)
-    Phase 2: compress assistant messages (lowest-priority first)
+    Phase 1: compress tool results (least relevant first), with extra-aggressive
+             compression when content is already in the system context block
+    Phase 2: compress assistant messages (least relevant first)
 
     The tail is never modified — it needs exact content for the current turn.
     """
@@ -433,12 +434,21 @@ def _enforce_token_ceiling(
 
     result = list(messages)
 
+    # Extract the system context block for dedup detection
+    context_block = ""
+    for m in result:
+        if m.get("role") == "system":
+            context_block = m.get("content", "") or ""
+            break
+
     # Build compression order: indices sorted by priority ascending (compress first)
     if compression_priority and len(compression_priority) >= tail_start_idx:
         indexed_priority = [(i, compression_priority[i]) for i in range(tail_start_idx)]
         compress_order = [i for i, _ in sorted(indexed_priority, key=lambda x: x[1])]
     else:
         compress_order = list(range(tail_start_idx))  # oldest-first fallback
+
+    dedup_count = 0
 
     # Phase 1: compress tool results (least relevant first)
     for i in compress_order:
@@ -448,7 +458,14 @@ def _enforce_token_ceiling(
         if msg.get("role") != "tool":
             continue
         content = msg.get("content", "") or ""
-        if isinstance(content, str) and len(content) > _CEILING_COMPRESS_CHARS:
+        if not isinstance(content, str) or len(content) <= _CEILING_COMPRESS_CHARS:
+            continue
+        # Dedup: if the tool result's key content is already in the context block,
+        # compress much more aggressively (just a pointer, not a preview)
+        if _content_already_in_context(content, context_block):
+            result[i] = {**msg, "content": _dedup_tool_result(content)}
+            dedup_count += 1
+        else:
             result[i] = {**msg, "content": _compress_tool_result_ceiling(content)}
 
     # Phase 2: if still over, compress assistant messages (least relevant first)
@@ -469,9 +486,50 @@ def _enforce_token_ceiling(
         before=current,
         after=final_tokens,
         ceiling=max_tokens,
+        dedup_compressed=dedup_count,
         compressed_to_budget=final_tokens <= max_tokens,
     )
     return result
+
+
+def _content_already_in_context(tool_content: str, context_block: str) -> bool:
+    """Check if a tool result's key content is already represented in the context block.
+
+    Uses a fingerprint approach: extract distinctive tokens from the tool result
+    and check if a significant fraction appear in the context block. This catches
+    cases where the curator fetched a file section and put it in the context block,
+    but the same file was also read in a retained turn.
+    """
+    if not context_block or len(context_block) < 100:
+        return False
+
+    # Extract distinctive multi-word fragments from the tool content
+    # (skip very short lines, common boilerplate)
+    lines = tool_content.split("\n")
+    distinctive_fragments = []
+    for line in lines:
+        stripped = line.strip()
+        # Skip short, numeric-only, or very common lines
+        if len(stripped) < 20 or stripped.isdigit():
+            continue
+        # Take the first 60 chars as a fingerprint fragment
+        distinctive_fragments.append(stripped[:60])
+        if len(distinctive_fragments) >= 8:
+            break
+
+    if len(distinctive_fragments) < 3:
+        return False
+
+    # Check what fraction of fragments appear in the context block
+    matches = sum(1 for frag in distinctive_fragments if frag in context_block)
+    return matches >= len(distinctive_fragments) * 0.5
+
+
+def _dedup_tool_result(content: str) -> str:
+    """Ultra-aggressive compression for tool results already in the context block."""
+    lines = content.split("\n")
+    first_line = lines[0].strip()[:100] if lines else ""
+    return f"[content already in session context — {len(content)} chars: {first_line}...]"
 
 
 # Max chars for tool results when the token ceiling forces compression.
