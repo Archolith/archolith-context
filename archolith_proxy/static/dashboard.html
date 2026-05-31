@@ -352,10 +352,8 @@ function buildTurnCard(t) {
         <span class="turn-num">t${t.turn_number}</span>
         <span style="font-size:11px;color:var(--text-dim);margin-right:4px;">${t.is_user_turn ? '👤' : '🤖'}</span>
         <span class="turn-mode">${modeTag(t.assembly_mode)}${reasonStr}</span>
-        <span style="font-family:var(--mono);font-size:12px;color:var(--text-dim);">${fmtTokens(t.input_tokens)} ctx</span>
-        <span class="turn-tokens">
-          <span class="${savingsCls}" style="color:var(--${savingsCls})">${t.savings_tokens}tok saved (${pct(t.savings_ratio)})</span>
-        </span>
+        <span style="font-family:var(--mono);font-size:12px;color:var(--text-dim);">${fmtTokens(t.input_tokens)} ctx${t.savings_tokens > 0 ? ` → ${fmtTokens(t.rewritten_tokens || t.input_tokens)} sent` : ''}</span>
+        <span class="turn-tokens">${t.savings_tokens > 0 ? `<span class="${savingsCls}" style="color:var(--${savingsCls})">-${fmtTokens(t.savings_tokens)} (${pct(t.savings_ratio)})</span>` : ''}</span>
         <span class="turn-latency">${latencyBar(t.assembly_latency_ms + t.upstream_latency_ms)}</span>
       </div>
       ${fallbackStr}
