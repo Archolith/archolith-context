@@ -160,7 +160,7 @@ class TraceStore:
                     first_at = t.created_at
                 if last_at is None or t.created_at > last_at:
                     last_at = t.created_at
-                if t.assembly_mode in ("curator", "graph", "briefing", "briefing_stale"):
+                if t.assembly_mode in ("curator", "graph", "briefing", "briefing_stale", "agent_solo_compressed"):
                     rewritten_input += t.input_tokens
 
             # Overall ratio: savings across all traffic
@@ -204,7 +204,7 @@ class TraceStore:
                 for t in turns:
                     modes[t.assembly_mode] += 1
 
-                _rewritten_modes = {"curator", "graph", "briefing", "briefing_stale"}
+                _rewritten_modes = {"curator", "graph", "briefing", "briefing_stale", "agent_solo_compressed"}
                 rewritten_input = sum(t.input_tokens for t in turns if t.assembly_mode in _rewritten_modes)
                 avg_savings = total_savings / total_input if total_input > 0 else 0.0
                 rewritten_ratio = total_savings / rewritten_input if rewritten_input > 0 else 0.0

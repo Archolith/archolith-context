@@ -94,6 +94,7 @@
   .tag.passthrough { background: rgba(139,148,158,0.15); color: var(--text-dim); }
   .tag.cold_start { background: rgba(210,153,34,0.15); color: var(--yellow); }
   .tag.agent_solo { background: rgba(56,139,253,0.12); color: #58a6ff; }
+  .tag.agent_solo_compressed { background: rgba(56,253,139,0.12); color: #58ffaa; }
   .tag.skipped { background: rgba(139,148,158,0.1); color: var(--text-dim); }
 
   /* Toggle for hiding non-user turns */
@@ -262,7 +263,7 @@ function pct(v) {
 }
 
 function modeTag(mode) {
-  const cls = mode === 'graph' ? 'graph' : mode === 'curator' ? 'curator' : mode === 'briefing' ? 'curator' : mode === 'briefing_stale' ? 'curator' : mode === 'fallback' ? 'fallback' : mode === 'cold_start' ? 'cold_start' : mode === 'agent_solo' ? 'agent_solo' : mode.startsWith('skipped') ? 'skipped' : 'passthrough';
+  const cls = mode === 'graph' ? 'graph' : mode === 'curator' ? 'curator' : mode === 'briefing' ? 'curator' : mode === 'briefing_stale' ? 'curator' : mode === 'fallback' ? 'fallback' : mode === 'cold_start' ? 'cold_start' : mode === 'agent_solo' ? 'agent_solo' : mode === 'agent_solo_compressed' ? 'agent_solo_compressed' : mode.startsWith('skipped') ? 'skipped' : 'passthrough';
   return `<span class="tag ${cls}">${mode}</span>`;
 }
 

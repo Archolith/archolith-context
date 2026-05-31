@@ -149,6 +149,14 @@ class Settings(BaseSettings):
     curator_max_iterations: int = 6
     curator_latency_budget_ms: int = 6000   # hard timeout; falls back to heuristic
 
+    # Agent-solo turn compression — mechanical savings on tool-call continuations
+    # without an LLM call.  Each toggle is independent; combine for maximum effect.
+    agent_solo_shrink_enabled: bool = False      # A: shrink all tool results to a token budget
+    agent_solo_dedup_enabled: bool = False        # B: replace byte-identical tool results with compact markers
+    agent_solo_compress_middle_enabled: bool = False  # C: compress compressible tool results in older turns
+    agent_solo_shrink_max_tokens: int = 2000     # per-result token cap for strategy A
+    agent_solo_min_input_tokens: int = 30000     # skip compression below this input size
+
     # Two-pass curator — background pass (same bot, generous iteration budget)
     background_pass_enabled: bool = False
     background_pass_max_iterations: int = 12

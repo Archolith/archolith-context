@@ -520,21 +520,68 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         stream=req.stream, input_tokens=input_tokens,
     )
 
-    # Agent-solo turn gating: skip assembly on tool-call continuations.
-    # The graph context doesn't change meaningfully between consecutive
-    # agent API calls within the same user turn. Assembly on these turns
-    # typically inflates the payload (adds graph overhead, removes nothing
-    # since Read/Edit/Write/Bash are non-compressible).
+    # Agent-solo turn gating: skip full curator assembly on tool-call
+    # continuations but optionally apply mechanical compression (shrink,
+    # dedup, middle compress) to reduce token cost without an LLM call.
     is_agent_solo = session_id and graph_ready and not session_over_budget and not is_user_turn
     if is_agent_solo:
         assembly_mode = "agent_solo"
-        logger.debug(
-            "agent_solo_passthrough",
-            session_id=session_id,
-            turn=turn_number,
-            input_tokens=input_tokens,
-            user_turns=user_turn_count,
+
+        any_solo_strategy = (
+            settings.agent_solo_shrink_enabled
+            or settings.agent_solo_dedup_enabled
+            or settings.agent_solo_compress_middle_enabled
         )
+        if any_solo_strategy:
+            from archolith_proxy.proxy.agent_solo import compress_agent_solo
+            solo_messages = body.get("messages", [])
+            solo_messages, solo_stats = compress_agent_solo(
+                solo_messages,
+                session_id=session_id,
+                input_tokens=input_tokens,
+                shrink_enabled=settings.agent_solo_shrink_enabled,
+                dedup_enabled=settings.agent_solo_dedup_enabled,
+                compress_middle_enabled=settings.agent_solo_compress_middle_enabled,
+                shrink_max_tokens=settings.agent_solo_shrink_max_tokens,
+                min_input_tokens=settings.agent_solo_min_input_tokens,
+                coherence_tail_size=settings.coherence_tail_size,
+                max_tail_messages=settings.max_tail_messages,
+            )
+            if solo_stats["total_chars_saved"] > 0:
+                body["messages"] = solo_messages
+                assembly_mode = "agent_solo_compressed"
+                # Estimate token savings (~4 chars per token)
+                est_savings = solo_stats["total_chars_saved"] // 4
+                trace_builder.set_assembly(
+                    mode="agent_solo_compressed",
+                    reason=f"strategies={','.join(solo_stats['strategies_applied'])}",
+                    latency_ms=0.0,
+                    savings_tokens=est_savings,
+                )
+                logger.info(
+                    "agent_solo_compressed",
+                    session_id=session_id,
+                    turn=turn_number,
+                    strategies=solo_stats["strategies_applied"],
+                    chars_saved=solo_stats["total_chars_saved"],
+                    est_tokens_saved=est_savings,
+                )
+            else:
+                logger.debug(
+                    "agent_solo_passthrough",
+                    session_id=session_id,
+                    turn=turn_number,
+                    input_tokens=input_tokens,
+                    skip_reason=solo_stats.get("skipped_reason"),
+                )
+        else:
+            logger.debug(
+                "agent_solo_passthrough",
+                session_id=session_id,
+                turn=turn_number,
+                input_tokens=input_tokens,
+                user_turns=user_turn_count,
+            )
 
     if session_id and graph_ready and not session_over_budget and not is_agent_solo:
         try:
