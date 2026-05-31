@@ -816,6 +816,15 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                                 # (better than passthrough, which would send full history)
 
                         record_metric("token_savings_estimated", savings)
+
+                        # Cache curator rewrite for agent-solo prefix persistence
+                        from archolith_proxy.proxy.agent_solo import cache_curator_rewrite
+                        cache_curator_rewrite(
+                            session_id,
+                            original_messages,
+                            body["messages"],
+                        )
+
                         logger.info(
                             "messages_rewritten",
                             session_id=session_id,
