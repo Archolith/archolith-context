@@ -716,21 +716,23 @@ class TestTokenAwareAssembly:
         settings = get_settings()
         orig_min_input = settings.assembly_min_input_tokens
         orig_min_savings = settings.assembly_min_savings_ratio
+        orig_curator = settings.curator_enabled
         settings.assembly_min_input_tokens = 0
         settings.assembly_min_savings_ratio = 0.0
+        settings.curator_enabled = True
 
         try:
             mock_backend = _make_mock_backend()
             mock_backend.get_turn_number = AsyncMock(return_value=15)
             app = create_app()
 
-            async def fake_assemble(*args, **kwargs):
+            async def fake_curate(*args, **kwargs):
                 return mock_assembled
 
             with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
                  patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
-                 patch("archolith_proxy.openai.chat.assemble_context", side_effect=fake_assemble), \
+                 patch("archolith_proxy.curator.curate_context", side_effect=fake_curate), \
                  patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
 
@@ -755,6 +757,7 @@ class TestTokenAwareAssembly:
         finally:
             settings.assembly_min_input_tokens = orig_min_input
             settings.assembly_min_savings_ratio = orig_min_savings
+            settings.curator_enabled = orig_curator
 
         assert resp.status_code == 200
         assert len(captured_payloads) >= 1, "No upstream request captured"
@@ -808,21 +811,23 @@ class TestTokenAwareAssembly:
         settings = get_settings()
         orig_min_input = settings.assembly_min_input_tokens
         orig_min_savings = settings.assembly_min_savings_ratio
+        orig_curator = settings.curator_enabled
         settings.assembly_min_input_tokens = 0
         settings.assembly_min_savings_ratio = 0.0
+        settings.curator_enabled = True
 
         try:
             mock_backend = _make_mock_backend()
             mock_backend.get_turn_number = AsyncMock(return_value=15)
             app = create_app()
 
-            async def fake_assemble(*args, **kwargs):
+            async def fake_curate(*args, **kwargs):
                 return mock_assembled
 
             with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
                  patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
-                 patch("archolith_proxy.openai.chat.assemble_context", side_effect=fake_assemble), \
+                 patch("archolith_proxy.curator.curate_context", side_effect=fake_curate), \
                  patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
 
@@ -847,6 +852,7 @@ class TestTokenAwareAssembly:
         finally:
             settings.assembly_min_input_tokens = orig_min_input
             settings.assembly_min_savings_ratio = orig_min_savings
+            settings.curator_enabled = orig_curator
 
         assert resp.status_code == 200
         assert len(captured_payloads) >= 1
@@ -883,36 +889,52 @@ class TestTokenAwareAssembly:
             captured_payloads.append(body)
             return httpx.Response(200, json=_NORMAL_RESPONSE)
 
+        # Build a curator-style context block with the expected section markers
+        context_block = (
+            "=== SESSION OVERVIEW ===\n"
+            "Goal: Add product reviews to the e-commerce app\n\n"
+            "## Files Touched\n"
+            "- reviews/models.py (modified)\n\n"
+            "## Decisions Made\n"
+            "- [turn 4] Follow existing order route patterns for review routes\n\n"
+            "=== RELEVANT CONTEXT ===\n"
+            "- [observation|t3] Review endpoint supports POST, GET, DELETE operations\n"
+            "- [observation|t7] Product listing includes average_rating computed via SQL AVG\n"
+        )
+        mock_assembled = AssembledContext(
+            system_message={"role": "system", "content": context_block},
+            graph_context=[{"role": "system", "content": context_block}],
+            coherence_tail=[],
+            token_estimate=300,
+            facts_retrieved=2,
+            session_id=SESSION_ID,
+            retained_turn_numbers=[1, 8, 9],
+        )
+
         settings = get_settings()
         orig_min_input = settings.assembly_min_input_tokens
         orig_min_savings = settings.assembly_min_savings_ratio
+        orig_curator = settings.curator_enabled
         # Disable savings gates entirely so the context block stays
         settings.assembly_min_input_tokens = 0
         settings.assembly_min_savings_ratio = 0.0
+        settings.curator_enabled = True
 
         try:
-            mock_backend = _make_mock_backend(
-                facts=[
-                    {"content": "Review endpoint supports POST, GET, DELETE operations", "fact_type": "observation", "confidence": 0.9, "source_turn": 3},
-                    {"content": "Product listing includes average_rating computed via SQL AVG", "fact_type": "observation", "confidence": 0.85, "source_turn": 7},
-                ],
-                decisions=[
-                    {"summary": "Follow existing order route patterns for review routes", "rationale": "Consistency", "turn": 4},
-                ],
-            )
+            mock_backend = _make_mock_backend()
             mock_backend.get_turn_number = AsyncMock(return_value=15)
-            mock_backend.find_session_by_id = AsyncMock(return_value={
-                "session_id": SESSION_ID, "goal": "Add product reviews to the e-commerce app"
-            })
 
             app = create_app()
+
+            async def fake_curate(*args, **kwargs):
+                return mock_assembled
 
             with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
                  patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+                 patch("archolith_proxy.curator.curate_context", side_effect=fake_curate), \
                  patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
-                 patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend), \
-                 patch("archolith_proxy.assembler.context.get_backend", return_value=mock_backend):
+                 patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
 
                 mock_resolve.return_value = (SESSION_ID, False)
 
@@ -935,6 +957,7 @@ class TestTokenAwareAssembly:
         finally:
             settings.assembly_min_input_tokens = orig_min_input
             settings.assembly_min_savings_ratio = orig_min_savings
+            settings.curator_enabled = orig_curator
 
         assert resp.status_code == 200
         assert len(captured_payloads) >= 1

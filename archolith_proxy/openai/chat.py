@@ -562,16 +562,22 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 except Exception:
                     logger.warning("curator_error", session_id=session_id, exc_info=True)
 
-            # Fall back to heuristic assembler if curator didn't produce a result
-            if assembled is None:
-                assembled = await assemble_context(
-                    session_id=session_id,
-                    turn_number=turn_number,
-                    input_token_estimate=input_tokens,
-                    user_message=user_message,
-                    http_client=request.app.state.http_client if settings.embedding_enabled else None,
-                    messages=body.get("messages", []),
-                )
+            # Graph-only assembler fallback — disabled.
+            # The heuristic assembler inflates payloads on agentic sessions
+            # (adds graph context overhead without turn selection, and
+            # Read/Edit/Write/Bash results are non-compressible). When the
+            # curator fails or is disabled, passthrough is less harmful than
+            # graph-only assembly. Re-enable once graph-only does turn
+            # selection or has a compressibility gate.
+            # if assembled is None:
+            #     assembled = await assemble_context(
+            #         session_id=session_id,
+            #         turn_number=turn_number,
+            #         input_token_estimate=input_tokens,
+            #         user_message=user_message,
+            #         http_client=request.app.state.http_client if settings.embedding_enabled else None,
+            #         messages=body.get("messages", []),
+            #     )
             assembly_latency_ms = (time.monotonic() - assembly_start) * 1000
 
             if assembled:

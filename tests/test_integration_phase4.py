@@ -505,10 +505,12 @@ class TestTraceAccounting:
         turns = await get_trace_store().get_session_turns("session-trace")
         assert turns
         trace = turns[-1]
-        assert trace.assembly_mode == "skipped_low_tokens"
+        # Graph-only assembler is disabled — with curator off, assembled
+        # is None so the code labels it "cold_start" (assembled=None path).
+        # No rewriting occurs: rewritten_tokens stays 0, messages pass through.
+        assert trace.assembly_mode == "cold_start"
         assert trace.savings_tokens == 0
-        assert trace.rewritten_tokens == trace.input_tokens
-        assert trace.rewritten_messages == trace.original_messages
+        assert trace.rewritten_tokens == 0
 
 
 def _build_sse_chunks(text: str, model: str = "test-model") -> str:
