@@ -316,7 +316,7 @@ async def _run_curator_native(
                         session_id=session_id, result=result_str[:200])
                 else:
                     tool_log.append(CuratorToolCall(tool=tool_name, args=args, status="ok",
-                        result_preview=result_str[:200]))
+                        result_preview=result_str[:200], raw_result=result_str))
                 if tool_name in ("get_file", "get_file_lines"):
                     path = args.get("path", "")
                     if path:

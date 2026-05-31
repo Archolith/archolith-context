@@ -152,6 +152,7 @@ class Settings(BaseSettings):
     background_pass_enabled: bool = False
     background_pass_max_iterations: int = 12
     background_pass_debounce_ms: int = 2000  # wait for extraction before running
+    background_pass_latency_budget_ms: int = 30_000  # hard timeout for background pass
 
     # Pricing — per-million-token rates for cost estimation on dashboard.
     # Defaults to DeepSeek V4-Flash pricing. Override for other models.

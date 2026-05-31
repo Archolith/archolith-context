@@ -114,15 +114,23 @@ async def run_background_pass(
     client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
     t0 = time.monotonic()
+    budget_s = settings.background_pass_latency_budget_ms / 1000
     try:
-        result, _bg_tool_log, _bg_failure = await _run_curator_native(
-            client=client,
-            session_id=session_id,
-            user_prompt=user_prompt,
-            max_iterations=settings.background_pass_max_iterations,
-            system_prompt=CURATOR_SYSTEM_PROMPT,
-            model=model,
+        result, _bg_tool_log, _bg_failure = await asyncio.wait_for(
+            _run_curator_native(
+                client=client,
+                session_id=session_id,
+                user_prompt=user_prompt,
+                max_iterations=settings.background_pass_max_iterations,
+                system_prompt=CURATOR_SYSTEM_PROMPT,
+                model=model,
+            ),
+            timeout=budget_s,
         )
+    except asyncio.TimeoutError:
+        logger.info("background_pass_timeout", session_id=session_id, turn=turn_number,
+                     budget_ms=settings.background_pass_latency_budget_ms)
+        return
     except Exception:
         logger.warning("background_pass_failed", session_id=session_id, turn=turn_number, exc_info=True)
         return
@@ -187,8 +195,8 @@ def _build_briefing_from_result(
                 continue
             if path not in files:
                 files[path] = []
-            # Capture the result preview as the "section content"
-            content = tc.result_preview or ""
+            # Use full result text for briefing fidelity (not 200-char preview)
+            content = tc.raw_result or tc.result_preview or ""
             start = tc.args.get("start_line", tc.args.get("offset", 0))
             end = tc.args.get("end_line", tc.args.get("limit", 0))
             if isinstance(start, int) and isinstance(end, int) and end > start:
@@ -198,7 +206,8 @@ def _build_briefing_from_result(
         elif tc.tool == "get_file_outline" and tc.status == "ok":
             path = tc.args.get("path", "")
             if path:
-                file_outlines[path] = tc.result_preview or ""
+                # Use full result for outlines too
+                file_outlines[path] = tc.raw_result or tc.result_preview or ""
 
     from archolith_proxy.curator.briefing import PreFetchedFile
     prefetched = []

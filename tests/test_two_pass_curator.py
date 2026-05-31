@@ -5,9 +5,35 @@ from __future__ import annotations
 import sys
 import time
 import types
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch, AsyncMock
+
+import os
 
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# Settings helper — env-var injection for pydantic-settings priority
+# ---------------------------------------------------------------------------
+
+def _set_env_and_reload(**overrides: str) -> None:
+    """Set env vars, reset settings cache, so get_settings() picks them up.
+
+    pydantic-settings gives env vars higher priority than .env file values,
+    so we use os.environ to force our test overrides.
+    """
+    from archolith_proxy.config import reset_settings
+    reset_settings()
+    for key, value in overrides.items():
+        os.environ[key] = value
+
+
+def _clear_env(*keys: str) -> None:
+    """Remove test env vars and reset settings cache."""
+    from archolith_proxy.config import reset_settings
+    reset_settings()
+    for key in keys:
+        os.environ.pop(key, None)
 
 
 # ---------------------------------------------------------------------------
@@ -385,3 +411,412 @@ class TestCurateContextDispatch:
         )
         assert result is None
         cfg._settings = None  # cleanup
+
+
+# ---------------------------------------------------------------------------
+# Integration: run_background_pass with mocked _run_curator_native
+# ---------------------------------------------------------------------------
+
+class TestBackgroundPassPipeline:
+    """Test run_background_pass end-to-end with mocked curator loop."""
+
+    _ENV_KEYS = (
+        "CURATOR_ENABLED", "FILE_CACHE_ENABLED", "BACKGROUND_PASS_ENABLED",
+        "BACKGROUND_PASS_DEBOUNCE_MS", "BACKGROUND_PASS_LATENCY_BUDGET_MS",
+        "EXTRACTOR_API_KEY", "CURATOR_API_KEY",
+    )
+
+    def setup_method(self):
+        _briefing_cache.clear()
+        from archolith_proxy.config import reset_settings
+        reset_settings()
+
+    def teardown_method(self):
+        _clear_env(*self._ENV_KEYS)
+
+    @pytest.mark.asyncio
+    async def test_background_pass_caches_briefing(self):
+        """Background pass runs curator, builds briefing, and caches it."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            BACKGROUND_PASS_ENABLED="true",
+            BACKGROUND_PASS_DEBOUNCE_MS="0",
+            BACKGROUND_PASS_LATENCY_BUDGET_MS="30000",
+            EXTRACTOR_API_KEY="test-key",
+        )
+        from archolith_proxy.curator import run_background_pass
+        from archolith_proxy.config import get_settings
+
+        mock_result = CuratorResult(
+            context_text=(
+                "=== SESSION GOAL ===\nFix auth\n\n"
+                "=== CURRENT STATE ===\nWorking\n\n"
+                "=== KEY FACTS ===\n- Uses JWT\n"
+            ),
+            curated_paths={"auth/handler.py"},
+            tool_calls_used=2,
+            estimated_tokens=50,
+            retained_turn_numbers=[1, 2],
+            tool_log=[
+                CuratorToolCall(
+                    tool="get_file",
+                    args={"path": "auth/handler.py"},
+                    status="ok",
+                    result_preview="def handle_auth(): pass",
+                    raw_result="def handle_auth(): pass\n    token = jwt.encode({})\n    return token\n",
+                ),
+            ],
+        )
+
+        with patch("archolith_proxy.curator._run_curator_native",
+                    new_callable=AsyncMock) as mock_loop:
+            mock_loop.return_value = (mock_result, mock_result.tool_log, "")
+            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                await run_background_pass(
+                    session_id="s1",
+                    turn_number=5,
+                    user_message="fix auth",
+                    session_goal="Fix auth",
+                    messages=[{"role": "user", "content": "fix auth"}],
+                )
+
+        briefing = get_briefing("s1")
+        assert briefing is not None
+        assert briefing.source_turn == 5
+        assert briefing.session_goal == "Fix auth"
+        assert len(briefing.files) == 1
+        assert briefing.files[0].path == "auth/handler.py"
+        # Verify full content is captured (not truncated preview)
+        assert "jwt.encode" in briefing.files[0].sections[0][2]
+        assert briefing.retained_turns == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_background_pass_disabled_skips(self):
+        """When background_pass_enabled=False, run_background_pass does nothing."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            BACKGROUND_PASS_ENABLED="false",
+            EXTRACTOR_API_KEY="test-key",
+        )
+        from archolith_proxy.curator import run_background_pass
+
+        await run_background_pass(
+            session_id="s1", turn_number=5,
+            user_message="test", session_goal=None, messages=[],
+        )
+        assert get_briefing("s1") is None
+
+    @pytest.mark.asyncio
+    async def test_background_pass_timeout_returns_silently(self):
+        """Background pass timeout logs and returns without caching."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            BACKGROUND_PASS_ENABLED="true",
+            BACKGROUND_PASS_DEBOUNCE_MS="0",
+            BACKGROUND_PASS_LATENCY_BUDGET_MS="100",
+            EXTRACTOR_API_KEY="test-key",
+        )
+        from archolith_proxy.curator import run_background_pass
+        import asyncio
+
+        async def _slow_curator(**kwargs):
+            await asyncio.sleep(5)  # exceeds 100ms budget
+            return (None, [], "")
+
+        with patch("archolith_proxy.curator._run_curator_native",
+                    new_callable=AsyncMock, side_effect=_slow_curator):
+            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                await run_background_pass(
+                    session_id="s1", turn_number=5,
+                    user_message="test", session_goal=None, messages=[],
+                )
+
+        # No briefing cached after timeout
+        assert get_briefing("s1") is None
+
+    @pytest.mark.asyncio
+    async def test_background_pass_curator_returns_none(self):
+        """When curator loop returns None result, no briefing is cached."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            BACKGROUND_PASS_ENABLED="true",
+            BACKGROUND_PASS_DEBOUNCE_MS="0",
+            BACKGROUND_PASS_LATENCY_BUDGET_MS="30000",
+            EXTRACTOR_API_KEY="test-key",
+        )
+        from archolith_proxy.curator import run_background_pass
+
+        with patch("archolith_proxy.curator._run_curator_native",
+                    new_callable=AsyncMock) as mock_loop:
+            mock_loop.return_value = (None, [], "empty_response")
+            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                await run_background_pass(
+                    session_id="s1", turn_number=5,
+                    user_message="test", session_goal=None, messages=[],
+                )
+
+        assert get_briefing("s1") is None
+
+
+# ---------------------------------------------------------------------------
+# Integration: inline pass with briefing (full pipeline)
+# ---------------------------------------------------------------------------
+
+class TestInlineBriefingPipeline:
+    """Test the inline briefing pass with mocked _run_curator_native."""
+
+    _ENV_KEYS = (
+        "CURATOR_ENABLED", "FILE_CACHE_ENABLED", "CURATOR_API_KEY",
+        "CURATOR_LATENCY_BUDGET_MS", "CURATOR_MAX_ITERATIONS",
+        "COHERENCE_TAIL_SIZE", "MAX_TAIL_MESSAGES", "COLD_START_TURNS",
+    )
+
+    def setup_method(self):
+        _briefing_cache.clear()
+        from archolith_proxy.config import reset_settings
+        reset_settings()
+
+    def teardown_method(self):
+        _clear_env(*self._ENV_KEYS)
+
+    @pytest.mark.asyncio
+    async def test_inline_pass_with_fresh_briefing(self):
+        """Inline pass reads briefing, runs curator with 2 iterations, returns context."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            CURATOR_API_KEY="test-key",
+            CURATOR_LATENCY_BUDGET_MS="10000",
+            COHERENCE_TAIL_SIZE="10",
+            MAX_TAIL_MESSAGES="20",
+            COLD_START_TURNS="3",
+        )
+        from archolith_proxy.curator import curate_context
+
+        # Cache a fresh briefing for session s1
+        briefing = SessionBriefing(
+            session_id="s1",
+            source_turn=5,
+            session_goal="Fix auth",
+            checkpoint_text="Working on JWT",
+            files=[
+                PreFetchedFile(
+                    path="auth.py",
+                    outline="",
+                    sections=[(1, 10, "def handle_auth(): pass")],
+                    relevance="entry point",
+                ),
+            ],
+            context_block="=== SESSION GOAL ===\nFix auth\n",
+        )
+        cache_briefing("s1", briefing)
+
+        # Mock the inline pass curator to return a context
+        inline_result = CuratorResult(
+            context_text="=== SESSION GOAL ===\nFix auth\n=== CURRENT STATE ===\nJWT working\n",
+            curated_paths={"auth.py"},
+            tool_calls_used=0,
+            estimated_tokens=40,
+            retained_turn_numbers=[1, 2],
+            tool_log=[],
+        )
+
+        with patch("archolith_proxy.curator._run_curator_native",
+                    new_callable=AsyncMock) as mock_loop:
+            mock_loop.return_value = (inline_result, [], "")
+            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                result = await curate_context(
+                    session_id="s1",
+                    turn_number=6,  # source_turn=5, turn=6 → fresh
+                    user_message="continue fixing auth",
+                    session_goal="Fix auth",
+                    http_client=None,
+                    messages=[{"role": "user", "content": "hi"}] * 5,
+                )
+
+        assert result is not None
+        assert "JWT working" in result.system_message["content"]
+        assert result.session_id == "s1"
+        assert result.retained_turn_numbers == [1, 2]
+        # Verify the inline pass was called with 2 iterations (not full 6)
+        mock_loop.assert_called_once()
+        call_kwargs = mock_loop.call_args.kwargs
+        assert call_kwargs.get("max_iterations") == 2
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_full_curator_on_briefing_failure(self):
+        """When inline briefing pass returns None, falls back to full curator."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            CURATOR_API_KEY="test-key",
+            CURATOR_MAX_ITERATIONS="6",
+            CURATOR_LATENCY_BUDGET_MS="10000",
+            COHERENCE_TAIL_SIZE="10",
+            MAX_TAIL_MESSAGES="20",
+            COLD_START_TURNS="3",
+        )
+        from archolith_proxy.curator import curate_context
+
+        # Cache a stale briefing (source_turn=4, turn=6 → stale but within threshold 4 >= 6-2)
+        briefing = SessionBriefing(
+            session_id="s1",
+            source_turn=4,
+            session_goal="Fix auth",
+        )
+        cache_briefing("s1", briefing)
+
+        full_result = CuratorResult(
+            context_text="=== SESSION GOAL ===\nFix auth (full pass)\n",
+            curated_paths=set(),
+            tool_calls_used=4,
+            estimated_tokens=60,
+            tool_log=[],
+        )
+
+        call_count = 0
+
+        async def _mock_curator(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call: inline briefing pass → returns None
+                return (None, [], "empty_final")
+            else:
+                # Second call: full curator fallback
+                return (full_result, [], "")
+
+        with patch("archolith_proxy.curator._run_curator_native",
+                    new_callable=AsyncMock, side_effect=_mock_curator):
+            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                result = await curate_context(
+                    session_id="s1",
+                    turn_number=6,
+                    user_message="fix auth",
+                    session_goal="Fix auth",
+                    http_client=None,
+                    messages=[{"role": "user", "content": "hi"}] * 5,
+                )
+
+        assert result is not None
+        assert "full pass" in result.system_message["content"]
+        # Two calls: first for inline briefing, second for full curator
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_no_briefing_runs_full_curator(self):
+        """When no briefing exists, runs the standard full curator path."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            CURATOR_API_KEY="test-key",
+            CURATOR_MAX_ITERATIONS="6",
+            CURATOR_LATENCY_BUDGET_MS="10000",
+            COHERENCE_TAIL_SIZE="10",
+            MAX_TAIL_MESSAGES="20",
+            COLD_START_TURNS="3",
+        )
+        from archolith_proxy.curator import curate_context
+
+        full_result = CuratorResult(
+            context_text="=== SESSION GOAL ===\nStandard pass\n",
+            curated_paths={"app.py"},
+            tool_calls_used=3,
+            estimated_tokens=50,
+            tool_log=[],
+        )
+
+        with patch("archolith_proxy.curator._run_curator_native",
+                    new_callable=AsyncMock) as mock_loop:
+            mock_loop.return_value = (full_result, [], "")
+            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                result = await curate_context(
+                    session_id="s1",
+                    turn_number=6,
+                    user_message="hello",
+                    session_goal=None,
+                    http_client=None,
+                    messages=[{"role": "user", "content": "hi"}] * 5,
+                )
+
+        assert result is not None
+        assert "Standard pass" in result.system_message["content"]
+        # Only one call — the full curator (no briefing path attempted)
+        mock_loop.assert_called_once()
+        call_kwargs = mock_loop.call_args.kwargs
+        assert call_kwargs.get("max_iterations") == 6
+
+
+# ---------------------------------------------------------------------------
+# raw_result fidelity test
+# ---------------------------------------------------------------------------
+
+class TestRawResultFidelity:
+    """Verify that briefings capture full tool result content, not truncated previews."""
+
+    def test_briefing_uses_raw_result_not_preview(self):
+        """_build_briefing_from_result should capture raw_result, not 200-char preview."""
+        long_content = "x" * 5000  # much longer than 200-char preview
+        result = CuratorResult(
+            context_text="=== SESSION GOAL ===\nTest\n",
+            curated_paths={"big_file.py"},
+            tool_calls_used=1,
+            estimated_tokens=100,
+            tool_log=[
+                CuratorToolCall(
+                    tool="get_file",
+                    args={"path": "big_file.py", "start_line": 1, "end_line": 100},
+                    status="ok",
+                    result_preview=long_content[:200],
+                    raw_result=long_content,
+                ),
+            ],
+        )
+
+        briefing = _build_briefing_from_result(
+            result=result,
+            session_id="s1",
+            turn_number=1,
+            latency_ms=100.0,
+            session_goal=None,
+            messages=[],
+        )
+
+        assert len(briefing.files) == 1
+        # The section content should be the full raw_result, not the preview
+        section_content = briefing.files[0].sections[0][2]
+        assert len(section_content) == 5000
+        assert section_content == long_content
+
+    def test_briefing_falls_back_to_preview_when_no_raw(self):
+        """If raw_result is empty, fall back to result_preview."""
+        result = CuratorResult(
+            context_text="=== SESSION GOAL ===\nTest\n",
+            curated_paths={"old.py"},
+            tool_calls_used=1,
+            estimated_tokens=50,
+            tool_log=[
+                CuratorToolCall(
+                    tool="get_file",
+                    args={"path": "old.py"},
+                    status="ok",
+                    result_preview="short preview",
+                    raw_result="",  # empty raw — backward compat
+                ),
+            ],
+        )
+
+        briefing = _build_briefing_from_result(
+            result=result,
+            session_id="s1",
+            turn_number=1,
+            latency_ms=50.0,
+            session_goal=None,
+            messages=[],
+        )
+
+        assert len(briefing.files) == 1
+        assert briefing.files[0].sections[0][2] == "short preview"
