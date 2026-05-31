@@ -463,11 +463,14 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     # context hasn't meaningfully changed since the last user-turn assembly.
     is_user_turn = bool(messages) and messages[-1].get("role") == "user"
 
-    # Per-session token budget — stop context management when exceeded
+    # Per-session token budget — stop context management when exceeded.
+    # Only count user-turn tokens: agent-solo turns pass through unmodified
+    # and shouldn't consume the curation budget.
     session_over_budget = False
     if session_id and settings.max_input_tokens_per_session > 0:
         from archolith_proxy.proxy.circuit_breaker import add_session_tokens, is_session_over_budget
-        add_session_tokens(session_id, input_tokens)
+        if is_user_turn:
+            add_session_tokens(session_id, input_tokens)
         session_over_budget = is_session_over_budget(session_id, settings.max_input_tokens_per_session)
         if session_over_budget:
             logger.warning(
