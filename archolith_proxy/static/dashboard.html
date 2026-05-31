@@ -72,6 +72,11 @@
   /* Table */
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; color: var(--text-dim); font-weight: 500; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--text); }
+  th.sortable::after { content: ''; margin-left: 4px; }
+  th.sort-asc::after { content: ' ▲'; }
+  th.sort-desc::after { content: ' ▼'; }
   td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
   tr:hover { background: rgba(88,166,255,0.04); }
   tr { cursor: pointer; }
@@ -190,7 +195,7 @@ const statusBar = document.getElementById('status-bar');
 // Track what's been rendered to enable incremental updates
 let currentView = null;   // 'overview' | 'sessions' | 'detail'
 let detailState = { sessionId: null, turnCount: 0, turnIds: new Set() };
-let sessionListState = { sessionIds: new Set() };
+let sessionListState = { sessionIds: new Set(), sessions: [], sortKey: 'last_turn_at', sortDir: 'desc' };
 let overviewBuilt = false;
 
 function route() {
@@ -198,7 +203,7 @@ function route() {
   nav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
   // Reset incremental state on navigation
   detailState = { sessionId: null, turnCount: 0, turnIds: new Set() };
-  sessionListState = { sessionIds: new Set() };
+  sessionListState = { sessionIds: new Set(), sessions: [], sortKey: 'last_turn_at', sortDir: 'desc' };
   overviewBuilt = false;
 
   if (hash === '/') {
@@ -616,8 +621,81 @@ async function renderOverview() {
 }
 
 // ---------------------------------------------------------------------------
-// Session List — initial build + incremental row patching
+// Session List — sortable columns + incremental row patching
 // ---------------------------------------------------------------------------
+
+const SESSION_COLUMNS = [
+  { key: 'session_id',                    label: 'Session ID',     sortable: true  },
+  { key: 'turn_count',                    label: 'Turns',          sortable: true  },
+  { key: 'avg_savings_ratio',             label: 'Savings',        sortable: true  },
+  { key: 'rewritten_savings_ratio',       label: 'Curator',        sortable: true  },
+  { key: 'total_input_tokens',            label: 'In Tokens',      sortable: true  },
+  { key: 'total_savings_tokens',          label: 'Saved Tokens',   sortable: true  },
+  { key: 'total_facts_stored',            label: 'Facts',          sortable: true  },
+  { key: 'total_duplicates_skipped',      label: 'Dupes',          sortable: true  },
+  { key: 'total_invalidations_attempted', label: 'Invalidations',  sortable: true  },
+  { key: '_modes',                        label: 'Modes',          sortable: false },
+  { key: 'last_turn_at',                  label: 'Last',           sortable: true  },
+];
+
+function sessionRowHtml(s) {
+  return `
+    <td class="mono">${escapeHtml(s.session_id)}</td>
+    <td>${s.turn_count}</td>
+    <td>${pct(s.avg_savings_ratio)}</td>
+    <td>${pct(s.rewritten_savings_ratio)}</td>
+    <td>${s.total_input_tokens || 0}</td>
+    <td>${s.total_savings_tokens || 0}</td>
+    <td>${s.total_facts_stored || 0}</td>
+    <td>${s.total_duplicates_skipped || 0}</td>
+    <td>${s.total_invalidations_attempted || 0}</td>
+    <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => `${modeTag(k)}×${v}`).join(' ')}</td>
+    <td>${ago(s.last_turn_at)}</td>
+  `;
+}
+
+function buildSortedRows(sessions) {
+  const { sortKey, sortDir } = sessionListState;
+  const sorted = [...sessions].sort((a, b) => {
+    let va = a[sortKey] ?? 0, vb = b[sortKey] ?? 0;
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb || '').toLowerCase(); }
+    if (va < vb) return sortDir === 'asc' ? -1 : 1;
+    if (va > vb) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+  return sorted.map(s => {
+    const tr = document.createElement('tr');
+    tr.setAttribute('data-session-id', s.session_id);
+    tr.setAttribute('onclick', `location.hash='/sessions/${s.session_id}'`);
+    tr.innerHTML = sessionRowHtml(s);
+    return tr;
+  });
+}
+
+function rebuildSessionTableBody() {
+  const tbody = document.getElementById('session-list-body');
+  if (!tbody) return;
+  const rows = buildSortedRows(sessionListState.sessions);
+  tbody.replaceChildren(...rows);
+}
+
+function onSessionHeaderClick(key) {
+  if (sessionListState.sortKey === key) {
+    sessionListState.sortDir = sessionListState.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sessionListState.sortKey = key;
+    sessionListState.sortDir = 'desc';
+  }
+  // Update header indicators
+  document.querySelectorAll('#session-list-head th').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.sortKey === key) {
+      th.classList.add(sessionListState.sortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+    }
+  });
+  rebuildSessionTableBody();
+}
+
 async function renderSessionList() {
   try {
     const data = await api('/trace/sessions');
@@ -628,81 +706,44 @@ async function renderSessionList() {
 
     const tbody = document.getElementById('session-list-body');
 
-    // First load — build the full table
+    // First load — build the full table with sortable headers
     if (!tbody) {
-      const rows = data.sessions.map(s => {
-        sessionListState.sessionIds.add(s.session_id);
-        return `
-          <tr data-session-id="${escapeHtml(s.session_id)}" onclick="location.hash='/sessions/${s.session_id}'">
-            <td class="mono">${escapeHtml(s.session_id)}</td>
-            <td>${s.turn_count}</td>
-            <td>${pct(s.avg_savings_ratio)}</td>
-            <td>${pct(s.rewritten_savings_ratio)}</td>
-            <td>${s.total_input_tokens || 0}</td>
-            <td>${s.total_savings_tokens || 0}</td>
-            <td>${s.total_facts_stored || 0}</td>
-            <td>${s.total_duplicates_skipped || 0}</td>
-            <td>${s.total_invalidations_attempted || 0}</td>
-            <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => `${modeTag(k)}×${v}`).join(' ')}</td>
-            <td>${ago(s.last_turn_at)}</td>
-          </tr>
-        `;
+      sessionListState.sessions = data.sessions;
+      data.sessions.forEach(s => sessionListState.sessionIds.add(s.session_id));
+
+      const headerCells = SESSION_COLUMNS.map(c => {
+        const cls = c.sortable ? ` class="sortable${c.key === sessionListState.sortKey ? ` sort-${sessionListState.sortDir}` : ''}"` : '';
+        const click = c.sortable ? ` data-sort-key="${c.key}" onclick="onSessionHeaderClick('${c.key}')"` : '';
+        return `<th${cls}${click}>${c.label}</th>`;
       }).join('');
 
       content.innerHTML = `
         <div class="card">
           <div class="card-header"><h2 id="session-count">Sessions (${data.count})</h2></div>
           <table>
-            <thead><tr>
-              <th>Session ID</th><th>Turns</th><th>Savings</th><th>Curator</th><th>In Tokens</th><th>Saved Tokens</th>
-              <th>Facts</th><th>Dupes</th><th>Invalidations</th><th>Modes</th><th>Last</th>
-            </tr></thead>
-            <tbody id="session-list-body">${rows}</tbody>
+            <thead id="session-list-head"><tr>${headerCells}</tr></thead>
+            <tbody id="session-list-body"></tbody>
           </table>
         </div>
       `;
+      rebuildSessionTableBody();
       return;
     }
 
-    // Incremental — patch existing rows, prepend new sessions
+    // Incremental — merge new data into cached sessions and re-sort
+    let changed = false;
     data.sessions.forEach(s => {
-      const row = tbody.querySelector(`[data-session-id="${CSS.escape(s.session_id)}"]`);
-      if (row) {
-        // Update cells in-place
-        row.children[1].textContent = s.turn_count;
-        row.children[2].textContent = pct(s.avg_savings_ratio);
-        row.children[3].textContent = pct(s.rewritten_savings_ratio);
-        row.children[4].textContent = s.total_input_tokens || 0;
-        row.children[5].textContent = s.total_savings_tokens || 0;
-        row.children[6].textContent = s.total_facts_stored || 0;
-        row.children[7].textContent = s.total_duplicates_skipped || 0;
-        row.children[8].textContent = s.total_invalidations_attempted || 0;
-        row.children[10].textContent = ago(s.last_turn_at);
+      const idx = sessionListState.sessions.findIndex(x => x.session_id === s.session_id);
+      if (idx >= 0) {
+        sessionListState.sessions[idx] = s;
+        changed = true;
       } else if (!sessionListState.sessionIds.has(s.session_id)) {
-        // New session — prepend row
         sessionListState.sessionIds.add(s.session_id);
-        const tr = document.createElement('tr');
-        tr.setAttribute('data-session-id', s.session_id);
-        tr.setAttribute('onclick', `location.hash='/sessions/${s.session_id}'`);
-        tr.innerHTML = `
-          <td class="mono">${escapeHtml(s.session_id)}</td>
-          <td>${s.turn_count}</td>
-          <td>${pct(s.avg_savings_ratio)}</td>
-          <td>${pct(s.rewritten_savings_ratio)}</td>
-          <td>${s.total_input_tokens || 0}</td>
-          <td>${s.total_savings_tokens || 0}</td>
-          <td>${s.total_facts_stored || 0}</td>
-          <td>${s.total_duplicates_skipped || 0}</td>
-          <td>${s.total_invalidations_attempted || 0}</td>
-          <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => `${modeTag(k)}×${v}`).join(' ')}</td>
-          <td>${ago(s.last_turn_at)}</td>
-        `;
-        tr.style.opacity = '0';
-        tbody.prepend(tr);
-        // Fade in
-        requestAnimationFrame(() => { tr.style.transition = 'opacity 0.3s'; tr.style.opacity = '1'; });
+        sessionListState.sessions.push(s);
+        changed = true;
       }
     });
+    if (changed) rebuildSessionTableBody();
 
     // Update count
     const countEl = document.getElementById('session-count');
