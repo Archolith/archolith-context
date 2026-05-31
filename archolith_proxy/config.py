@@ -156,6 +156,7 @@ class Settings(BaseSettings):
     agent_solo_compress_middle_enabled: bool = False  # C: compress compressible tool results in older turns
     agent_solo_shrink_max_tokens: int = 2000     # per-result token cap for strategy A
     agent_solo_min_input_tokens: int = 30000     # skip compression below this input size
+    agent_solo_dump_payloads: bool = False        # dump agent-solo payloads to data/agent_solo_payloads/
 
     # Two-pass curator — background pass (same bot, generous iteration budget)
     background_pass_enabled: bool = False

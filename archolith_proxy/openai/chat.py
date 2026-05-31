@@ -527,6 +527,20 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     if is_agent_solo:
         assembly_mode = "agent_solo"
 
+        # Optional payload dump for offline benchmarking
+        if settings.agent_solo_dump_payloads:
+            try:
+                import json as _json
+                from pathlib import Path as _Path
+                dump_dir = _Path(settings.trace_dir or "data") / "agent_solo_payloads"
+                dump_dir.mkdir(parents=True, exist_ok=True)
+                dump_path = dump_dir / f"{session_id}_t{turn_number}.json"
+                with open(dump_path, "w", encoding="utf-8") as _f:
+                    _json.dump(body.get("messages", []), _f)
+                logger.debug("agent_solo_payload_dumped", path=str(dump_path))
+            except Exception:
+                logger.warning("agent_solo_dump_failed", exc_info=True)
+
         any_solo_strategy = (
             settings.agent_solo_shrink_enabled
             or settings.agent_solo_dedup_enabled
