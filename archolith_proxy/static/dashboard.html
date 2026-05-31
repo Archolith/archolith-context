@@ -436,6 +436,19 @@ async function renderOverview() {
           </div>
         </div>
 
+        <div class="card" id="cost-card">
+          <div class="card-header"><h2>Cost Estimation</h2><span style="font-size:11px;color:var(--text-dim);">$${(m.pricing||{}).input_per_million||'?'}/M in · $${(m.pricing||{}).output_per_million||'?'}/M out</span></div>
+          <div class="metrics-grid" id="cost-grid">
+            <div class="metric" data-key="cost_input"><div class="value">\$${(m.cost_input || 0).toFixed(4)}</div><div class="label">Input Cost</div></div>
+            <div class="metric" data-key="cost_output"><div class="value">\$${(m.cost_output || 0).toFixed(4)}</div><div class="label">Output Cost</div></div>
+            <div class="metric" data-key="cost_total"><div class="value">\$${(m.cost_total || 0).toFixed(4)}</div><div class="label">Total Cost</div></div>
+            <div class="metric" data-key="cost_savings"><div class="value green">\$${(m.cost_savings || 0).toFixed(4)}</div><div class="label">Savings</div></div>
+            <div class="metric" data-key="total_input"><div class="value">${fmtTokens(m.total_input_tokens_seen || 0)}</div><div class="label">Total Input</div></div>
+            <div class="metric" data-key="total_output"><div class="value">${fmtTokens(m.total_output_tokens || 0)}</div><div class="label">Total Output</div></div>
+            <div class="metric" data-key="total_saved"><div class="value green">${fmtTokens(m.token_savings_estimated || 0)}</div><div class="label">Tokens Saved</div></div>
+          </div>
+        </div>
+
         ${traceData.sessions && traceData.sessions.length > 0 ? `
         <div class="card" id="recent-sessions-card">
           <div class="card-header">
@@ -479,6 +492,24 @@ async function renderOverview() {
       patch('trace_records', m.trace_records || 0, 'purple');
       patch('trace_sessions', m.trace_sessions || 0, 'purple');
       patch('active_sessions', m.active_sessions || 0);
+    }
+
+    // Patch cost grid
+    const costGrid = document.getElementById('cost-grid');
+    if (costGrid) {
+      const cpatch = (key, val, cls) => {
+        const el = costGrid.querySelector(`[data-key="${key}"] .value`);
+        if (!el) return;
+        el.textContent = val;
+        el.className = 'value' + (cls ? ' ' + cls : '');
+      };
+      cpatch('cost_input', '$' + (m.cost_input || 0).toFixed(4));
+      cpatch('cost_output', '$' + (m.cost_output || 0).toFixed(4));
+      cpatch('cost_total', '$' + (m.cost_total || 0).toFixed(4));
+      cpatch('cost_savings', '$' + (m.cost_savings || 0).toFixed(4), 'green');
+      cpatch('total_input', fmtTokens(m.total_input_tokens_seen || 0));
+      cpatch('total_output', fmtTokens(m.total_output_tokens || 0));
+      cpatch('total_saved', fmtTokens(m.token_savings_estimated || 0), 'green');
     }
 
     // Patch recent sessions table rows in-place

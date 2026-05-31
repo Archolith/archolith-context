@@ -454,6 +454,22 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
+        # Cost estimation from pricing config
+        settings = get_settings()
+        input_cost = total_input * settings.pricing_input_per_million / 1_000_000
+        savings_cost = total_savings * settings.pricing_input_per_million / 1_000_000
+
+        # Compute total output tokens from trace store
+        total_output_tokens = 0
+        try:
+            for turns in trace_store._by_session.values():
+                for t in turns:
+                    if t.output_tokens:
+                        total_output_tokens += t.output_tokens
+        except Exception:
+            pass
+        output_cost = total_output_tokens * settings.pricing_output_per_million / 1_000_000
+
         return {
             "proxy": "archolith-proxy",
             "version": "0.1.0",
@@ -489,6 +505,17 @@ def create_app() -> FastAPI:
             "trace_records": trace_store.total_traces,
             "trace_sessions": trace_store.session_count,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
+            # Cost estimation
+            "total_output_tokens": total_output_tokens,
+            "cost_input": round(input_cost, 4),
+            "cost_output": round(output_cost, 4),
+            "cost_total": round(input_cost + output_cost, 4),
+            "cost_savings": round(savings_cost, 4),
+            "pricing": {
+                "input_per_million": settings.pricing_input_per_million,
+                "input_cached_per_million": settings.pricing_input_cached_per_million,
+                "output_per_million": settings.pricing_output_per_million,
+            },
         }
 
     # --- Runtime config admin endpoints ---
@@ -500,6 +527,8 @@ def create_app() -> FastAPI:
         "assembly_latency_budget_ms", "session_ttl_hours",
         "embedding_enabled", "compaction_enabled", "query_rewrite_enabled",
         "session_recall_tool_enabled", "rtk_enabled",
+        "pricing_input_per_million", "pricing_input_cached_per_million",
+        "pricing_output_per_million",
     }
 
     @app.get("/admin/config")

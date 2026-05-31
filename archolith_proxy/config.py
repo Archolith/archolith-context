@@ -148,6 +148,12 @@ class Settings(BaseSettings):
     curator_max_iterations: int = 6
     curator_latency_budget_ms: int = 6000   # hard timeout; falls back to heuristic
 
+    # Pricing — per-million-token rates for cost estimation on dashboard.
+    # Defaults to DeepSeek V4-Flash pricing. Override for other models.
+    pricing_input_per_million: float = 0.14       # $/M input tokens (cache miss)
+    pricing_input_cached_per_million: float = 0.0028  # $/M input tokens (cache hit)
+    pricing_output_per_million: float = 0.28      # $/M output tokens
+
     # Trace persistence — when set, turn traces are appended as JSONL files
     # under this directory (one file per session: <session_id>.jsonl).
     # Without this, traces are memory-only and lost on restart.
