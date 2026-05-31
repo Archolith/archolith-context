@@ -122,5 +122,6 @@ async def curate_context(
         decisions_selected=[],
         compression_ratio=1.0,
         retained_turn_numbers=result.retained_turn_numbers,
+        curator_tool_log=[tc.to_dict() for tc in result.tool_log],
     )
 

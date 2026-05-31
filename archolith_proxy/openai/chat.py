@@ -561,6 +561,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                         trace_builder.set_curator_info(
                             retained_turns=assembled.retained_turn_numbers,
                             context_block=(assembled.system_message or {}).get("content"),
+                            tool_log=assembled.curator_tool_log,
                         )
                 except Exception:
                     logger.warning("curator_error", session_id=session_id, exc_info=True)

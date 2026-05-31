@@ -9,6 +9,27 @@ from pydantic import BaseModel, Field as PydanticField
 
 
 @dataclass
+class CuratorToolCall:
+    """Single tool call record from the curator loop."""
+
+    tool: str
+    args: dict = field(default_factory=dict)
+    status: str = "ok"        # "ok" or "error"
+    error: str = ""           # error message if status == "error"
+    result_preview: str = ""  # first 200 chars of result (for debugging)
+
+    def to_dict(self) -> dict:
+        d: dict = {"tool": self.tool, "status": self.status}
+        if self.args:
+            d["args"] = self.args
+        if self.error:
+            d["error"] = self.error
+        if self.result_preview:
+            d["result_preview"] = self.result_preview
+        return d
+
+
+@dataclass
 class CuratorResult:
     """Structured result from the curator LLM loop.
 
@@ -22,6 +43,8 @@ class CuratorResult:
     # Turn numbers the curator selected to retain in the middle section.
     # None = keep all (curator did not call select_relevant_turns).
     retained_turn_numbers: list[int] | None = None
+    # Per-call tool log — every tool dispatch (success and failure)
+    tool_log: list[CuratorToolCall] = field(default_factory=list)
 
 
 class CuratorFailure(BaseModel):

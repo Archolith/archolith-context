@@ -24,7 +24,7 @@ from openai import (
 import structlog
 
 from archolith_proxy.curator.prompts import CURATOR_SYSTEM_PROMPT, build_curator_user_prompt
-from archolith_proxy.curator.result import CuratorFailure, CuratorResult
+from archolith_proxy.curator.result import CuratorFailure, CuratorResult, CuratorToolCall
 from archolith_proxy.curator.schemas import ALL_CURATOR_TOOLS
 from archolith_proxy.curator.tools import TOOL_HANDLERS
 
@@ -178,6 +178,7 @@ async def _run_curator_native(
     total_tool_calls = 0
     curated_paths: set[str] = set()
     retained_turn_numbers: list[int] | None = None
+    tool_log: list[CuratorToolCall] = []
 
     for iteration in range(max_iterations):
         logger.debug(
@@ -257,6 +258,7 @@ async def _run_curator_native(
                 retained_turn_numbers=retained_turn_numbers,
                 tool_calls_used=total_tool_calls,
                 estimated_tokens=_estimate_tokens(content),
+                tool_log=tool_log,
             )
 
         if choice.finish_reason == "length":
@@ -295,6 +297,8 @@ async def _run_curator_native(
 
             if tool_name not in allowed_tools:
                 result_str = "Error: unknown tool '" + tool_name + "'"
+                tool_log.append(CuratorToolCall(tool=tool_name, args=args, status="error",
+                    error="unknown tool"))
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_str})
                 continue
 
@@ -302,6 +306,16 @@ async def _run_curator_native(
                 handler = TOOL_HANDLERS[tool_name]
                 result_str = await handler(session_id=session_id, **args)
                 total_tool_calls += 1
+                # Detect soft errors — tool returned but with an error/empty indicator
+                is_soft_error = result_str.startswith("(") and ("not cached" in result_str or "no outline" in result_str or "no lines" in result_str)
+                if is_soft_error:
+                    tool_log.append(CuratorToolCall(tool=tool_name, args=args, status="soft_error",
+                        error=result_str[:200]))
+                    logger.info("curator_tool_soft_error", tool=tool_name,
+                        session_id=session_id, result=result_str[:200])
+                else:
+                    tool_log.append(CuratorToolCall(tool=tool_name, args=args, status="ok",
+                        result_preview=result_str[:200]))
                 if tool_name in ("get_file", "get_file_lines"):
                     path = args.get("path", "")
                     if path:
@@ -318,6 +332,8 @@ async def _run_curator_native(
             except Exception as exc:
                 result_str = "Error: " + type(exc).__name__ + ": " + str(exc)
                 error_window.append((tool_name, "error"))
+                tool_log.append(CuratorToolCall(tool=tool_name, args=args, status="error",
+                    error=str(exc)[:200]))
                 logger.warning(
                     "curator_tool_failed",
                     tool=tool_name,
@@ -473,6 +489,7 @@ async def _run_curator_nous(
                 retained_turn_numbers=retained_turn_numbers,
                 tool_calls_used=total_tool_calls,
                 estimated_tokens=_estimate_tokens(content),
+                tool_log=tool_log,
             )
 
         messages.append({"role": "assistant", "content": content})

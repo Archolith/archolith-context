@@ -133,12 +133,15 @@ class TraceBuilder:
         self,
         retained_turns: list[int] | None = None,
         context_block: str | None = None,
+        tool_log: list[dict] | None = None,
     ) -> None:
-        """Record the curator's turn-selection and context block for trace inspection."""
+        """Record the curator's turn-selection, context block, and tool log for trace inspection."""
         self._data["curator_retained_turns"] = retained_turns
         # Cap context block at 4000 chars for trace storage
         if context_block:
             self._data["curator_context_block"] = context_block[:4000]
+        if tool_log:
+            self._data["curator_tool_log"] = tool_log
 
     def build(self) -> TurnTrace:
         """Build the TurnTrace from accumulated data."""

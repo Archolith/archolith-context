@@ -22,6 +22,8 @@ class AssembledContext(BaseModel):
     # Turn numbers the curator selected to retain in the middle section.
     # None = keep all middle turns (curator did not exercise turn selection).
     retained_turn_numbers: list[int] | None = None
+    # Curator tool dispatch log — carried through to trace
+    curator_tool_log: list[dict] = Field(default_factory=list)
 
 
 class ExtractionResult(BaseModel):
@@ -115,9 +117,10 @@ class TurnTrace(BaseModel):
     # Fallback
     fallback_reason: str = ""
 
-    # Curator decisions — populated when assembly_mode == "curator"
+    # Curator decisions — populated when assembly_mode == "curator" or on failure
     curator_retained_turns: list[int] | None = None   # None = no selection made
     curator_context_block: str | None = None           # The curator's assembled context text
+    curator_tool_log: list[dict] = Field(default_factory=list)  # Per-call tool dispatch log
 
 
 class SessionTraceSummary(BaseModel):
