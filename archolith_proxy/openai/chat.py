@@ -455,6 +455,14 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     record_metric("total_input_tokens_seen", input_tokens)
     user_turn_count = sum(1 for m in messages if m.get("role") == "user")
 
+    # Detect agent-solo turns: last message is "tool" (tool-call continuation)
+    # vs user turns: last message is "user" (new user input).
+    # Agent-solo turns are rapid-fire API calls within the same user turn
+    # (e.g., OpenCode doing Read → Edit → Read cycles). Assembly should only
+    # fire on user turns — agent-solo turns get passthrough since the graph
+    # context hasn't meaningfully changed since the last user-turn assembly.
+    is_user_turn = bool(messages) and messages[-1].get("role") == "user"
+
     # Per-session token budget — stop context management when exceeded
     session_over_budget = False
     if session_id and settings.max_input_tokens_per_session > 0:
@@ -485,6 +493,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         input_tokens=input_tokens,
         message_count=len(messages),
         user_turn_count=user_turn_count,
+        is_user_turn=is_user_turn,
     )
     trace_builder.set_original_messages(body.get("messages", []))
 
@@ -495,7 +504,23 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         stream=req.stream, input_tokens=input_tokens,
     )
 
-    if session_id and graph_ready and not session_over_budget:
+    # Agent-solo turn gating: skip assembly on tool-call continuations.
+    # The graph context doesn't change meaningfully between consecutive
+    # agent API calls within the same user turn. Assembly on these turns
+    # typically inflates the payload (adds graph overhead, removes nothing
+    # since Read/Edit/Write/Bash are non-compressible).
+    is_agent_solo = session_id and graph_ready and not session_over_budget and not is_user_turn
+    if is_agent_solo:
+        assembly_mode = "agent_solo"
+        logger.debug(
+            "agent_solo_passthrough",
+            session_id=session_id,
+            turn=turn_number,
+            input_tokens=input_tokens,
+            user_turns=user_turn_count,
+        )
+
+    if session_id and graph_ready and not session_over_budget and not is_agent_solo:
         try:
             # Wait for prior turn's extraction to commit before reading graph state
             from archolith_proxy.proxy.locks import wait_for_prior_extraction
@@ -540,13 +565,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             # Fall back to heuristic assembler if curator didn't produce a result
             if assembled is None:
                 assembled = await assemble_context(
-                session_id=session_id,
-                turn_number=turn_number,
-                input_token_estimate=input_tokens,
-                user_message=user_message,
-                http_client=request.app.state.http_client if settings.embedding_enabled else None,
-                messages=body.get("messages", []),
-            )
+                    session_id=session_id,
+                    turn_number=turn_number,
+                    input_token_estimate=input_tokens,
+                    user_message=user_message,
+                    http_client=request.app.state.http_client if settings.embedding_enabled else None,
+                    messages=body.get("messages", []),
+                )
             assembly_latency_ms = (time.monotonic() - assembly_start) * 1000
 
             if assembled:
@@ -566,11 +591,28 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 rewritten_tokens = estimate_input_tokens(body["messages"])
                 savings = max(0, input_tokens - rewritten_tokens)
 
+                # Negative-savings guard: if rewriting inflated the payload
+                # (graph context overhead > compression savings), always revert.
+                if rewritten_tokens > input_tokens:
+                    logger.info(
+                        "assembly_reverted_inflation",
+                        session_id=session_id,
+                        turn=turn_number,
+                        input_tokens=input_tokens,
+                        rewritten_tokens=rewritten_tokens,
+                        inflation=rewritten_tokens - input_tokens,
+                    )
+                    body["messages"] = original_messages
+                    rewritten_count = original_count
+                    rewritten_tokens = input_tokens
+                    savings = 0
+                    savings_ratio = 0.0
+                    assembly_mode = "skipped_inflation"
                 # Savings-ratio gate: revert to passthrough if rewriting
                 # doesn't save meaningful tokens. Short/moderate conversations
                 # lose more continuity than they gain in compression.
-                savings_ratio = savings / max(input_tokens, 1)
-                if input_tokens < settings.assembly_min_input_tokens:
+                elif input_tokens < settings.assembly_min_input_tokens:
+                    savings_ratio = savings / max(input_tokens, 1)
                     # Conversation is small enough to fit entirely — passthrough
                     logger.info(
                         "assembly_skipped_low_tokens",
@@ -586,103 +628,105 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     savings = 0
                     savings_ratio = 0.0
                     assembly_mode = "skipped_low_tokens"
-                elif savings_ratio < settings.assembly_min_savings_ratio:
-                    # Rewriting barely saves anything — keep full history
-                    logger.info(
-                        "assembly_skipped_low_savings",
-                        session_id=session_id,
-                        turn=turn_number,
-                        savings_ratio=round(savings_ratio, 3),
-                        min_ratio=settings.assembly_min_savings_ratio,
-                        savings_tokens=savings,
-                        input_tokens=input_tokens,
-                    )
-                    body["messages"] = original_messages
-                    rewritten_count = original_count
-                    rewritten_tokens = input_tokens
-                    savings = 0
-                    savings_ratio = 0.0
-                    assembly_mode = "skipped_low_savings"
                 else:
-                    # Savings justify rewriting — proceed with compaction check
+                    savings_ratio = savings / max(input_tokens, 1)
+                    if savings_ratio < settings.assembly_min_savings_ratio:
+                        # Rewriting barely saves anything — keep full history
+                        logger.info(
+                            "assembly_skipped_low_savings",
+                            session_id=session_id,
+                            turn=turn_number,
+                            savings_ratio=round(savings_ratio, 3),
+                            min_ratio=settings.assembly_min_savings_ratio,
+                            savings_tokens=savings,
+                            input_tokens=input_tokens,
+                        )
+                        body["messages"] = original_messages
+                        rewritten_count = original_count
+                        rewritten_tokens = input_tokens
+                        savings = 0
+                        savings_ratio = 0.0
+                        assembly_mode = "skipped_low_savings"
+                    else:
+                        # Savings justify rewriting — proceed with compaction check
 
-                    # Context-overflow compaction: if rewritten payload still exceeds
-                    # budget, try LLM compaction of the graph context block
-                    if (
-                        settings.compaction_enabled
-                        and rewritten_tokens > settings.context_token_budget
-                        and assembled
-                    ):
-                        try:
-                            from archolith_proxy.assembler.compaction import compact_context
+                        # Context-overflow compaction: if rewritten payload still exceeds
+                        # budget, try LLM compaction of the graph context block
+                        if (
+                            settings.compaction_enabled
+                            and rewritten_tokens > settings.context_token_budget
+                            and assembled
+                        ):
+                            try:
+                                from archolith_proxy.assembler.compaction import compact_context
 
-                            graph_content = assembled.system_message.get("content", "")
-                            target_tokens = settings.context_token_budget // 2
-                            compacted = await compact_context(
-                                request.app.state.http_client,
-                                context_block=graph_content,
-                                target_tokens=target_tokens,
-                            )
-                            if compacted:
-                                # Replace graph context with compacted version
-                                assembled.system_message["content"] = compacted
-                                if assembled.graph_context:
-                                    assembled.graph_context[0] = {
-                                        **assembled.graph_context[0],
-                                        "content": compacted,
-                                    }
-                                else:
-                                    assembled.graph_context = [{"role": "system", "content": compacted}]
-                                # Re-rewrite with compacted context
-                                body["messages"] = rewrite_messages(
-                                    original_messages,
-                                    assembled,
-                                    settings.coherence_tail_size,
-                                    max_tail_messages=settings.max_tail_messages,
+                                graph_content = assembled.system_message.get("content", "")
+                                target_tokens = settings.context_token_budget // 2
+                                compacted = await compact_context(
+                                    request.app.state.http_client,
+                                    context_block=graph_content,
+                                    target_tokens=target_tokens,
                                 )
-                                rewritten_count = len(body["messages"])
-                                rewritten_tokens = estimate_input_tokens(body["messages"])
-                                savings = max(0, input_tokens - rewritten_tokens)
-                                savings_ratio = savings / max(input_tokens, 1)
-                                logger.info(
-                                    "context_compaction_applied",
+                                if compacted:
+                                    # Replace graph context with compacted version
+                                    assembled.system_message["content"] = compacted
+                                    if assembled.graph_context:
+                                        assembled.graph_context[0] = {
+                                            **assembled.graph_context[0],
+                                            "content": compacted,
+                                        }
+                                    else:
+                                        assembled.graph_context = [{"role": "system", "content": compacted}]
+                                    # Re-rewrite with compacted context
+                                    body["messages"] = rewrite_messages(
+                                        original_messages,
+                                        assembled,
+                                        settings.coherence_tail_size,
+                                        max_tail_messages=settings.max_tail_messages,
+                                    )
+                                    rewritten_count = len(body["messages"])
+                                    rewritten_tokens = estimate_input_tokens(body["messages"])
+                                    savings = max(0, input_tokens - rewritten_tokens)
+                                    savings_ratio = savings / max(input_tokens, 1)
+                                    logger.info(
+                                        "context_compaction_applied",
+                                        session_id=session_id,
+                                        turn=turn_number,
+                                        rewritten_tokens=rewritten_tokens,
+                                        budget=settings.context_token_budget,
+                                    )
+                                    record_metric("compaction_applied", 1)
+                            except Exception as e:
+                                logger.warning(
+                                    "context_compaction_failed",
                                     session_id=session_id,
                                     turn=turn_number,
-                                    rewritten_tokens=rewritten_tokens,
-                                    budget=settings.context_token_budget,
+                                    error=str(e),
                                 )
-                                record_metric("compaction_applied", 1)
-                        except Exception as e:
-                            logger.warning(
-                                "context_compaction_failed",
-                                session_id=session_id,
-                                turn=turn_number,
-                                error=str(e),
-                            )
-                            # Compaction failed — keep the oversized assembled context
-                            # (better than passthrough, which would send full history)
+                                # Compaction failed — keep the oversized assembled context
+                                # (better than passthrough, which would send full history)
 
-                    record_metric("token_savings_estimated", savings)
-                    logger.info(
-                        "messages_rewritten",
-                        session_id=session_id,
-                        turn=turn_number,
-                        original_messages=original_count,
-                        rewritten_messages=rewritten_count,
-                        facts_injected=assembled.facts_retrieved,
-                        token_estimate=assembled.token_estimate,
-                        savings_tokens=savings,
-                        assembly_latency_ms=round(assembly_latency_ms, 1),
-                    )
-
-                    # P99 budget check — log warning but use the assembled context
-                    # (assembly already completed, discarding would waste the work)
-                    if assembly_latency_ms > settings.assembly_latency_budget_ms:
-                        logger.warning(
-                            "assembly_latency_exceeded_budget",
-                            latency_ms=round(assembly_latency_ms, 1),
-                            budget_ms=settings.assembly_latency_budget_ms,
+                        record_metric("token_savings_estimated", savings)
+                        logger.info(
+                            "messages_rewritten",
+                            session_id=session_id,
+                            turn=turn_number,
+                            original_messages=original_count,
+                            rewritten_messages=rewritten_count,
+                            facts_injected=assembled.facts_retrieved,
+                            token_estimate=assembled.token_estimate,
+                            savings_tokens=savings,
+                            assembly_latency_ms=round(assembly_latency_ms, 1),
                         )
+
+                        # P99 budget check — log warning but use the assembled context
+                        # (assembly already completed, discarding would waste the work)
+                        if assembly_latency_ms > settings.assembly_latency_budget_ms:
+                            logger.warning(
+                                "assembly_latency_exceeded_budget",
+                                latency_ms=round(assembly_latency_ms, 1),
+                                budget_ms=settings.assembly_latency_budget_ms,
+                            )
 
                 # Trace: capture the actual outbound messages after savings gates.
                 trace_builder.set_rewritten_messages(body.get("messages", []))
@@ -1184,21 +1228,24 @@ async def _handle_streaming(
 
     # Live stream: broadcast response event (streaming — runs after stream completes)
     async def _broadcast_streaming_response():
+        cap = capture_holder.get("capture")
+        out_tokens = cap.output_tokens if cap else None
         await broadcast_response(
             session_id=session_id, turn_number=turn_number,
-            status=200, latency_ms=0.0, output_tokens=None,
+            status=200, latency_ms=0.0, output_tokens=out_tokens,
         )
     background_tasks.add_task(_broadcast_streaming_response)
 
     async def _finalize_streaming_trace_and_extraction():
         cap = capture_holder.get("capture")
         response_text = cap.get_full_text() if cap else ""
+        stream_output_tokens = cap.output_tokens if cap else None
 
         if trace_builder:
             trace_builder.set_response(
                 status=200,
                 latency_ms=0.0,
-                output_tokens=None,
+                output_tokens=stream_output_tokens,
                 response_summary=response_text,
             )
 

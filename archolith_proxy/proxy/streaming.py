@@ -68,6 +68,7 @@ class ResponseCapture:
         self._model = ""
         self._finish_reason: str | None = None
         self._direct_text: str | None = None  # For non-streaming responses
+        self._usage: dict | None = None  # Usage data from final SSE chunk
 
     def add_chunk(self, chunk_data: str) -> None:
         """Add a parsed SSE chunk to the buffer."""
@@ -92,6 +93,9 @@ class ResponseCapture:
             data = json.loads(chunk_data)
             if data.get("model"):
                 self._model = data["model"]
+            # Capture usage from final chunk (OpenAI, DeepSeek include it)
+            if data.get("usage"):
+                self._usage = data["usage"]
             choices = data.get("choices", [])
             if choices:
                 fr = choices[0].get("finish_reason")
@@ -148,10 +152,19 @@ class ResponseCapture:
                 self._finish_reason = fr
         if response_data.get("model"):
             self._model = response_data["model"]
+        if response_data.get("usage"):
+            self._usage = response_data["usage"]
 
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def output_tokens(self) -> int | None:
+        """Extract output token count from captured usage data."""
+        if self._usage:
+            return self._usage.get("completion_tokens") or self._usage.get("output_tokens")
+        return None
 
     @property
     def finish_reason(self) -> str | None:

@@ -679,6 +679,9 @@ class TestTokenAwareAssembly:
         reset_circuit(SESSION_ID)
 
         messages = build_coding_session_long()
+        # Append a user message so the proxy treats this as a user turn
+        # (not agent-solo) and runs assembly.
+        messages.append({"role": "user", "content": "Now run the tests to verify everything works."})
         original_msg_count = len(messages)
         captured_payloads: list[dict] = []
 
@@ -769,6 +772,9 @@ class TestTokenAwareAssembly:
         reset_circuit(SESSION_ID)
 
         messages = build_coding_session_long()
+        # Append a user message so the proxy treats this as a user turn
+        # (not agent-solo) and runs assembly.
+        messages.append({"role": "user", "content": "Now run the tests to verify everything works."})
         original_tokens = estimate_input_tokens(messages)
         captured_payloads: list[dict] = []
 
@@ -865,6 +871,9 @@ class TestTokenAwareAssembly:
         reset_circuit(SESSION_ID)
 
         messages = build_coding_session_long()
+        # Append a user message so the proxy treats this as a user turn
+        # (not agent-solo) and runs assembly.
+        messages.append({"role": "user", "content": "Now run the tests to verify everything works."})
         captured_payloads: list[dict] = []
 
         async def mock_handler(request: httpx.Request) -> httpx.Response:

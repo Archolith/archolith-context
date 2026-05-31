@@ -117,6 +117,24 @@ def filter_single_tool_result(content: str, tool_name: str = "unknown") -> str:
         return content
 
 
+def _unwrap_shrink_result(result: Any) -> list[dict[str, Any]]:
+    """Normalise RTK shrink return values to list[dict].
+
+    RTK shrink functions return ShrinkTokensResult / ShrinkCharsResult dataclasses
+    with a ``.messages`` field.  Earlier versions returned list[ChatMessage] directly.
+    This helper handles both cases and converts ChatMessage → dict when needed.
+    """
+    # ShrinkTokensResult / ShrinkCharsResult — extract .messages
+    if hasattr(result, "messages"):
+        msgs = result.messages
+    elif isinstance(result, list):
+        msgs = result
+    else:
+        return result  # type: ignore[return-value]
+
+    return [m.to_dict() if hasattr(m, "to_dict") else m for m in msgs]
+
+
 def shrink_tool_call_args(
     messages: list[dict[str, Any]],
     max_tokens: int = 500,
@@ -134,7 +152,8 @@ def shrink_tool_call_args(
     if shrink_args is None:
         return messages
     try:
-        return shrink_args(messages, max_tokens=max_tokens)
+        result = shrink_args(messages, max_tokens=max_tokens)
+        return _unwrap_shrink_result(result)
     except Exception as exc:
         logger.debug("rtk_shrink_args_failed", error=str(exc))
         return messages
@@ -154,7 +173,8 @@ def shrink_tail_tool_results(
     if shrink_results is None:
         return messages
     try:
-        return shrink_results(messages, max_tokens=max_tokens_per_result)
+        result = shrink_results(messages, max_tokens=max_tokens_per_result)
+        return _unwrap_shrink_result(result)
     except Exception as exc:
         logger.debug("rtk_shrink_tail_failed", error=str(exc))
         return messages

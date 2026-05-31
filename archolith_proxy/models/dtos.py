@@ -69,6 +69,7 @@ class TurnTrace(BaseModel):
     input_tokens: int = 0
     message_count: int = 0
     user_turn_count: int = 0  # Number of role=user messages (not API calls)
+    is_user_turn: bool = True  # True = user initiated, False = agent-solo continuation
 
     # Assembly
     assembly_mode: str = "passthrough"

@@ -86,7 +86,7 @@ async def trace_list_sessions() -> dict:
 
 
 @router.get("/sessions/{session_id}")
-async def trace_get_session(session_id: str, limit: int = 50, offset: int = 0) -> dict:
+async def trace_get_session(session_id: str, limit: int = 200, offset: int = 0) -> dict:
     """Get trace summary and turns for a session."""
     store = get_trace_store()
     summary = await store.get_session_summary(session_id)

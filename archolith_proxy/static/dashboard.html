@@ -83,9 +83,11 @@
     font-size: 11px; font-weight: 500;
   }
   .tag.graph { background: rgba(63,185,80,0.15); color: var(--green); }
+  .tag.curator { background: rgba(137,87,229,0.15); color: #a371f7; }
   .tag.fallback { background: rgba(248,81,73,0.15); color: var(--red); }
   .tag.passthrough { background: rgba(139,148,158,0.15); color: var(--text-dim); }
   .tag.cold_start { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .tag.agent_solo { background: rgba(56,139,253,0.12); color: #58a6ff; }
   .tag.skipped { background: rgba(139,148,158,0.1); color: var(--text-dim); }
 
   /* Session detail */
@@ -180,20 +182,32 @@ const content = document.getElementById('content');
 const nav = document.getElementById('nav');
 const statusBar = document.getElementById('status-bar');
 
+// Track what's been rendered to enable incremental updates
+let currentView = null;   // 'overview' | 'sessions' | 'detail'
+let detailState = { sessionId: null, turnCount: 0, turnIds: new Set() };
+let sessionListState = { sessionIds: new Set() };
+let overviewBuilt = false;
+
 function route() {
   const hash = location.hash.slice(1) || '/';
-  // Update nav active state
   nav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+  // Reset incremental state on navigation
+  detailState = { sessionId: null, turnCount: 0, turnIds: new Set() };
+  sessionListState = { sessionIds: new Set() };
+  overviewBuilt = false;
 
   if (hash === '/') {
     nav.querySelector('[data-view="overview"]').classList.add('active');
+    currentView = 'overview';
     renderOverview();
   } else if (hash === '/sessions') {
     nav.querySelector('[data-view="sessions"]').classList.add('active');
+    currentView = 'sessions';
     renderSessionList();
   } else if (hash.startsWith('/sessions/')) {
-    const parts = hash.split('/');
-    const sid = parts[2];
+    const sid = hash.split('/')[2];
+    currentView = 'detail';
+    detailState.sessionId = sid;
     renderSessionDetail(sid);
   } else {
     content.innerHTML = '<div class="empty">Unknown view</div>';
@@ -220,7 +234,7 @@ function pct(v) {
 }
 
 function modeTag(mode) {
-  const cls = mode === 'graph' ? 'graph' : mode === 'fallback' ? 'fallback' : mode === 'cold_start' ? 'cold_start' : mode.startsWith('skipped') ? 'skipped' : 'passthrough';
+  const cls = mode === 'graph' ? 'graph' : mode === 'curator' ? 'curator' : mode === 'fallback' ? 'fallback' : mode === 'cold_start' ? 'cold_start' : mode === 'agent_solo' ? 'agent_solo' : mode.startsWith('skipped') ? 'skipped' : 'passthrough';
   return `<span class="tag ${cls}">${mode}</span>`;
 }
 
@@ -245,89 +259,231 @@ function renderMessages(msgs) {
   }).join('\n');
 }
 
+// Build HTML for a single turn card (shared by initial render + append)
+function buildTurnCard(t) {
+  const savingsCls = t.savings_ratio > 0.3 ? 'green' : t.savings_ratio > 0.1 ? 'yellow' : 'red';
+  const reasonStr = t.assembly_reason ? ` — ${escapeHtml(t.assembly_reason)}` : '';
+  const fallbackStr = t.fallback_reason ? `<div style="color:var(--red);font-size:12px;margin-top:4px;">fallback: ${escapeHtml(t.fallback_reason)}</div>` : '';
+
+  let factsHtml = '';
+  if (t.facts_selected && t.facts_selected.length > 0) {
+    factsHtml += '<h4 style="margin:8px 0 4px;font-size:12px;color:var(--text-dim)">Facts Injected</h4><ul class="fact-list">';
+    t.facts_selected.forEach(f => {
+      const ftype = f.type || f.fact_type || '?';
+      const fcontent = f.content || f.text || f.summary || JSON.stringify(f).substring(0, 100);
+      factsHtml += `<li><span class="fact-type">${escapeHtml(ftype)}</span><span class="fact-content">${escapeHtml(String(fcontent).substring(0, 200))}</span></li>`;
+    });
+    factsHtml += '</ul>';
+  }
+  if (t.files_selected && t.files_selected.length > 0) {
+    factsHtml += '<h4 style="margin:8px 0 4px;font-size:12px;color:var(--accent)">Files Injected</h4><ul class="fact-list">';
+    t.files_selected.forEach(f => {
+      const fpath = f.path || f['s.path'] || '?';
+      const fstatus = f.status || f['s.status'] || '';
+      factsHtml += `<li><span class="fact-type">FILE</span><span class="fact-content">${escapeHtml(fpath)} <span style="color:var(--text-dim)">(${escapeHtml(fstatus)})</span></span></li>`;
+    });
+    factsHtml += '</ul>';
+  }
+  if (t.decisions_selected && t.decisions_selected.length > 0) {
+    factsHtml += '<h4 style="margin:8px 0 4px;font-size:12px;color:var(--accent)">Decisions Injected</h4><ul class="fact-list">';
+    t.decisions_selected.forEach(d => {
+      const dsummary = d.summary || d['d.summary'] || '?';
+      const dturn = d.turn || d['d.turn'] || '?';
+      factsHtml += `<li><span class="fact-type">DEC</span><span class="fact-content">[t${escapeHtml(String(dturn))}] ${escapeHtml(String(dsummary).substring(0, 200))}</span></li>`;
+    });
+    factsHtml += '</ul>';
+  }
+  if (t.extracted_facts && t.extracted_facts.length > 0) {
+    factsHtml += '<h4 style="margin:8px 0 4px;font-size:12px;color:var(--green)">Extracted Facts</h4><ul class="fact-list">';
+    t.extracted_facts.forEach(f => {
+      const ftype = f.type || f.fact_type || '?';
+      const fcontent = f.content || f.text || f.summary || JSON.stringify(f).substring(0, 100);
+      factsHtml += `<li><span class="fact-type">${escapeHtml(ftype)}</span><span class="fact-content">${escapeHtml(String(fcontent).substring(0, 200))}</span></li>`;
+    });
+    factsHtml += '</ul>';
+  }
+  if (t.facts_stored > 0 || t.duplicates_skipped > 0 || t.invalidations_attempted > 0) {
+    factsHtml += `<div style="font-size:12px;color:var(--text-dim);margin-top:8px;">stored=${t.facts_stored} dupes=${t.duplicates_skipped} invalidations=${t.invalidations_attempted}/${t.invalidations_matched}</div>`;
+  }
+  if (t.recall_used) {
+    factsHtml += `<div style="font-size:12px;color:var(--purple);margin-top:4px;">recall: "${escapeHtml(t.recall_question)}" → ${t.recall_facts_returned} facts</div>`;
+  }
+
+  return `
+    <div class="turn-card" data-turn-id="${escapeHtml(t.turn_id)}" onclick="this.classList.toggle('selected')">
+      <div class="turn-header">
+        <span class="turn-num">t${t.turn_number}</span>
+        <span style="font-size:11px;color:var(--text-dim);margin-right:4px;">${t.is_user_turn ? '👤' : '🤖'}</span>
+        <span class="turn-mode">${modeTag(t.assembly_mode)}${reasonStr}</span>
+        <span class="turn-tokens">
+          <span class="${savingsCls}" style="color:var(--${savingsCls})">${t.savings_tokens}tok saved (${pct(t.savings_ratio)})</span>
+        </span>
+        <span class="turn-latency">${latencyBar(t.assembly_latency_ms + t.upstream_latency_ms)}</span>
+      </div>
+      ${fallbackStr}
+      <div class="turn-detail">
+        <div style="margin-bottom:12px;">
+          <span style="font-size:12px;color:var(--text-dim);margin-right:16px;">assembly ${latencyBar(t.assembly_latency_ms, 500)}</span>
+          <span style="font-size:12px;color:var(--text-dim);margin-right:16px;">upstream ${latencyBar(t.upstream_latency_ms, 3000)}</span>
+          <span style="font-size:12px;color:var(--text-dim);">extraction ${latencyBar(t.extraction_latency_ms, 500)}</span>
+        </div>
+        <div style="margin-bottom:12px;font-size:12px;color:var(--text-dim);">
+          in=${t.input_tokens} → out=${t.rewritten_tokens} · saved=${t.savings_tokens} (${pct(t.savings_ratio)}) · output=${t.output_tokens || '?'}
+        </div>
+        ${factsHtml}
+        <div class="diff-container" style="margin-top:12px;">
+          <div class="diff-pane">
+            <h3>Original Request (${t.message_count} msgs)</h3>
+            <pre>${renderMessages(t.original_messages)}</pre>
+          </div>
+          <div class="diff-pane">
+            <h3>Rewritten Payload</h3>
+            <pre>${renderMessages(t.rewritten_messages)}</pre>
+          </div>
+        </div>
+        ${t.upstream_response_summary ? `
+        <div style="margin-top:12px;">
+          <h4 style="font-size:12px;color:var(--text-dim);margin-bottom:4px;">Upstream Response (HTTP ${t.upstream_status})</h4>
+          <pre style="font-family:var(--mono);font-size:12px;background:var(--bg);padding:8px;border-radius:4px;max-height:200px;overflow:auto;">${escapeHtml(t.upstream_response_summary)}</pre>
+        </div>
+        ` : ''}
+        <div style="margin-top:8px;font-size:11px;color:var(--text-dim);">turn_id: <span class="mono">${escapeHtml(t.turn_id)}</span></div>
+      </div>
+    </div>
+  `;
+}
+
 // ---------------------------------------------------------------------------
-// Overview
+// Overview — initial build + incremental metric patching
 // ---------------------------------------------------------------------------
 async function renderOverview() {
-  content.innerHTML = '<div class="loading">Loading metrics...</div>';
   try {
     const [m, traceData] = await Promise.all([api('/metrics'), api('/trace/sessions')]);
 
-    const totalRequests = m.total_requests || 0;
-    const savingsRate = m.token_savings_rate || 0;
-    const extractionRate = m.extraction_success_rate || 0;
-    const upstreamErrors = m.upstream_errors || 0;
-    const neo4jErrors = m.neo4j_errors || 0;
-    const traceRecords = m.trace_records || 0;
-    const traceSessions = m.trace_sessions || 0;
+    // If the full page isn't built yet, do initial render
+    if (!overviewBuilt) {
+      const totalRequests = m.total_requests || 0;
+      const savingsRate = m.token_savings_rate || 0;
+      const extractionRate = m.extraction_success_rate || 0;
+      const upstreamErrors = m.upstream_errors || 0;
+      const neo4jErrors = m.neo4j_errors || 0;
+      const traceRecords = m.trace_records || 0;
+      const traceSessions = m.trace_sessions || 0;
 
-    const srCls = savingsRate > 0.3 ? 'green' : savingsRate > 0.1 ? 'yellow' : 'red';
-    const erCls = extractionRate > 0.9 ? 'green' : extractionRate > 0.5 ? 'yellow' : 'red';
+      const srCls = savingsRate > 0.3 ? 'green' : savingsRate > 0.1 ? 'yellow' : 'red';
+      const erCls = extractionRate > 0.9 ? 'green' : extractionRate > 0.5 ? 'yellow' : 'red';
 
-    statusBar.innerHTML = `uptime ${Math.round(m.uptime_s || 0)}s · neo4j <span class="${m.graph_ready ? 'ok' : 'err'}">${m.graph_ready ? 'ok' : 'off'}</span> · traces ${traceRecords}`;
+      let sessionRows = '';
+      if (traceData.sessions && traceData.sessions.length > 0) {
+        sessionRows = traceData.sessions.slice(0, 10).map(s => `
+          <tr data-session-id="${escapeHtml(s.session_id)}" onclick="location.hash='/sessions/${s.session_id}'">
+            <td class="mono">${escapeHtml(s.session_id.substring(0, 12))}…</td>
+            <td>${s.turn_count}</td>
+            <td>${pct(s.avg_savings_ratio)}</td>
+            <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => modeTag(k)).join(' ')}</td>
+            <td>${ago(s.last_turn_at)}</td>
+          </tr>
+        `).join('');
+      }
 
-    let sessionRows = '';
-    if (traceData.sessions && traceData.sessions.length > 0) {
-      sessionRows = traceData.sessions.slice(0, 10).map(s => `
-        <tr onclick="location.hash='/sessions/${s.session_id}'">
-          <td class="mono">${escapeHtml(s.session_id.substring(0, 12))}…</td>
-          <td>${s.turn_count}</td>
-          <td>${pct(s.avg_savings_ratio)}</td>
-          <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => modeTag(k)).join(' ')}</td>
-          <td>${ago(s.last_turn_at)}</td>
-        </tr>
-      `).join('');
+      content.innerHTML = `
+        <div class="card" id="overview-metrics">
+          <div class="card-header"><h2>Proxy Metrics</h2></div>
+          <div class="metrics-grid" id="metrics-grid">
+            <div class="metric" data-key="total_requests"><div class="value">${totalRequests}</div><div class="label">Total Requests</div></div>
+            <div class="metric" data-key="token_savings"><div class="value ${srCls}">${pct(savingsRate)}</div><div class="label">Token Savings</div></div>
+            <div class="metric" data-key="extraction"><div class="value ${erCls}">${pct(extractionRate)}</div><div class="label">Extraction Success</div></div>
+            <div class="metric" data-key="input_tokens"><div class="value">${m.total_input_tokens_seen || 0}</div><div class="label">Input Tokens Seen</div></div>
+            <div class="metric" data-key="tokens_saved"><div class="value">${m.token_savings_estimated || 0}</div><div class="label">Tokens Saved</div></div>
+            <div class="metric" data-key="upstream_errors"><div class="value ${upstreamErrors > 0 ? 'red' : 'green'}">${upstreamErrors}</div><div class="label">Upstream Errors</div></div>
+            <div class="metric" data-key="neo4j_errors"><div class="value ${neo4jErrors > 0 ? 'red' : 'green'}">${neo4jErrors}</div><div class="label">Neo4j Errors</div></div>
+            <div class="metric" data-key="trace_records"><div class="value purple">${traceRecords}</div><div class="label">Trace Records</div></div>
+            <div class="metric" data-key="trace_sessions"><div class="value purple">${traceSessions}</div><div class="label">Traced Sessions</div></div>
+            <div class="metric" data-key="active_sessions"><div class="value">${m.active_sessions || 0}</div><div class="label">Active Sessions</div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h2>Assembly Modes</h2></div>
+          <div class="metrics-grid" id="modes-grid">
+            ${Object.entries(m.assembly_modes || {}).map(([k,v]) => `
+              <div class="metric"><div class="value">${v}</div><div class="label">${k}</div></div>
+            `).join('')}
+          </div>
+        </div>
+
+        ${traceData.sessions && traceData.sessions.length > 0 ? `
+        <div class="card" id="recent-sessions-card">
+          <div class="card-header">
+            <h2>Recent Sessions</h2>
+            <a href="#/sessions">view all →</a>
+          </div>
+          <table>
+            <thead><tr><th>Session</th><th>Turns</th><th>Savings</th><th>Modes</th><th>Last Activity</th></tr></thead>
+            <tbody id="recent-sessions-body">${sessionRows}</tbody>
+          </table>
+        </div>
+        ` : ''}
+      `;
+      overviewBuilt = true;
+      return;
     }
 
-    content.innerHTML = `
-      <div class="card">
-        <div class="card-header"><h2>Proxy Metrics</h2></div>
-        <div class="metrics-grid">
-          <div class="metric"><div class="value">${totalRequests}</div><div class="label">Total Requests</div></div>
-          <div class="metric"><div class="value ${srCls}">${pct(savingsRate)}</div><div class="label">Token Savings</div></div>
-          <div class="metric"><div class="value ${erCls}">${pct(extractionRate)}</div><div class="label">Extraction Success</div></div>
-          <div class="metric"><div class="value">${m.total_input_tokens_seen || 0}</div><div class="label">Input Tokens Seen</div></div>
-          <div class="metric"><div class="value">${m.token_savings_estimated || 0}</div><div class="label">Tokens Saved</div></div>
-          <div class="metric"><div class="value ${upstreamErrors > 0 ? 'red' : 'green'}">${upstreamErrors}</div><div class="label">Upstream Errors</div></div>
-          <div class="metric"><div class="value ${neo4jErrors > 0 ? 'red' : 'green'}">${neo4jErrors}</div><div class="label">Neo4j Errors</div></div>
-          <div class="metric"><div class="value purple">${traceRecords}</div><div class="label">Trace Records</div></div>
-          <div class="metric"><div class="value purple">${traceSessions}</div><div class="label">Traced Sessions</div></div>
-          <div class="metric"><div class="value">${m.active_sessions || 0}</div><div class="label">Active Sessions</div></div>
-        </div>
-      </div>
+    // Incremental patch — update metric values in-place, no DOM rebuild
+    const grid = document.getElementById('metrics-grid');
+    if (grid) {
+      const patch = (key, val, cls) => {
+        const el = grid.querySelector(`[data-key="${key}"] .value`);
+        if (!el) return;
+        el.textContent = val;
+        el.className = 'value' + (cls ? ' ' + cls : '');
+      };
+      const sr = m.token_savings_rate || 0;
+      const er = m.extraction_success_rate || 0;
+      const srCls = sr > 0.3 ? 'green' : sr > 0.1 ? 'yellow' : 'red';
+      const erCls = er > 0.9 ? 'green' : er > 0.5 ? 'yellow' : 'red';
+      const ue = m.upstream_errors || 0;
+      const ne = m.neo4j_errors || 0;
 
-      <div class="card">
-        <div class="card-header"><h2>Assembly Modes</h2></div>
-        <div class="metrics-grid">
-          ${Object.entries(m.assembly_modes || {}).map(([k,v]) => `
-            <div class="metric"><div class="value">${v}</div><div class="label">${k}</div></div>
-          `).join('')}
-        </div>
-      </div>
+      patch('total_requests', m.total_requests || 0);
+      patch('token_savings', pct(sr), srCls);
+      patch('extraction', pct(er), erCls);
+      patch('input_tokens', m.total_input_tokens_seen || 0);
+      patch('tokens_saved', m.token_savings_estimated || 0);
+      patch('upstream_errors', ue, ue > 0 ? 'red' : 'green');
+      patch('neo4j_errors', ne, ne > 0 ? 'red' : 'green');
+      patch('trace_records', m.trace_records || 0, 'purple');
+      patch('trace_sessions', m.trace_sessions || 0, 'purple');
+      patch('active_sessions', m.active_sessions || 0);
+    }
 
-      ${traceData.sessions && traceData.sessions.length > 0 ? `
-      <div class="card">
-        <div class="card-header">
-          <h2>Recent Sessions</h2>
-          <a href="#/sessions">view all →</a>
-        </div>
-        <table>
-          <thead><tr><th>Session</th><th>Turns</th><th>Savings</th><th>Modes</th><th>Last Activity</th></tr></thead>
-          <tbody>${sessionRows}</tbody>
-        </table>
-      </div>
-      ` : ''}
-    `;
+    // Patch recent sessions table rows in-place
+    const tbody = document.getElementById('recent-sessions-body');
+    if (tbody && traceData.sessions && traceData.sessions.length > 0) {
+      traceData.sessions.slice(0, 10).forEach(s => {
+        const row = tbody.querySelector(`[data-session-id="${CSS.escape(s.session_id)}"]`);
+        if (row) {
+          row.children[1].textContent = s.turn_count;
+          row.children[2].textContent = pct(s.avg_savings_ratio);
+          row.children[4].textContent = ago(s.last_turn_at);
+        }
+      });
+    }
+
+    // Update status bar
+    statusBar.innerHTML = `uptime ${Math.round(m.uptime_s || 0)}s · neo4j <span class="${m.graph_ready ? 'ok' : 'err'}">${m.graph_ready ? 'ok' : 'off'}</span> · traces ${m.trace_records || 0}`;
+
   } catch (e) {
-    content.innerHTML = `<div class="error-msg">Failed to load overview: ${escapeHtml(e.message)}</div>`;
+    if (!overviewBuilt) {
+      content.innerHTML = `<div class="error-msg">Failed to load overview: ${escapeHtml(e.message)}</div>`;
+    }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Session List
+// Session List — initial build + incremental row patching
 // ---------------------------------------------------------------------------
 async function renderSessionList() {
-  content.innerHTML = '<div class="loading">Loading sessions...</div>';
   try {
     const data = await api('/trace/sessions');
     if (!data.sessions || data.sessions.length === 0) {
@@ -335,259 +491,228 @@ async function renderSessionList() {
       return;
     }
 
-    const rows = data.sessions.map(s => `
-      <tr onclick="location.hash='/sessions/${s.session_id}'">
-        <td class="mono">${escapeHtml(s.session_id)}</td>
-        <td>${s.turn_count}</td>
-        <td>${pct(s.avg_savings_ratio)}</td>
-        <td>${s.total_input_tokens || 0}</td>
-        <td>${s.total_savings_tokens || 0}</td>
-        <td>${s.total_facts_stored || 0}</td>
-        <td>${s.total_duplicates_skipped || 0}</td>
-        <td>${s.total_invalidations_attempted || 0}</td>
-        <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => `${modeTag(k)}×${v}`).join(' ')}</td>
-        <td>${ago(s.last_turn_at)}</td>
-      </tr>
-    `).join('');
+    const tbody = document.getElementById('session-list-body');
 
-    content.innerHTML = `
-      <div class="card">
-        <div class="card-header"><h2>Sessions (${data.count})</h2></div>
-        <table>
-          <thead><tr>
-            <th>Session ID</th><th>Turns</th><th>Savings</th><th>In Tokens</th><th>Saved Tokens</th>
-            <th>Facts</th><th>Dupes</th><th>Invalidations</th><th>Modes</th><th>Last</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    `;
+    // First load — build the full table
+    if (!tbody) {
+      const rows = data.sessions.map(s => {
+        sessionListState.sessionIds.add(s.session_id);
+        return `
+          <tr data-session-id="${escapeHtml(s.session_id)}" onclick="location.hash='/sessions/${s.session_id}'">
+            <td class="mono">${escapeHtml(s.session_id)}</td>
+            <td>${s.turn_count}</td>
+            <td>${pct(s.avg_savings_ratio)}</td>
+            <td>${s.total_input_tokens || 0}</td>
+            <td>${s.total_savings_tokens || 0}</td>
+            <td>${s.total_facts_stored || 0}</td>
+            <td>${s.total_duplicates_skipped || 0}</td>
+            <td>${s.total_invalidations_attempted || 0}</td>
+            <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => `${modeTag(k)}×${v}`).join(' ')}</td>
+            <td>${ago(s.last_turn_at)}</td>
+          </tr>
+        `;
+      }).join('');
+
+      content.innerHTML = `
+        <div class="card">
+          <div class="card-header"><h2 id="session-count">Sessions (${data.count})</h2></div>
+          <table>
+            <thead><tr>
+              <th>Session ID</th><th>Turns</th><th>Savings</th><th>In Tokens</th><th>Saved Tokens</th>
+              <th>Facts</th><th>Dupes</th><th>Invalidations</th><th>Modes</th><th>Last</th>
+            </tr></thead>
+            <tbody id="session-list-body">${rows}</tbody>
+          </table>
+        </div>
+      `;
+      return;
+    }
+
+    // Incremental — patch existing rows, prepend new sessions
+    data.sessions.forEach(s => {
+      const row = tbody.querySelector(`[data-session-id="${CSS.escape(s.session_id)}"]`);
+      if (row) {
+        // Update cells in-place
+        row.children[1].textContent = s.turn_count;
+        row.children[2].textContent = pct(s.avg_savings_ratio);
+        row.children[3].textContent = s.total_input_tokens || 0;
+        row.children[4].textContent = s.total_savings_tokens || 0;
+        row.children[5].textContent = s.total_facts_stored || 0;
+        row.children[6].textContent = s.total_duplicates_skipped || 0;
+        row.children[7].textContent = s.total_invalidations_attempted || 0;
+        row.children[9].textContent = ago(s.last_turn_at);
+      } else if (!sessionListState.sessionIds.has(s.session_id)) {
+        // New session — prepend row
+        sessionListState.sessionIds.add(s.session_id);
+        const tr = document.createElement('tr');
+        tr.setAttribute('data-session-id', s.session_id);
+        tr.setAttribute('onclick', `location.hash='/sessions/${s.session_id}'`);
+        tr.innerHTML = `
+          <td class="mono">${escapeHtml(s.session_id)}</td>
+          <td>${s.turn_count}</td>
+          <td>${pct(s.avg_savings_ratio)}</td>
+          <td>${s.total_input_tokens || 0}</td>
+          <td>${s.total_savings_tokens || 0}</td>
+          <td>${s.total_facts_stored || 0}</td>
+          <td>${s.total_duplicates_skipped || 0}</td>
+          <td>${s.total_invalidations_attempted || 0}</td>
+          <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => `${modeTag(k)}×${v}`).join(' ')}</td>
+          <td>${ago(s.last_turn_at)}</td>
+        `;
+        tr.style.opacity = '0';
+        tbody.prepend(tr);
+        // Fade in
+        requestAnimationFrame(() => { tr.style.transition = 'opacity 0.3s'; tr.style.opacity = '1'; });
+      }
+    });
+
+    // Update count
+    const countEl = document.getElementById('session-count');
+    if (countEl) countEl.textContent = `Sessions (${data.count})`;
+
   } catch (e) {
-    content.innerHTML = `<div class="error-msg">Failed to load sessions: ${escapeHtml(e.message)}</div>`;
+    if (!document.getElementById('session-list-body')) {
+      content.innerHTML = `<div class="error-msg">Failed to load sessions: ${escapeHtml(e.message)}</div>`;
+    }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Session Detail (with turn timeline, prompt diff, fact inspector)
+// Session Detail — initial build + append-only new turns
 // ---------------------------------------------------------------------------
 async function renderSessionDetail(sessionId) {
-  content.innerHTML = '<div class="loading">Loading session...</div>';
   try {
     const data = await api(`/trace/sessions/${sessionId}`);
     const summary = data.summary || {};
     const turns = data.turns || [];
 
-    // Session header
-    let html = `
-      <a class="back" href="#/sessions">← sessions</a>
-      <div class="session-header">
-        <div>
-          <div class="sid">${escapeHtml(sessionId)}</div>
-          ${summary.goal ? `<div class="goal">"${escapeHtml(summary.goal)}"</div>` : ''}
-        </div>
-        <div class="metrics-grid" style="flex:1;min-width:300px;">
-          <div class="metric"><div class="value">${summary.turn_count || 0}</div><div class="label">Turns</div></div>
-          <div class="metric"><div class="value">${summary.total_input_tokens || 0}</div><div class="label">In Tokens</div></div>
-          <div class="metric"><div class="value">${summary.total_savings_tokens || 0}</div><div class="label">Saved Tokens</div></div>
-          <div class="metric"><div class="value">${pct(summary.avg_savings_ratio)}</div><div class="label">Savings</div></div>
-          <div class="metric"><div class="value">${summary.total_facts_stored || 0}</div><div class="label">Facts Stored</div></div>
-          <div class="metric"><div class="value">${summary.total_duplicates_skipped || 0}</div><div class="label">Dupes Skipped</div></div>
-          <div class="metric"><div class="value">${summary.total_invalidations_attempted || 0}</div><div class="label">Invalidations</div></div>
-          <div class="metric"><div class="value">${summary.total_recalls || 0}</div><div class="label">Recalls</div></div>
-        </div>
-      </div>
-    `;
-
-    // Mode distribution
-    const modes = summary.assembly_modes || {};
-    if (Object.keys(modes).length > 0) {
-      html += `
-        <div class="card">
-          <div class="card-header"><h2>Mode Distribution</h2></div>
-          <div class="metrics-grid">
-            ${Object.entries(modes).map(([k,v]) => `
-              <div class="metric"><div class="value">${v}</div><div class="label">${modeTag(k)}</div></div>
-            `).join('')}
+    // First load — full render
+    if (detailState.turnCount === 0) {
+      let html = `
+        <a class="back" href="#/sessions">← sessions</a>
+        <div class="session-header">
+          <div>
+            <div class="sid">${escapeHtml(sessionId)}</div>
+            ${summary.goal ? `<div class="goal">"${escapeHtml(summary.goal)}"</div>` : ''}
+          </div>
+          <div class="metrics-grid" style="flex:1;min-width:300px;" id="detail-metrics">
+            <div class="metric" data-key="turns"><div class="value">${summary.turn_count || 0}</div><div class="label">Turns</div></div>
+            <div class="metric" data-key="in_tokens"><div class="value">${summary.total_input_tokens || 0}</div><div class="label">In Tokens</div></div>
+            <div class="metric" data-key="saved_tokens"><div class="value">${summary.total_savings_tokens || 0}</div><div class="label">Saved Tokens</div></div>
+            <div class="metric" data-key="savings"><div class="value">${pct(summary.avg_savings_ratio)}</div><div class="label">Savings</div></div>
+            <div class="metric" data-key="facts"><div class="value">${summary.total_facts_stored || 0}</div><div class="label">Facts Stored</div></div>
+            <div class="metric" data-key="dupes"><div class="value">${summary.total_duplicates_skipped || 0}</div><div class="label">Dupes Skipped</div></div>
+            <div class="metric" data-key="invalidations"><div class="value">${summary.total_invalidations_attempted || 0}</div><div class="label">Invalidations</div></div>
+            <div class="metric" data-key="recalls"><div class="value">${summary.total_recalls || 0}</div><div class="label">Recalls</div></div>
           </div>
         </div>
       `;
-    }
 
-    // Turn timeline
-    html += '<div class="card"><div class="card-header"><h2>Turn Timeline</h2></div><div class="timeline" id="timeline">';
-    if (turns.length === 0) {
-      html += '<div class="empty">No turns recorded</div>';
-    } else {
-      turns.forEach(t => {
-        const savingsCls = t.savings_ratio > 0.3 ? 'green' : t.savings_ratio > 0.1 ? 'yellow' : 'red';
-        const reasonStr = t.assembly_reason ? ` — ${escapeHtml(t.assembly_reason)}` : '';
-        const fallbackStr = t.fallback_reason ? `<div style="color:var(--red);font-size:12px;margin-top:4px;">fallback: ${escapeHtml(t.fallback_reason)}</div>` : '';
-
-        // Facts section
-        let factsHtml = '';
-        if (t.facts_selected && t.facts_selected.length > 0) {
-          factsHtml += '<h4 style="margin:8px 0 4px;font-size:12px;color:var(--text-dim)">Facts Injected</h4><ul class="fact-list">';
-          t.facts_selected.forEach(f => {
-            const ftype = f.type || f.fact_type || '?';
-            const fcontent = f.content || f.text || f.summary || JSON.stringify(f).substring(0, 100);
-            factsHtml += `<li><span class="fact-type">${escapeHtml(ftype)}</span><span class="fact-content">${escapeHtml(String(fcontent).substring(0, 200))}</span></li>`;
-          });
-          factsHtml += '</ul>';
-        }
-
-            // Files selected for injection
-            if (t.files_selected && t.files_selected.length > 0) {
-                factsHtml += '<h4 style="margin:8px 0 4px;font-size:12px;color:var(--accent)">Files Injected</h4><ul class="fact-list">';
-                t.files_selected.forEach(f => {
-                    const fpath = f.path || f['s.path'] || '?';
-                    const fstatus = f.status || f['s.status'] || '';
-                    factsHtml += `<li><span class="fact-type">FILE</span><span class="fact-content">${escapeHtml(fpath)} <span style="color:var(--text-dim)">(${escapeHtml(fstatus)})</span></span></li>`;
-                });
-                factsHtml += '</ul>';
-            }
-
-            // Decisions selected for injection
-            if (t.decisions_selected && t.decisions_selected.length > 0) {
-                factsHtml += '<h4 style="margin:8px 0 4px;font-size:12px;color:var(--accent)">Decisions Injected</h4><ul class="fact-list">';
-                t.decisions_selected.forEach(d => {
-                    const dsummary = d.summary || d['d.summary'] || '?';
-                    const dturn = d.turn || d['d.turn'] || '?';
-                    factsHtml += `<li><span class="fact-type">DEC</span><span class="fact-content">[t${escapeHtml(String(dturn))}] ${escapeHtml(String(dsummary).substring(0, 200))}</span></li>`;
-                });
-                factsHtml += '</ul>';
-            }
-
-            // Extraction results
-            if (t.extracted_facts && t.extracted_facts.length > 0) {
-          factsHtml += '<h4 style="margin:8px 0 4px;font-size:12px;color:var(--green)">Extracted Facts</h4><ul class="fact-list">';
-          t.extracted_facts.forEach(f => {
-            const ftype = f.type || f.fact_type || '?';
-            const fcontent = f.content || f.text || f.summary || JSON.stringify(f).substring(0, 100);
-            factsHtml += `<li><span class="fact-type">${escapeHtml(ftype)}</span><span class="fact-content">${escapeHtml(String(fcontent).substring(0, 200))}</span></li>`;
-          });
-          factsHtml += '</ul>';
-        }
-
-        // Extraction stats
-        if (t.facts_stored > 0 || t.duplicates_skipped > 0 || t.invalidations_attempted > 0) {
-          factsHtml += `<div style="font-size:12px;color:var(--text-dim);margin-top:8px;">stored=${t.facts_stored} dupes=${t.duplicates_skipped} invalidations=${t.invalidations_attempted}/${t.invalidations_matched}</div>`;
-        }
-
-        // Recall
-        if (t.recall_used) {
-          factsHtml += `<div style="font-size:12px;color:var(--purple);margin-top:4px;">recall: "${escapeHtml(t.recall_question)}" → ${t.recall_facts_returned} facts</div>`;
-        }
-
+      const modes = summary.assembly_modes || {};
+      if (Object.keys(modes).length > 0) {
         html += `
-          <div class="turn-card" onclick="this.classList.toggle('selected')">
-            <div class="turn-header">
-              <span class="turn-num">t${t.turn_number}</span>
-              <span class="turn-mode">${modeTag(t.assembly_mode)}${reasonStr}</span>
-              <span class="turn-tokens">
-                <span class="${savingsCls}" style="color:var(--${savingsCls})">${t.savings_tokens}tok saved (${pct(t.savings_ratio)})</span>
-              </span>
-              <span class="turn-latency">${latencyBar(t.assembly_latency_ms + t.upstream_latency_ms)}</span>
-            </div>
-            ${fallbackStr}
-            <div class="turn-detail">
-              <!-- Latency breakdown -->
-              <div style="margin-bottom:12px;">
-                <span style="font-size:12px;color:var(--text-dim);margin-right:16px;">assembly ${latencyBar(t.assembly_latency_ms, 500)}</span>
-                <span style="font-size:12px;color:var(--text-dim);margin-right:16px;">upstream ${latencyBar(t.upstream_latency_ms, 3000)}</span>
-                <span style="font-size:12px;color:var(--text-dim);">extraction ${latencyBar(t.extraction_latency_ms, 500)}</span>
-              </div>
-
-              <!-- Token economics -->
-              <div style="margin-bottom:12px;font-size:12px;color:var(--text-dim);">
-                in=${t.input_tokens} → out=${t.rewritten_tokens} · saved=${t.savings_tokens} (${pct(t.savings_ratio)}) · output=${t.output_tokens || '?'}
-              </div>
-
-              <!-- Facts & Extraction -->
-              ${factsHtml}
-
-              <!-- Prompt diff -->
-              <div class="diff-container" style="margin-top:12px;">
-                <div class="diff-pane">
-                  <h3>Original Request (${t.message_count} msgs)</h3>
-                  <pre>${renderMessages(t.original_messages)}</pre>
-                </div>
-                <div class="diff-pane">
-                  <h3>Rewritten Payload</h3>
-                  <pre>${renderMessages(t.rewritten_messages)}</pre>
-                </div>
-              </div>
-
-              <!-- Upstream response -->
-              ${t.upstream_response_summary ? `
-              <div style="margin-top:12px;">
-                <h4 style="font-size:12px;color:var(--text-dim);margin-bottom:4px;">Upstream Response (HTTP ${t.upstream_status})</h4>
-                <pre style="font-family:var(--mono);font-size:12px;background:var(--bg);padding:8px;border-radius:4px;max-height:200px;overflow:auto;">${escapeHtml(t.upstream_response_summary)}</pre>
-              </div>
-              ` : ''}
-
-              <!-- Turn ID -->
-              <div style="margin-top:8px;font-size:11px;color:var(--text-dim);">turn_id: <span class="mono">${escapeHtml(t.turn_id)}</span></div>
+          <div class="card" id="mode-distribution">
+            <div class="card-header"><h2>Mode Distribution</h2></div>
+            <div class="metrics-grid">
+              ${Object.entries(modes).map(([k,v]) => `
+                <div class="metric"><div class="value">${v}</div><div class="label">${modeTag(k)}</div></div>
+              `).join('')}
             </div>
           </div>
         `;
-      });
+      }
+
+      html += '<div class="card"><div class="card-header"><h2>Turn Timeline</h2></div><div class="timeline" id="timeline">';
+      if (turns.length === 0) {
+        html += '<div class="empty">No turns recorded</div>';
+      } else {
+        turns.forEach(t => {
+          detailState.turnIds.add(t.turn_id);
+          html += buildTurnCard(t);
+        });
+      }
+      html += '</div></div>';
+
+      content.innerHTML = html;
+      detailState.turnCount = turns.length;
+      return;
     }
-    html += '</div></div>';
 
-    // Preserve expanded turn cards across polls
-    const expanded = new Set();
-    document.querySelectorAll('.turn-card.selected').forEach(el => {
-      const tid = el.querySelector('.mono');
-      if (tid) expanded.add(tid.textContent.trim());
-    });
+    // Incremental update — patch metrics, append new turns only
+    const metricsGrid = document.getElementById('detail-metrics');
+    if (metricsGrid) {
+      const patch = (key, val) => {
+        const el = metricsGrid.querySelector(`[data-key="${key}"] .value`);
+        if (el) el.textContent = val;
+      };
+      patch('turns', summary.turn_count || 0);
+      patch('in_tokens', summary.total_input_tokens || 0);
+      patch('saved_tokens', summary.total_savings_tokens || 0);
+      patch('savings', pct(summary.avg_savings_ratio));
+      patch('facts', summary.total_facts_stored || 0);
+      patch('dupes', summary.total_duplicates_skipped || 0);
+      patch('invalidations', summary.total_invalidations_attempted || 0);
+      patch('recalls', summary.total_recalls || 0);
+    }
 
-    content.innerHTML = html;
-
-    // Restore expanded state
-    if (expanded.size > 0) {
-      document.querySelectorAll('.turn-card').forEach(el => {
-        const tid = el.querySelector('.mono');
-        if (tid && expanded.has(tid.textContent.trim())) {
-          el.classList.add('selected');
+    // Find new turns and append them
+    const timeline = document.getElementById('timeline');
+    if (timeline && turns.length > detailState.turnCount) {
+      const newTurns = turns.slice(detailState.turnCount);
+      newTurns.forEach(t => {
+        if (!detailState.turnIds.has(t.turn_id)) {
+          detailState.turnIds.add(t.turn_id);
+          const wrapper = document.createElement('div');
+          wrapper.innerHTML = buildTurnCard(t);
+          const card = wrapper.firstElementChild;
+          card.style.opacity = '0';
+          timeline.appendChild(card);
+          requestAnimationFrame(() => { card.style.transition = 'opacity 0.3s'; card.style.opacity = '1'; });
         }
       });
+      detailState.turnCount = turns.length;
+
+      // Auto-scroll only if user is near bottom
+      if (!userScrolledUp) {
+        timeline.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
     }
 
-    // Auto-scroll to bottom of timeline if user hasn't scrolled up
-    const timeline = document.getElementById('timeline');
-    if (timeline && !content._userScrolled) {
-      timeline.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
   } catch (e) {
-    content.innerHTML = `
-      <a class="back" href="#/sessions">← sessions</a>
-      <div class="error-msg">Failed to load session: ${escapeHtml(e.message)}</div>
-    `;
+    if (detailState.turnCount === 0) {
+      content.innerHTML = `
+        <a class="back" href="#/sessions">← sessions</a>
+        <div class="error-msg">Failed to load session: ${escapeHtml(e.message)}</div>
+      `;
+    }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Auto-refresh — polls current page for live updates
+// Auto-refresh — polls for incremental updates
 // ---------------------------------------------------------------------------
 let refreshTimer = null;
+let userScrolledUp = false;
+
 function startAutoRefresh() {
   clearInterval(refreshTimer);
+  userScrolledUp = false;
   const hash = location.hash.slice(1) || '/';
   if (hash === '/') {
     refreshTimer = setInterval(renderOverview, 10000);
   } else if (hash === '/sessions') {
-    refreshTimer = setInterval(renderSessionList, 5000);
+    refreshTimer = setInterval(renderSessionList, 10000);
   } else if (hash.startsWith('/sessions/')) {
     const sid = hash.split('/sessions/')[1];
-    refreshTimer = setInterval(() => renderSessionDetail(sid), 3000);
+    refreshTimer = setInterval(() => renderSessionDetail(sid), 5000);
   }
 }
 window.addEventListener('hashchange', () => { route(); startAutoRefresh(); });
 
-// Track user scroll to avoid fighting auto-scroll
-content.addEventListener('scroll', () => {
-  const atBottom = content.scrollHeight - content.scrollTop - content.clientHeight < 100;
-  content._userScrolled = !atBottom;
+// Track user scroll — listen on window since that's where the page scrolls
+window.addEventListener('scroll', () => {
+  const atBottom = document.documentElement.scrollHeight - window.scrollY - window.innerHeight < 100;
+  userScrolledUp = !atBottom;
 });
 
 // ---------------------------------------------------------------------------

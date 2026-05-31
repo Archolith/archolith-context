@@ -106,13 +106,23 @@ async def resolve_session(
     """Resolve or create a session for this request.
 
     Returns (session_id, is_new_session).
+
+    A turn is defined as user → llm → user. Tool-call round trips
+    (assistant → tool → assistant) within the same user turn do NOT
+    increment the turn counter. We detect this by checking if the last
+    message has role "user" (new turn) vs "tool" (continuation).
     """
+    # Only count as a new user turn if the last message is from the user.
+    # Tool-call continuations (last msg role = "tool") are same-turn retries.
+    is_new_user_turn = bool(messages) and messages[-1].get("role") == "user"
+
     # Primary: explicit X-Session-ID header
     session_id = headers.get("x-session-id") or headers.get("X-Session-ID")
     if session_id:
         existing = await get_backend().find_session_by_id(session_id)
         if existing:
-            await get_backend().touch_session(session_id)
+            if is_new_user_turn:
+                await get_backend().touch_session(session_id)
             return session_id, False
         # Create with explicit ID
         await get_backend().create_session(session_id, fingerprint=None)
@@ -125,7 +135,8 @@ async def resolve_session(
     if benchmark_id:
         existing = await get_backend().find_session_by_id(benchmark_id)
         if existing:
-            await get_backend().touch_session(benchmark_id)
+            if is_new_user_turn:
+                await get_backend().touch_session(benchmark_id)
             return benchmark_id, False
         await get_backend().create_session(benchmark_id, fingerprint=None)
         logger.info("benchmark_session_created", session_id=benchmark_id)
@@ -163,7 +174,7 @@ async def resolve_session(
 
     if is_new:
         logger.info("session_created", session_id=session_id, fingerprint=fingerprint)
-    else:
+    elif is_new_user_turn:
         await get_backend().touch_session(session_id)
 
     return session_id, is_new
