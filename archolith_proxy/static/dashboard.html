@@ -90,6 +90,11 @@
   .tag.agent_solo { background: rgba(56,139,253,0.12); color: #58a6ff; }
   .tag.skipped { background: rgba(139,148,158,0.1); color: var(--text-dim); }
 
+  /* Toggle for hiding non-user turns */
+  .timeline.user-only .turn-card[data-user-turn="false"] { display: none; }
+  .filter-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; user-select: none; }
+  .filter-toggle input { cursor: pointer; }
+
   /* Session detail */
   .session-header { display: flex; gap: 24px; align-items: flex-start; margin-bottom: 20px; flex-wrap: wrap; }
   .session-header .sid { font-family: var(--mono); font-size: 16px; font-weight: 600; word-break: break-all; }
@@ -310,7 +315,7 @@ function buildTurnCard(t) {
   }
 
   return `
-    <div class="turn-card" data-turn-id="${escapeHtml(t.turn_id)}" onclick="this.classList.toggle('selected')">
+    <div class="turn-card" data-turn-id="${escapeHtml(t.turn_id)}" data-user-turn="${!!t.is_user_turn}" onclick="this.classList.toggle('selected')">
       <div class="turn-header">
         <span class="turn-num">t${t.turn_number}</span>
         <span style="font-size:11px;color:var(--text-dim);margin-right:4px;">${t.is_user_turn ? '👤' : '🤖'}</span>
@@ -622,7 +627,7 @@ async function renderSessionDetail(sessionId) {
         `;
       }
 
-      html += '<div class="card"><div class="card-header"><h2>Turn Timeline</h2></div><div class="timeline" id="timeline">';
+      html += `<div class="card"><div class="card-header"><h2>Turn Timeline</h2><label class="filter-toggle"><input type="checkbox" id="user-only-toggle" onchange="document.getElementById('timeline').classList.toggle('user-only', this.checked)"> User turns only</label></div><div class="timeline" id="timeline">`;
       if (turns.length === 0) {
         html += '<div class="empty">No turns recorded</div>';
       } else {
