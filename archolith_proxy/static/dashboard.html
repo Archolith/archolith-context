@@ -440,7 +440,7 @@ async function renderOverview() {
         sessionRows = traceData.sessions.slice(0, 10).map(s => `
           <tr data-session-id="${escapeHtml(s.session_id)}" onclick="location.hash='/sessions/${s.session_id}'">
             <td class="mono">${escapeHtml(s.session_id.substring(0, 12))}…</td>
-            <td>${s.turn_count}</td>
+            <td>${s.max_user_turns || 0} / ${s.turn_count}</td>
             <td title="curator: ${pct(s.rewritten_savings_ratio)}">${pct(s.avg_savings_ratio)}</td>
             <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => modeTag(k)).join(' ')}</td>
             <td>${fmtTs(s.last_turn_at)}</td>
@@ -521,7 +521,7 @@ async function renderOverview() {
             <a href="#/sessions">view all →</a>
           </div>
           <table>
-            <thead><tr><th>Session</th><th>Turns</th><th>Savings</th><th>Modes</th><th>Last Activity</th></tr></thead>
+            <thead><tr><th>Session</th><th>Turns/Calls</th><th>Savings</th><th>Modes</th><th>Last Activity</th></tr></thead>
             <tbody id="recent-sessions-body">${sessionRows}</tbody>
           </table>
         </div>
@@ -622,7 +622,7 @@ async function renderOverview() {
       traceData.sessions.slice(0, 10).forEach(s => {
         const row = tbody.querySelector(`[data-session-id="${CSS.escape(s.session_id)}"]`);
         if (row) {
-          row.children[1].textContent = s.turn_count;
+          row.children[1].textContent = `${s.max_user_turns || 0} / ${s.turn_count}`;
           row.children[2].textContent = pct(s.avg_savings_ratio);
           row.children[4].textContent = fmtTs(s.last_turn_at);
         }
@@ -645,7 +645,8 @@ async function renderOverview() {
 
 const SESSION_COLUMNS = [
   { key: 'session_id',                    label: 'Session ID',     sortable: true  },
-  { key: 'turn_count',                    label: 'Turns',          sortable: true  },
+  { key: 'max_user_turns',                 label: 'Turns',          sortable: true  },
+  { key: 'turn_count',                    label: 'API Calls',     sortable: true  },
   { key: 'avg_savings_ratio',             label: 'Savings',        sortable: true  },
   { key: 'rewritten_savings_ratio',       label: 'Curator',        sortable: true  },
   { key: 'total_input_tokens',            label: 'In Tokens',      sortable: true  },
@@ -660,6 +661,7 @@ const SESSION_COLUMNS = [
 function sessionRowHtml(s) {
   return `
     <td class="mono">${escapeHtml(s.session_id)}</td>
+    <td>${s.max_user_turns || 0}</td>
     <td>${s.turn_count}</td>
     <td>${pct(s.avg_savings_ratio)}</td>
     <td>${pct(s.rewritten_savings_ratio)}</td>
@@ -824,7 +826,8 @@ async function renderSessionDetail(sessionId) {
             ${summary.goal ? `<div class="goal">"${escapeHtml(summary.goal)}"</div>` : ''}
           </div>
           <div class="metrics-grid" style="flex:1;min-width:300px;" id="detail-metrics">
-            <div class="metric" data-key="turns"><div class="value">${summary.turn_count || 0}</div><div class="label">Turns</div></div>
+            <div class="metric" data-key="turns"><div class="value">${summary.max_user_turns || 0}</div><div class="label">User Turns</div></div>
+            <div class="metric" data-key="api_calls"><div class="value">${summary.turn_count || 0}</div><div class="label">API Calls</div></div>
             <div class="metric" data-key="duration"><div class="value">${sesDurationStr}</div><div class="label">Duration</div></div>
             <div class="metric" data-key="in_tokens"><div class="value">${fmtTokens(summary.total_input_tokens || 0)}</div><div class="label">In Tokens</div></div>
             <div class="metric" data-key="out_tokens"><div class="value">${fmtTokens(sesOutputTokens)}</div><div class="label">Out Tokens</div></div>
@@ -897,7 +900,8 @@ async function renderSessionDetail(sessionId) {
         const el = metricsGrid.querySelector(`[data-key="${key}"] .value`);
         if (el) el.textContent = val;
       };
-      patch('turns', summary.turn_count || 0);
+      patch('turns', summary.max_user_turns || 0);
+      patch('api_calls', summary.turn_count || 0);
       patch('in_tokens', summary.total_input_tokens || 0);
       patch('saved_tokens', summary.total_savings_tokens || 0);
       patch('savings', pct(summary.avg_savings_ratio));

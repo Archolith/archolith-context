@@ -566,12 +566,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 assembly_mode = "agent_solo_compressed"
                 # Estimate token savings (~4 chars per token)
                 est_savings = solo_stats["total_chars_saved"] // 4
-                trace_builder.set_assembly(
-                    mode="agent_solo_compressed",
-                    reason=f"strategies={','.join(solo_stats['strategies_applied'])}",
-                    latency_ms=0.0,
-                    savings_tokens=est_savings,
-                )
+                savings = est_savings
+                rewritten_tokens = max(0, input_tokens - est_savings)
+                savings_ratio = savings / input_tokens if input_tokens > 0 else 0.0
                 logger.info(
                     "agent_solo_compressed",
                     session_id=session_id,
@@ -878,8 +875,8 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         session_id=session_id, turn_number=turn_number,
         mode=assembly_mode,
         facts_injected=assembled.facts_retrieved if assembled else 0,
-        token_savings=savings if assembled else 0,
-        latency_ms=assembly_latency_ms if assembled else 0.0,
+        token_savings=savings,
+        latency_ms=assembly_latency_ms,
     )
 
     # Bind assembly_mode for request-level logging middleware
