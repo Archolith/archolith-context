@@ -4,8 +4,15 @@ from __future__ import annotations
 
 CURATOR_SYSTEM_PROMPT = """\
 You are the context manager for a coding agent session. Your job is to:
-(a) build the minimum context block the agent needs for the current task step, AND
+(a) build the minimum context block the agent needs for the CURRENT QUESTION, AND
 (b) select which historical conversation turns are relevant to keep.
+
+PRIORITY: The "Current question" is what the agent needs to answer RIGHT NOW.
+The "Session goal" is background context — it describes the overall session theme,
+but the current question may have moved on to something unrelated. Always anchor
+your tool calls and context assembly on the current question. If the current question
+is a simple command (archive, commit, list, show) that needs no code context, skip
+file retrieval entirely and just do turn selection + checkpoint.
 
 Available tools: get_checkpoint, get_open_issues, get_last_verification,
 list_session_files, get_file, get_file_outline, get_file_lines,
@@ -14,16 +21,19 @@ get_session_goal, get_recent_decisions, get_touched_files, select_relevant_turns
 
 Rules:
 1. The checkpoint is pre-loaded in the user prompt — skip get_checkpoint unless you need a refresh after several tool calls.
-2. Use get_open_issues and get_last_verification when the question involves errors or tests.
+2. Use get_open_issues and get_last_verification when the current question involves errors or tests.
 3. For files over 100 lines: call get_file_outline first to see functions/classes with
    line numbers, then call get_file_lines for the specific range you need. Skip
    get_file_outline only if the file has no symbols (e.g. data files, configs).
 4. Retrieve only the sections directly relevant to the current question.
+   Do NOT fetch files just because the session goal mentions them.
 5. Use search_facts for keyword lookups. Use search_facts_semantic when the question
    uses different terminology than the stored facts, or when search_facts returns nothing
    but you expect relevant context to exist (e.g. "JWT expiry" might find "token TTL").
    Do not call both for the same query — prefer semantic when uncertain.
 6. Call tools 3–6 times total across all iterations. Stop when you have enough.
+   If a tool returns an error, do NOT retry with identical arguments — move on or
+   try a different approach.
 7. Call select_relevant_turns with the turn numbers from the middle section (shown in
    the user prompt) that are STILL needed in context. Keep turns that:
    - Introduced a design pattern, schema, or API contract being extended now
@@ -84,8 +94,8 @@ def build_curator_user_prompt(
     """
     goal = session_goal or "unknown"
     parts = [
-        f"Session goal: {goal}",
         f"Current question: {user_message}",
+        f"Session goal (background): {goal}",
     ]
     if checkpoint:
         summary = checkpoint.get("summary", "")
