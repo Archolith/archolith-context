@@ -238,6 +238,21 @@ function ago(ts) {
   return `${Math.floor(d / 86400)}d ago`;
 }
 
+function fmtTs(ts) {
+  if (!ts) return '—';
+  const dt = new Date(ts * 1000);
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const time = `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+  // Today: just show time
+  if (dt.toDateString() === now.toDateString()) return time;
+  // This year: month/day + time
+  const md = `${dt.getMonth()+1}/${dt.getDate()}`;
+  if (dt.getFullYear() === now.getFullYear()) return `${md} ${time}`;
+  // Older: include year
+  return `${md}/${dt.getFullYear().toString().slice(2)} ${time}`;
+}
+
 function pct(v) {
   if (v == null || isNaN(v)) return '—';
   return `${(v * 100).toFixed(1)}%`;
@@ -424,7 +439,7 @@ async function renderOverview() {
             <td>${s.turn_count}</td>
             <td title="curator: ${pct(s.rewritten_savings_ratio)}">${pct(s.avg_savings_ratio)}</td>
             <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => modeTag(k)).join(' ')}</td>
-            <td>${ago(s.last_turn_at)}</td>
+            <td>${fmtTs(s.last_turn_at)}</td>
           </tr>
         `).join('');
       }
@@ -605,7 +620,7 @@ async function renderOverview() {
         if (row) {
           row.children[1].textContent = s.turn_count;
           row.children[2].textContent = pct(s.avg_savings_ratio);
-          row.children[4].textContent = ago(s.last_turn_at);
+          row.children[4].textContent = fmtTs(s.last_turn_at);
         }
       });
     }
@@ -650,7 +665,7 @@ function sessionRowHtml(s) {
     <td>${s.total_duplicates_skipped || 0}</td>
     <td>${s.total_invalidations_attempted || 0}</td>
     <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => `${modeTag(k)}×${v}`).join(' ')}</td>
-    <td>${ago(s.last_turn_at)}</td>
+    <td>${fmtTs(s.last_turn_at)}</td>
   `;
 }
 
