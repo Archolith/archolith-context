@@ -244,10 +244,11 @@ function fmtTs(ts) {
   const now = new Date();
   const pad = n => String(n).padStart(2, '0');
   const time = `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
-  // Today: just show time
-  if (dt.toDateString() === now.toDateString()) return time;
-  // This year: month/day + time
   const md = `${dt.getMonth()+1}/${dt.getDate()}`;
+  const ageH = (now - dt) / 3_600_000;
+  // Under 4 hours ago: just time
+  if (ageH < 4) return time;
+  // This year: month/day + time
   if (dt.getFullYear() === now.getFullYear()) return `${md} ${time}`;
   // Older: include year
   return `${md}/${dt.getFullYear().toString().slice(2)} ${time}`;
