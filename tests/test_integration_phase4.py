@@ -505,10 +505,9 @@ class TestTraceAccounting:
         turns = await get_trace_store().get_session_turns("session-trace")
         assert turns
         trace = turns[-1]
-        # Graph-only assembler is disabled — with curator off, assembled
-        # is None so the code labels it "cold_start" (assembled=None path).
-        # No rewriting occurs: rewritten_tokens stays 0, messages pass through.
-        assert trace.assembly_mode == "cold_start"
+        # Graph-only assembler is disabled and curator is off — assembled
+        # is None. With user_turns >= cold_start_turns, labeled "passthrough".
+        assert trace.assembly_mode == "passthrough"
         assert trace.savings_tokens == 0
         assert trace.rewritten_tokens == 0
 

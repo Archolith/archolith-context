@@ -737,8 +737,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 # Trace: capture the actual outbound messages after savings gates.
                 trace_builder.set_rewritten_messages(body.get("messages", []))
             else:
-                # assemble_context returned None = cold start
-                assembly_mode = "cold_start"
+                # assembled is None — distinguish cold start from curator failure.
+                # Cold start: user turns below threshold (curator gate returned early).
+                # Curator failure: curator was called but returned None (timeout, error, fallback).
+                if user_turn_count < settings.cold_start_turns:
+                    assembly_mode = "cold_start"
+                else:
+                    assembly_mode = "passthrough"
         except Exception as e:
             logger.warning("context_assembly_failed", session_id=session_id, error=str(e), exc_info=True)
             assembly_mode = "fallback"
