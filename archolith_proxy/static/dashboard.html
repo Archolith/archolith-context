@@ -246,12 +246,13 @@ function fmtTs(ts) {
   const time = `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
   const md = `${dt.getMonth()+1}/${dt.getDate()}`;
   const ageH = (now - dt) / 3_600_000;
-  // Under 4 hours ago: just time
-  if (ageH < 4) return time;
-  // This year: month/day + time
-  if (dt.getFullYear() === now.getFullYear()) return `${md} ${time}`;
+  const rel = ago(ts);
+  // Under 4 hours ago: just time + relative
+  if (ageH < 4) return `${time} (${rel})`;
+  // This year: month/day + time + relative
+  if (dt.getFullYear() === now.getFullYear()) return `${md} ${time} (${rel})`;
   // Older: include year
-  return `${md}/${dt.getFullYear().toString().slice(2)} ${time}`;
+  return `${md}/${dt.getFullYear().toString().slice(2)} ${time} (${rel})`;
 }
 
 function pct(v) {
