@@ -117,6 +117,10 @@ class TurnTrace(BaseModel):
     # Fallback
     fallback_reason: str = ""
 
+    # Upstream cache breakdown (DeepSeek prompt_cache_hit_tokens / prompt_cache_miss_tokens)
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+
     # Curator decisions — populated when assembly_mode == "curator" or on failure
     curator_retained_turns: list[int] | None = None   # None = no selection made
     curator_context_block: str | None = None           # The curator's assembled context text

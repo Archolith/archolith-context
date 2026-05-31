@@ -94,11 +94,15 @@ class TraceBuilder:
         latency_ms: float = 0.0,
         output_tokens: int | None = None,
         response_summary: str = "",
+        cache_hit_tokens: int = 0,
+        cache_miss_tokens: int = 0,
     ) -> None:
         self._data["upstream_status"] = status
         self._data["upstream_latency_ms"] = latency_ms
         self._data["output_tokens"] = output_tokens
         self._data["upstream_response_summary"] = response_summary[:500]
+        self._data["cache_hit_tokens"] = cache_hit_tokens
+        self._data["cache_miss_tokens"] = cache_miss_tokens
 
     def set_extraction(
         self,

@@ -348,7 +348,7 @@ function buildTurnCard(t) {
           <span style="font-size:12px;color:var(--text-dim);">extraction ${latencyBar(t.extraction_latency_ms, 500)}</span>
         </div>
         <div style="margin-bottom:12px;font-size:12px;color:var(--text-dim);">
-          in=${fmtTokens(t.input_tokens)} → out=${fmtTokens(t.rewritten_tokens)} · saved=${fmtTokens(t.savings_tokens)} (${pct(t.savings_ratio)}) · output=${fmtTokens(t.output_tokens) || '?'}
+          in=${fmtTokens(t.input_tokens)} → rew=${fmtTokens(t.rewritten_tokens)} · saved=${fmtTokens(t.savings_tokens)} (${pct(t.savings_ratio)}) · output=${fmtTokens(t.output_tokens) || '?'}${t.cache_hit_tokens ? ` · <span style="color:var(--green)">cache ${fmtTokens(t.cache_hit_tokens)}/${fmtTokens(t.cache_hit_tokens+t.cache_miss_tokens)} (${pct(t.cache_hit_tokens/(t.cache_hit_tokens+t.cache_miss_tokens))})</span>` : ''}
         </div>
         ${factsHtml}
         ${t.curator_tool_log && t.curator_tool_log.length > 0 ? `
@@ -450,7 +450,7 @@ async function renderOverview() {
         </div>
 
         <div class="card" id="cost-card">
-          <div class="card-header"><h2>Cost Estimation</h2><span style="font-size:11px;color:var(--text-dim);">$${(m.pricing||{}).input_per_million||'?'}/M in · $${(m.pricing||{}).output_per_million||'?'}/M out</span></div>
+          <div class="card-header"><h2>Cost Estimation</h2><span style="font-size:11px;color:var(--text-dim);">$${(m.pricing||{}).input_per_million||'?'}/M in · $${(m.pricing||{}).input_cached_per_million||'?'}/M cached · $${(m.pricing||{}).output_per_million||'?'}/M out</span></div>
           <div class="metrics-grid" id="cost-grid">
             <div class="metric" data-key="cost_input"><div class="value">\$${(m.cost_input || 0).toFixed(4)}</div><div class="label">Input Cost</div></div>
             <div class="metric" data-key="cost_output"><div class="value">\$${(m.cost_output || 0).toFixed(4)}</div><div class="label">Output Cost</div></div>
@@ -459,6 +459,9 @@ async function renderOverview() {
             <div class="metric" data-key="total_input"><div class="value">${fmtTokens(m.total_input_tokens_seen || 0)}</div><div class="label">Total Input</div></div>
             <div class="metric" data-key="total_output"><div class="value">${fmtTokens(m.total_output_tokens || 0)}</div><div class="label">Total Output</div></div>
             <div class="metric" data-key="total_saved"><div class="value green">${fmtTokens(m.token_savings_estimated || 0)}</div><div class="label">Tokens Saved</div></div>
+            <div class="metric" data-key="cache_hit_upstream"><div class="value ${(m.cache_hit_rate_upstream||0)>0.5?'green':''}">${(m.total_cache_hit_tokens||0)>0 ? pct(m.cache_hit_rate_upstream) : 'n/a'}</div><div class="label">DS Cache Rate</div></div>
+            <div class="metric" data-key="cache_hit_tokens"><div class="value">${fmtTokens(m.total_cache_hit_tokens || 0)}</div><div class="label">Cache Hits</div></div>
+            <div class="metric" data-key="cache_miss_tokens"><div class="value">${fmtTokens(m.total_cache_miss_tokens || 0)}</div><div class="label">Cache Misses</div></div>
           </div>
         </div>
 
@@ -583,6 +586,9 @@ async function renderOverview() {
       cpatch('total_input', fmtTokens(m.total_input_tokens_seen || 0));
       cpatch('total_output', fmtTokens(m.total_output_tokens || 0));
       cpatch('total_saved', fmtTokens(m.token_savings_estimated || 0), 'green');
+      cpatch('cache_hit_upstream', (m.total_cache_hit_tokens||0)>0 ? pct(m.cache_hit_rate_upstream) : 'n/a', (m.cache_hit_rate_upstream||0)>0.5?'green':'');
+      cpatch('cache_hit_tokens', fmtTokens(m.total_cache_hit_tokens || 0));
+      cpatch('cache_miss_tokens', fmtTokens(m.total_cache_miss_tokens || 0));
     }
 
     // Patch recent sessions table rows in-place

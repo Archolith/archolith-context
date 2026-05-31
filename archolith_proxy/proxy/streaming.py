@@ -167,6 +167,20 @@ class ResponseCapture:
         return None
 
     @property
+    def cache_hit_tokens(self) -> int:
+        """DeepSeek prompt_cache_hit_tokens from usage data."""
+        if self._usage:
+            return self._usage.get("prompt_cache_hit_tokens", 0) or 0
+        return 0
+
+    @property
+    def cache_miss_tokens(self) -> int:
+        """DeepSeek prompt_cache_miss_tokens from usage data."""
+        if self._usage:
+            return self._usage.get("prompt_cache_miss_tokens", 0) or 0
+        return 0
+
+    @property
     def finish_reason(self) -> str | None:
         return self._finish_reason
 

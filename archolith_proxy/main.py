@@ -454,21 +454,33 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
-        # Cost estimation from pricing config
+        # Cost estimation from pricing config — use actual cache breakdown when available
         settings = get_settings()
-        input_cost = total_input * settings.pricing_input_per_million / 1_000_000
-        savings_cost = total_savings * settings.pricing_input_per_million / 1_000_000
-
-        # Compute total output tokens from trace store
         total_output_tokens = 0
+        total_cache_hit_tokens = 0
+        total_cache_miss_tokens = 0
         try:
             for turns in trace_store._by_session.values():
                 for t in turns:
                     if t.output_tokens:
                         total_output_tokens += t.output_tokens
+                    total_cache_hit_tokens += t.cache_hit_tokens
+                    total_cache_miss_tokens += t.cache_miss_tokens
         except Exception:
             pass
         output_cost = total_output_tokens * settings.pricing_output_per_million / 1_000_000
+
+        # Cache-aware input cost: use actual cache breakdown when available,
+        # fall back to pricing everything at uncached rate
+        has_cache_data = total_cache_hit_tokens > 0 or total_cache_miss_tokens > 0
+        if has_cache_data:
+            input_cost = (
+                total_cache_hit_tokens * settings.pricing_input_cached_per_million / 1_000_000
+                + total_cache_miss_tokens * settings.pricing_input_per_million / 1_000_000
+            )
+        else:
+            input_cost = total_input * settings.pricing_input_per_million / 1_000_000
+        savings_cost = total_savings * settings.pricing_input_per_million / 1_000_000
 
         # Derived curator stats
         curator_calls = get_metrics()["curator_calls"]
@@ -550,8 +562,14 @@ def create_app() -> FastAPI:
             "trace_records": trace_store.total_traces,
             "trace_sessions": trace_store.session_count,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
-            # Cost estimation
+            # Cost estimation (cache-aware when upstream reports cache breakdown)
             "total_output_tokens": total_output_tokens,
+            "total_cache_hit_tokens": total_cache_hit_tokens,
+            "total_cache_miss_tokens": total_cache_miss_tokens,
+            "cache_hit_rate_upstream": (
+                round(total_cache_hit_tokens / (total_cache_hit_tokens + total_cache_miss_tokens), 4)
+                if (total_cache_hit_tokens + total_cache_miss_tokens) > 0 else 0.0
+            ),
             "cost_input": round(input_cost, 4),
             "cost_output": round(output_cost, 4),
             "cost_total": round(input_cost + output_cost, 4),

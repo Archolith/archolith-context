@@ -301,6 +301,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             savings_ratio=0.0,
             compression_ratio=1.0,
         )
+        # Ensure DeepSeek returns usage data in streaming responses
+        if req.stream:
+            body.setdefault("stream_options", {})["include_usage"] = True
         request_body = json.dumps(body).encode("utf-8")
         t0 = time.monotonic()
         if req.stream:
@@ -309,6 +312,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             # client.post(), making aiter_bytes() a no-op on the already-consumed stream.
             # Use client.stream() directly and own the context manager inside the generator.
             http_client = request.app.state.http_client
+            pt_capture = ResponseCapture()
 
             async def _passthrough_stream():
                 try:
@@ -320,6 +324,11 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                         timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0),
                     ) as resp:
                         async for chunk in resp.aiter_bytes():
+                            # Feed chunks to capture for usage extraction
+                            for line in chunk.decode("utf-8", errors="replace").split("\n"):
+                                line = line.strip()
+                                if line.startswith("data: ") and line != "data: [DONE]":
+                                    pt_capture.add_chunk(line[6:])
                             yield chunk
                 except (httpx.TimeoutException, httpx.ConnectError) as exc:
                     logger.warning("passthrough_stream_error", error=str(exc))
@@ -330,8 +339,10 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 trace_builder.set_response(
                     status=200,
                     latency_ms=latency_ms,
-                    output_tokens=None,
+                    output_tokens=pt_capture.output_tokens,
                     response_summary="(passthrough streaming)",
+                    cache_hit_tokens=pt_capture.cache_hit_tokens,
+                    cache_miss_tokens=pt_capture.cache_miss_tokens,
                 )
                 try:
                     trace = trace_builder.build()
@@ -371,6 +382,8 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 latency_ms=latency_ms,
                 output_tokens=output_tokens,
                 response_summary=_extract_response_text(response_data)[:500],
+                cache_hit_tokens=usage.get("prompt_cache_hit_tokens", 0) or 0,
+                cache_miss_tokens=usage.get("prompt_cache_miss_tokens", 0) or 0,
             )
             async def _finalize_passthrough_trace_ns():
                 try:
@@ -837,6 +850,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     )
 
     body = filter_request_body(body, enabled=settings.rtk_enabled)
+    # Ensure DeepSeek returns usage data (incl. cache breakdown) in streaming responses
+    if req.stream:
+        body.setdefault("stream_options", {})["include_usage"] = True
     request_body = json.dumps(body).encode("utf-8")
 
     if req.stream and synthetic_injected:
@@ -1279,6 +1295,8 @@ async def _handle_streaming(
                 latency_ms=0.0,
                 output_tokens=stream_output_tokens,
                 response_summary=response_text,
+                cache_hit_tokens=cap.cache_hit_tokens if cap else 0,
+                cache_miss_tokens=cap.cache_miss_tokens if cap else 0,
             )
 
         if session_id and response_text:
@@ -1587,12 +1605,19 @@ async def _handle_non_streaming(
     # Trace: record upstream response (non-streaming) — always stored
     if trace_builder:
         if not _interception_used:
-            # Normal path: trace the original response
+            # Normal path: trace the original response with usage data
+            try:
+                ns_data = resp.json() if resp.status_code == 200 else {}
+            except Exception:
+                ns_data = {}
+            ns_usage = ns_data.get("usage", {})
             trace_builder.set_response(
                 status=resp.status_code,
                 latency_ms=0.0,
-                output_tokens=None,
+                output_tokens=ns_usage.get("completion_tokens") or ns_usage.get("output_tokens"),
                 response_summary=response_text,
+                cache_hit_tokens=ns_usage.get("prompt_cache_hit_tokens", 0) or 0,
+                cache_miss_tokens=ns_usage.get("prompt_cache_miss_tokens", 0) or 0,
             )
 
     # Build and return the response
