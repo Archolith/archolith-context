@@ -1681,6 +1681,26 @@ def _build_outline(content: str, path: str) -> str:
         except Exception:
             pass  # Fall through to regex on SyntaxError or any other failure
 
+    if not symbols and path.endswith(".java"):
+        try:
+            import javalang
+            tree = javalang.parse.parse(content)
+            for _, node in tree.filter(javalang.tree.TypeDeclaration):
+                if node.position:
+                    kind = type(node).__name__.replace("Declaration", "").lower()
+                    symbols.append((node.position.line, f"{kind} {node.name}"))
+            for _, node in tree.filter(javalang.tree.ConstructorDeclaration):
+                if node.position:
+                    symbols.append((node.position.line, f"constructor {node.name}"))
+            for _, node in tree.filter(javalang.tree.MethodDeclaration):
+                if node.position:
+                    mods = " ".join(sorted(node.modifiers)) if node.modifiers else ""
+                    ret = node.return_type.name if node.return_type else "void"
+                    label = f"{mods} {ret} {node.name}".strip()
+                    symbols.append((node.position.line, label))
+        except Exception:
+            pass  # Fall through to regex
+
     if not symbols:
         import re
         _PATTERNS = [
