@@ -211,6 +211,7 @@ def compress_agent_solo(
         "chars_saved_shrink": 0,
         "chars_saved_dedup": 0,
         "chars_saved_middle": 0,
+        "chars_saved_compact": 0,
         "chars_saved_curator_cache": 0,
         "total_chars_saved": 0,
         "skipped_reason": None,
@@ -266,6 +267,7 @@ def compress_agent_solo(
             stats["chars_saved_shrink"] = rtk_stats.chars_saved_shrink
             stats["chars_saved_dedup"] = rtk_stats.chars_saved_dedup
             stats["chars_saved_middle"] = rtk_stats.chars_saved_filter
+            stats["chars_saved_compact"] = rtk_stats.chars_saved_compact
             stats["total_chars_saved"] += rtk_stats.total_chars_saved
             if rtk_stats.skipped_reason and not stats["strategies_applied"]:
                 stats["skipped_reason"] = rtk_stats.skipped_reason
