@@ -37,6 +37,20 @@ from archolith_proxy.models.dtos import AssembledContext
 
 logger = structlog.get_logger()
 
+# Side-channel for curator failure data — lets chat.py show what the curator
+# tried before falling through to passthrough. Keyed by session_id, consumed
+# once via get_last_attempt().
+_last_attempt: dict[str, dict] = {}
+
+
+def get_last_attempt(session_id: str) -> dict | None:
+    """Pop the last curator attempt info for a session.
+
+    Returns {"tool_log": [...], "failure_reason": "..."} or None.
+    Consumed once — subsequent calls return None until the next attempt.
+    """
+    return _last_attempt.pop(session_id, None)
+
 
 # ---------------------------------------------------------------------------
 # Background pass — runs after response completes, no time limit
@@ -101,7 +115,7 @@ async def run_background_pass(
 
     t0 = time.monotonic()
     try:
-        result = await _run_curator_native(
+        result, _bg_tool_log, _bg_failure = await _run_curator_native(
             client=client,
             session_id=session_id,
             user_prompt=user_prompt,
@@ -288,7 +302,7 @@ async def _run_with_briefing(
     # Inline briefing pass: tight budget, 2 iterations
     inline_latency_budget = min(settings.curator_latency_budget_ms, 3000)
     try:
-        result: CuratorResult | None = await asyncio.wait_for(
+        result_tuple = await asyncio.wait_for(
             _run_curator_native(
                 client=client,
                 session_id=session_id,
@@ -299,6 +313,7 @@ async def _run_with_briefing(
             ),
             timeout=inline_latency_budget / 1000,
         )
+        result, _inl_tool_log, _inl_failure = result_tuple
     except asyncio.TimeoutError:
         logger.info("inline_briefing_timeout", session_id=session_id, turn=turn_number)
         return None
@@ -436,9 +451,11 @@ async def curate_context(
         previous_snapshot=previous_snapshot,
     )
 
+    attempt_tool_log: list = []
+    attempt_failure: str = ""
     try:
         # Apply latency budget
-        result: CuratorResult | None = await asyncio.wait_for(
+        result_tuple = await asyncio.wait_for(
             _run_curator_native(
                 client=client,
                 session_id=session_id,
@@ -449,19 +466,34 @@ async def curate_context(
             ),
             timeout=settings.curator_latency_budget_ms / 1000,
         )
+        result, attempt_tool_log, attempt_failure = result_tuple
     except asyncio.TimeoutError:
         logger.info("curator_timeout", session_id=session_id, turn=turn_number)
         from archolith_proxy.metrics import record_metric
         record_metric("curator_timeouts", 1)
+        attempt_failure = "timeout"
+        _last_attempt[session_id] = {
+            "tool_log": [tc.to_dict() for tc in attempt_tool_log],
+            "failure_reason": attempt_failure,
+        }
         return None
-    except Exception:
+    except Exception as exc:
         logger.warning("curator_failed", session_id=session_id, exc_info=True)
+        attempt_failure = f"exception: {str(exc)[:200]}"
+        _last_attempt[session_id] = {
+            "tool_log": [tc.to_dict() for tc in attempt_tool_log],
+            "failure_reason": attempt_failure,
+        }
         return None
 
     if result is None:
         logger.info("curator_fallback", session_id=session_id, turn=turn_number)
         from archolith_proxy.metrics import record_metric
         record_metric("curator_fallbacks", 1)
+        _last_attempt[session_id] = {
+            "tool_log": [tc.to_dict() for tc in attempt_tool_log],
+            "failure_reason": attempt_failure,
+        }
         return None
 
     # Cache snapshot for next turn's delta behaviour

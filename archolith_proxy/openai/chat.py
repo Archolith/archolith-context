@@ -571,6 +571,15 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                             context_block=(assembled.system_message or {}).get("content"),
                             tool_log=assembled.curator_tool_log,
                         )
+                    else:
+                        # Curator was attempted but failed — capture what it tried
+                        from archolith_proxy.curator import get_last_attempt
+                        attempt = get_last_attempt(session_id)
+                        if attempt:
+                            trace_builder.set_curator_info(
+                                tool_log=attempt.get("tool_log", []),
+                                failure_reason=attempt.get("failure_reason", ""),
+                            )
                 except Exception:
                     logger.warning("curator_error", session_id=session_id, exc_info=True)
 

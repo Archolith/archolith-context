@@ -121,6 +121,7 @@ class TurnTrace(BaseModel):
     curator_retained_turns: list[int] | None = None   # None = no selection made
     curator_context_block: str | None = None           # The curator's assembled context text
     curator_tool_log: list[dict] = Field(default_factory=list)  # Per-call tool dispatch log
+    curator_failure_reason: str = ""  # Why the curator failed (empty on success)
 
 
 class SessionTraceSummary(BaseModel):

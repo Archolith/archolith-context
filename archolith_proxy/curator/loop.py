@@ -159,14 +159,15 @@ async def _run_curator_native(
     max_iterations: int,
     system_prompt: str,
     model: str,
-) -> CuratorResult | None:
+) -> tuple[CuratorResult | None, list[CuratorToolCall], str]:
     """Curator loop using native OpenAI-compatible tool calling.
 
     Adapted from delegate_server._run_agent_native for context curation:
     - No working_dir, checkpoint, read_only, file_context
     - session_id passed to all tool dispatches
     - Tracks curated_paths and tool_calls_used
-    - Returns CuratorResult on success, None on error/timeout/max iterations
+    - Returns (CuratorResult, tool_log, "") on success,
+      or (None, tool_log, failure_reason) on error/timeout/max iterations
     """
     allowed_tools = {s["function"]["name"] for s in ALL_CURATOR_TOOLS}
 
@@ -202,14 +203,14 @@ async def _run_curator_native(
                 logger.warning("curator_empty_response", session_id=session_id)
                 _save_failure_diagnostic(session_id, "empty_response", messages,
                     total_tool_calls, curated_paths, retained_turn_numbers, iteration)
-                return None
+                return None, tool_log, "empty_response"
             choice = response.choices[0]
         except Exception as exc:
             logger.warning("curator_llm_error", session_id=session_id, error=str(exc))
             _save_failure_diagnostic(session_id, "llm_error", messages,
                 total_tool_calls, curated_paths, retained_turn_numbers, iteration,
                 error_detail=str(exc))
-            return None
+            return None, tool_log, f"llm_error: {str(exc)[:200]}"
 
         tool_count = len(choice.message.tool_calls or [])
         content_len = len((choice.message.content or "").strip())
@@ -251,7 +252,7 @@ async def _run_curator_native(
                 )
                 _save_failure_diagnostic(session_id, "empty_final", messages,
                     total_tool_calls, curated_paths, retained_turn_numbers, iteration)
-                return None
+                return None, tool_log, "empty_final"
             return CuratorResult(
                 context_text=content,
                 curated_paths=curated_paths,
@@ -259,7 +260,7 @@ async def _run_curator_native(
                 tool_calls_used=total_tool_calls,
                 estimated_tokens=_estimate_tokens(content),
                 tool_log=tool_log,
-            )
+            ), tool_log, ""
 
         if choice.finish_reason == "length":
             logger.warning(
@@ -269,7 +270,7 @@ async def _run_curator_native(
             )
             _save_failure_diagnostic(session_id, "context_length", messages,
                 total_tool_calls, curated_paths, retained_turn_numbers, iteration)
-            return None
+            return None, tool_log, "context_length"
 
         if choice.finish_reason != "tool_calls" or not choice.message.tool_calls:
             logger.warning(
@@ -281,7 +282,7 @@ async def _run_curator_native(
             _save_failure_diagnostic(session_id, "unexpected_finish", messages,
                 total_tool_calls, curated_paths, retained_turn_numbers, iteration,
                 error_detail=f"finish_reason={choice.finish_reason}")
-            return None
+            return None, tool_log, f"unexpected_finish ({choice.finish_reason})"
 
         messages.append(choice.message)
 
@@ -349,14 +350,14 @@ async def _run_curator_native(
                     _save_failure_diagnostic(session_id, "stuck_loop", messages,
                         total_tool_calls, curated_paths, retained_turn_numbers, iteration,
                         error_detail=f"stuck_on={recent[0][0]}")
-                    return None
+                    return None, tool_log, f"stuck_loop ({recent[0][0]})"
 
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_str})
 
     logger.info("curator_max_iterations", session_id=session_id, iterations=max_iterations)
     _save_failure_diagnostic(session_id, "max_iterations", messages,
         total_tool_calls, curated_paths, retained_turn_numbers, max_iterations - 1)
-    return None
+    return None, tool_log, f"max_iterations ({max_iterations})"
 
 
 # ---------------------------------------------------------------------------
