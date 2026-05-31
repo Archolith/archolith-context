@@ -1815,11 +1815,16 @@ def _build_outline(content: str, path: str) -> str:
     if not symbols:
         import re
         _PATTERNS = [
+            # JS / TS
             (re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)"), "function"),
             (re.compile(r"^\s*(?:export\s+(?:default\s+)?)?class\s+(\w+)"), "class"),
             (re.compile(r"^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\("), "const"),
+            # Python
             (re.compile(r"^\s*def\s+(\w+)"), "def"),
             (re.compile(r"^\s*class\s+(\w+)"), "class"),
+            # Java / Kotlin / C# — method/constructor signatures
+            (re.compile(r"^\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native|default)\s+)*(?:[\w<>\[\]?,\s]+)\s+(\w+)\s*\("), "method"),
+            (re.compile(r"^\s*(?:public\s+|private\s+|protected\s+)?(?:class|interface|enum|record)\s+(\w+)"), "class"),
         ]
         for i, line in enumerate(content.split("\n"), 1):
             for pattern, kind in _PATTERNS:
