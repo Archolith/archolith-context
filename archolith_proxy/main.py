@@ -470,6 +470,46 @@ def create_app() -> FastAPI:
             pass
         output_cost = total_output_tokens * settings.pricing_output_per_million / 1_000_000
 
+        # Derived curator stats
+        curator_calls = get_metrics()["curator_calls"]
+        curator_timeouts = get_metrics()["curator_timeouts"]
+        curator_fallbacks = get_metrics()["curator_fallbacks"]
+        curator_successes = max(0, curator_calls - curator_timeouts - curator_fallbacks)
+        curator_success_rate = (
+            round(curator_successes / curator_calls, 4)
+            if curator_calls > 0 else 0.0
+        )
+
+        # Derived file cache stats
+        cache_hits = get_metrics()["native_read_cache_hits"]
+        cache_misses = get_metrics()["native_read_cache_misses"]
+        cache_total = cache_hits + cache_misses
+        file_cache_hit_rate = (
+            round(cache_hits / cache_total, 4)
+            if cache_total > 0 else 0.0
+        )
+
+        # Average assembly latency from trace store (curator turns only)
+        curator_latencies = []
+        total_curator_tool_calls = 0
+        try:
+            for turns in trace_store._by_session.values():
+                for t in turns:
+                    if t.assembly_mode == "curator":
+                        curator_latencies.append(t.assembly_latency_ms)
+                        if t.curator_tool_log:
+                            total_curator_tool_calls += len(t.curator_tool_log)
+        except Exception:
+            pass
+        avg_curator_latency_ms = (
+            round(sum(curator_latencies) / len(curator_latencies), 1)
+            if curator_latencies else 0.0
+        )
+        avg_curator_tool_calls = (
+            round(total_curator_tool_calls / len(curator_latencies), 1)
+            if curator_latencies else 0.0
+        )
+
         return {
             "proxy": "archolith-proxy",
             "version": "0.1.0",
@@ -489,9 +529,13 @@ def create_app() -> FastAPI:
             "token_savings_rate": token_savings_rate,
             "total_input_tokens_seen": get_metrics()["total_input_tokens_seen"],
             "compaction_applied": get_metrics()["compaction_applied"],
-            "curator_calls": get_metrics()["curator_calls"],
-            "curator_timeouts": get_metrics()["curator_timeouts"],
-            "curator_fallbacks": get_metrics()["curator_fallbacks"],
+            "curator_calls": curator_calls,
+            "curator_timeouts": curator_timeouts,
+            "curator_fallbacks": curator_fallbacks,
+            "curator_successes": curator_successes,
+            "curator_success_rate": curator_success_rate,
+            "avg_curator_latency_ms": avg_curator_latency_ms,
+            "avg_curator_tool_calls": avg_curator_tool_calls,
             "synthetic_tool_successes": get_metrics()["synthetic_tool_successes"],
             "synthetic_tool_failures": get_metrics()["synthetic_tool_failures"],
             "synthetic_circuit_opens": get_metrics()["synthetic_circuit_opens"],
@@ -502,6 +546,7 @@ def create_app() -> FastAPI:
             "native_read_cache_misses": get_metrics()["native_read_cache_misses"],
             "native_read_intercept_errors": get_metrics()["native_read_intercept_errors"],
             "file_cache_invalidations": get_metrics()["file_cache_invalidations"],
+            "file_cache_hit_rate": file_cache_hit_rate,
             "trace_records": trace_store.total_traces,
             "trace_sessions": trace_store.session_count,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,

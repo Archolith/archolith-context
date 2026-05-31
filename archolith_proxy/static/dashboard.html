@@ -335,17 +335,22 @@ function buildTurnCard(t) {
       </div>
       ${fallbackStr}
       <div class="turn-detail">
+        <div style="margin-bottom:8px;font-size:11px;color:var(--text-dim);display:flex;gap:16px;flex-wrap:wrap;">
+          ${t.model ? `<span>model: <span class="mono">${escapeHtml(t.model)}</span></span>` : ''}
+          <span>user turn: <span class="mono">${t.user_turn_count || '?'}</span></span>
+          ${t.curator_retained_turns ? `<span>retained turns: <span class="mono">[${t.curator_retained_turns.join(', ')}]</span></span>` : ''}
+        </div>
         <div style="margin-bottom:12px;">
           <span style="font-size:12px;color:var(--text-dim);margin-right:16px;">assembly ${latencyBar(t.assembly_latency_ms, 500)}</span>
           <span style="font-size:12px;color:var(--text-dim);margin-right:16px;">upstream ${latencyBar(t.upstream_latency_ms, 3000)}</span>
           <span style="font-size:12px;color:var(--text-dim);">extraction ${latencyBar(t.extraction_latency_ms, 500)}</span>
         </div>
         <div style="margin-bottom:12px;font-size:12px;color:var(--text-dim);">
-          in=${t.input_tokens} → out=${t.rewritten_tokens} · saved=${t.savings_tokens} (${pct(t.savings_ratio)}) · output=${t.output_tokens || '?'}
+          in=${fmtTokens(t.input_tokens)} → out=${fmtTokens(t.rewritten_tokens)} · saved=${fmtTokens(t.savings_tokens)} (${pct(t.savings_ratio)}) · output=${fmtTokens(t.output_tokens) || '?'}
         </div>
         ${factsHtml}
         ${t.curator_tool_log && t.curator_tool_log.length > 0 ? `
-        <h4 style="margin:8px 0 4px;font-size:12px;color:var(--purple)">Curator Tool Log</h4>
+        <h4 style="margin:8px 0 4px;font-size:12px;color:var(--purple)">Curator Tool Log (${t.curator_tool_log.length} calls)</h4>
         <div style="font-size:12px;font-family:var(--mono);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px;max-height:200px;overflow:auto;">
           ${t.curator_tool_log.map(tc => {
             const statusColor = tc.status === 'ok' ? 'var(--green)' : tc.status === 'soft_error' ? 'var(--yellow)' : 'var(--red)';
@@ -354,6 +359,12 @@ function buildTurnCard(t) {
             return `<div style="margin-bottom:2px;"><span style="color:${statusColor}">[${tc.status}]</span> <span style="color:var(--accent)">${escapeHtml(tc.tool)}</span>(${escapeHtml(argsStr)})${detail ? ' → '+detail : ''}</div>`;
           }).join('')}
         </div>
+        ` : ''}
+        ${t.curator_context_block ? `
+        <details style="margin-top:8px;">
+          <summary style="font-size:12px;color:var(--purple);cursor:pointer;user-select:none;">Curator Context Block (${fmtTokens(Math.round((t.curator_context_block||'').length/3))} est)</summary>
+          <pre style="font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px;max-height:400px;overflow:auto;white-space:pre-wrap;margin-top:4px;">${escapeHtml(t.curator_context_block)}</pre>
+        </details>
         ` : ''}
         <div class="diff-container" style="margin-top:12px;">
           <div class="diff-pane">
@@ -449,6 +460,30 @@ async function renderOverview() {
           </div>
         </div>
 
+        <div class="card" id="curator-card">
+          <div class="card-header"><h2>Curator Performance</h2></div>
+          <div class="metrics-grid" id="curator-grid">
+            <div class="metric" data-key="cur_calls"><div class="value">${m.curator_calls||0}</div><div class="label">Calls</div></div>
+            <div class="metric" data-key="cur_successes"><div class="value green">${m.curator_successes||0}</div><div class="label">Successes</div></div>
+            <div class="metric" data-key="cur_timeouts"><div class="value ${(m.curator_timeouts||0)>0?'yellow':''}">${m.curator_timeouts||0}</div><div class="label">Timeouts</div></div>
+            <div class="metric" data-key="cur_fallbacks"><div class="value ${(m.curator_fallbacks||0)>0?'red':''}">${m.curator_fallbacks||0}</div><div class="label">Fallbacks</div></div>
+            <div class="metric" data-key="cur_rate"><div class="value ${(m.curator_success_rate||0)>0.8?'green':(m.curator_success_rate||0)>0.5?'yellow':'red'}">${pct(m.curator_success_rate)}</div><div class="label">Success Rate</div></div>
+            <div class="metric" data-key="cur_latency"><div class="value">${m.avg_curator_latency_ms||0}ms</div><div class="label">Avg Latency</div></div>
+            <div class="metric" data-key="cur_tools"><div class="value">${m.avg_curator_tool_calls||0}</div><div class="label">Avg Tool Calls</div></div>
+          </div>
+        </div>
+
+        <div class="card" id="cache-card">
+          <div class="card-header"><h2>File Cache</h2></div>
+          <div class="metrics-grid" id="cache-grid">
+            <div class="metric" data-key="fc_hits"><div class="value green">${m.native_read_cache_hits||0}</div><div class="label">Cache Hits</div></div>
+            <div class="metric" data-key="fc_misses"><div class="value">${m.native_read_cache_misses||0}</div><div class="label">Cache Misses</div></div>
+            <div class="metric" data-key="fc_rate"><div class="value ${(m.file_cache_hit_rate||0)>0.7?'green':(m.file_cache_hit_rate||0)>0.3?'yellow':'red'}">${pct(m.file_cache_hit_rate)}</div><div class="label">Hit Rate</div></div>
+            <div class="metric" data-key="fc_invalidations"><div class="value">${m.file_cache_invalidations||0}</div><div class="label">Invalidations</div></div>
+            <div class="metric" data-key="fc_errors"><div class="value ${(m.native_read_intercept_errors||0)>0?'red':''}">${m.native_read_intercept_errors||0}</div><div class="label">Errors</div></div>
+          </div>
+        </div>
+
         ${traceData.sessions && traceData.sessions.length > 0 ? `
         <div class="card" id="recent-sessions-card">
           <div class="card-header">
@@ -492,6 +527,42 @@ async function renderOverview() {
       patch('trace_records', m.trace_records || 0, 'purple');
       patch('trace_sessions', m.trace_sessions || 0, 'purple');
       patch('active_sessions', m.active_sessions || 0);
+    }
+
+    // Patch curator grid
+    const curGrid = document.getElementById('curator-grid');
+    if (curGrid) {
+      const cpatch = (key, val, cls) => {
+        const el = curGrid.querySelector(`[data-key="${key}"] .value`);
+        if (!el) return;
+        el.textContent = val;
+        el.className = 'value' + (cls ? ' ' + cls : '');
+      };
+      cpatch('cur_calls', m.curator_calls||0);
+      cpatch('cur_successes', m.curator_successes||0, 'green');
+      cpatch('cur_timeouts', m.curator_timeouts||0, (m.curator_timeouts||0)>0?'yellow':'');
+      cpatch('cur_fallbacks', m.curator_fallbacks||0, (m.curator_fallbacks||0)>0?'red':'');
+      const cr = m.curator_success_rate||0;
+      cpatch('cur_rate', pct(cr), cr>0.8?'green':cr>0.5?'yellow':'red');
+      cpatch('cur_latency', (m.avg_curator_latency_ms||0)+'ms');
+      cpatch('cur_tools', m.avg_curator_tool_calls||0);
+    }
+
+    // Patch cache grid
+    const cacheGrid = document.getElementById('cache-grid');
+    if (cacheGrid) {
+      const cpatch = (key, val, cls) => {
+        const el = cacheGrid.querySelector(`[data-key="${key}"] .value`);
+        if (!el) return;
+        el.textContent = val;
+        el.className = 'value' + (cls ? ' ' + cls : '');
+      };
+      cpatch('fc_hits', m.native_read_cache_hits||0, 'green');
+      cpatch('fc_misses', m.native_read_cache_misses||0);
+      const hr = m.file_cache_hit_rate||0;
+      cpatch('fc_rate', pct(hr), hr>0.7?'green':hr>0.3?'yellow':'red');
+      cpatch('fc_invalidations', m.file_cache_invalidations||0);
+      cpatch('fc_errors', m.native_read_intercept_errors||0, (m.native_read_intercept_errors||0)>0?'red':'');
     }
 
     // Patch cost grid
@@ -637,12 +708,34 @@ async function renderSessionList() {
 // ---------------------------------------------------------------------------
 async function renderSessionDetail(sessionId) {
   try {
-    const data = await api(`/trace/sessions/${sessionId}`);
+    const [data, metricsData] = await Promise.all([
+      api(`/trace/sessions/${sessionId}`),
+      api('/metrics'),
+    ]);
     const summary = data.summary || {};
     const turns = data.turns || [];
 
     // First load — full render
     if (detailState.turnCount === 0) {
+      // Compute per-session derived stats from turns
+      let sesInputTokens = 0, sesOutputTokens = 0, sesSavedTokens = 0;
+      let sesCuratorCount = 0, sesCuratorTimeouts = 0, sesCuratorLatencySum = 0, sesCuratorToolCalls = 0;
+      turns.forEach(t => {
+        sesInputTokens += t.input_tokens || 0;
+        sesOutputTokens += t.output_tokens || 0;
+        sesSavedTokens += t.savings_tokens || 0;
+        if (t.assembly_mode === 'curator') {
+          sesCuratorCount++;
+          sesCuratorLatencySum += t.assembly_latency_ms || 0;
+          sesCuratorToolCalls += (t.curator_tool_log || []).length;
+        }
+        if (t.assembly_mode === 'passthrough' && t.is_user_turn && t.turn_number >= 3) sesCuratorTimeouts++;
+      });
+      const sesDuration = (summary.last_turn_at && summary.first_turn_at) ? summary.last_turn_at - summary.first_turn_at : 0;
+      const sesDurationStr = sesDuration < 60 ? `${Math.floor(sesDuration)}s` : sesDuration < 3600 ? `${Math.floor(sesDuration/60)}m` : `${(sesDuration/3600).toFixed(1)}h`;
+      const sesAvgCurLatency = sesCuratorCount > 0 ? Math.round(sesCuratorLatencySum / sesCuratorCount) : 0;
+      const sesAvgCurTools = sesCuratorCount > 0 ? (sesCuratorToolCalls / sesCuratorCount).toFixed(1) : '0';
+
       let html = `
         <a class="back" href="#/sessions">← sessions</a>
         <div class="session-header">
@@ -652,13 +745,16 @@ async function renderSessionDetail(sessionId) {
           </div>
           <div class="metrics-grid" style="flex:1;min-width:300px;" id="detail-metrics">
             <div class="metric" data-key="turns"><div class="value">${summary.turn_count || 0}</div><div class="label">Turns</div></div>
-            <div class="metric" data-key="in_tokens"><div class="value">${summary.total_input_tokens || 0}</div><div class="label">In Tokens</div></div>
-            <div class="metric" data-key="saved_tokens"><div class="value">${summary.total_savings_tokens || 0}</div><div class="label">Saved Tokens</div></div>
+            <div class="metric" data-key="duration"><div class="value">${sesDurationStr}</div><div class="label">Duration</div></div>
+            <div class="metric" data-key="in_tokens"><div class="value">${fmtTokens(summary.total_input_tokens || 0)}</div><div class="label">In Tokens</div></div>
+            <div class="metric" data-key="out_tokens"><div class="value">${fmtTokens(sesOutputTokens)}</div><div class="label">Out Tokens</div></div>
+            <div class="metric" data-key="saved_tokens"><div class="value green">${fmtTokens(summary.total_savings_tokens || 0)}</div><div class="label">Saved Tokens</div></div>
             <div class="metric" data-key="savings"><div class="value">${pct(summary.avg_savings_ratio)}</div><div class="label">Savings</div></div>
             <div class="metric" data-key="facts"><div class="value">${summary.total_facts_stored || 0}</div><div class="label">Facts Stored</div></div>
-            <div class="metric" data-key="dupes"><div class="value">${summary.total_duplicates_skipped || 0}</div><div class="label">Dupes Skipped</div></div>
-            <div class="metric" data-key="invalidations"><div class="value">${summary.total_invalidations_attempted || 0}</div><div class="label">Invalidations</div></div>
             <div class="metric" data-key="recalls"><div class="value">${summary.total_recalls || 0}</div><div class="label">Recalls</div></div>
+            <div class="metric" data-key="cur_runs"><div class="value">${sesCuratorCount}</div><div class="label">Curator Runs</div></div>
+            <div class="metric" data-key="cur_avg_lat"><div class="value">${sesAvgCurLatency}ms</div><div class="label">Avg Curator Lat</div></div>
+            <div class="metric" data-key="cur_avg_tools"><div class="value">${sesAvgCurTools}</div><div class="label">Avg Tool Calls</div></div>
           </div>
         </div>
       `;
@@ -676,6 +772,26 @@ async function renderSessionDetail(sessionId) {
           </div>
         `;
       }
+
+      // Per-session cost estimation
+      const pricing = metricsData.pricing || {};
+      const pInM = pricing.input_per_million || 0.14;
+      const pOutM = pricing.output_per_million || 0.28;
+      const sesCostIn = sesInputTokens * pInM / 1_000_000;
+      const sesCostOut = sesOutputTokens * pOutM / 1_000_000;
+      const sesCostTotal = sesCostIn + sesCostOut;
+      const sesCostSaved = sesSavedTokens * pInM / 1_000_000;
+      html += `
+        <div class="card">
+          <div class="card-header"><h2>Session Cost</h2><span style="font-size:11px;color:var(--text-dim);">$${pInM}/M in · $${pOutM}/M out</span></div>
+          <div class="metrics-grid">
+            <div class="metric"><div class="value">\$${sesCostIn.toFixed(4)}</div><div class="label">Input Cost</div></div>
+            <div class="metric"><div class="value">\$${sesCostOut.toFixed(4)}</div><div class="label">Output Cost</div></div>
+            <div class="metric"><div class="value">\$${sesCostTotal.toFixed(4)}</div><div class="label">Total Cost</div></div>
+            <div class="metric"><div class="value green">\$${sesCostSaved.toFixed(4)}</div><div class="label">Savings</div></div>
+          </div>
+        </div>
+      `;
 
       html += `<div class="card"><div class="card-header"><h2>Turn Timeline</h2><label class="filter-toggle"><input type="checkbox" id="user-only-toggle" onchange="document.getElementById('timeline').classList.toggle('user-only', this.checked)"> User turns only</label></div><div class="timeline" id="timeline">`;
       if (turns.length === 0) {
