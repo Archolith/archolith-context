@@ -131,6 +131,9 @@ async def run_background_pass(
         logger.info("background_pass_timeout", session_id=session_id, turn=turn_number,
                      budget_ms=settings.background_pass_latency_budget_ms)
         return
+    except asyncio.CancelledError:
+        logger.info("background_pass_cancelled", session_id=session_id, turn=turn_number)
+        return
     except Exception:
         logger.warning("background_pass_failed", session_id=session_id, turn=turn_number, exc_info=True)
         return

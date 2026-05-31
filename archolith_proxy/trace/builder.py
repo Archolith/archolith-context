@@ -139,6 +139,9 @@ class TraceBuilder:
         context_block: str | None = None,
         tool_log: list[dict] | None = None,
         failure_reason: str = "",
+        briefing_source_turn: int | None = None,
+        briefing_chars: int = 0,
+        briefing_files: int = 0,
     ) -> None:
         """Record the curator's turn-selection, context block, tool log, and failure reason for trace inspection."""
         self._data["curator_retained_turns"] = retained_turns
@@ -149,6 +152,11 @@ class TraceBuilder:
             self._data["curator_tool_log"] = tool_log
         if failure_reason:
             self._data["curator_failure_reason"] = failure_reason
+        # Briefing metrics — set when assembly_mode is "briefing" or "briefing_stale"
+        if briefing_source_turn is not None:
+            self._data["briefing_source_turn"] = briefing_source_turn
+            self._data["briefing_chars"] = briefing_chars
+            self._data["briefing_files"] = briefing_files
 
     def build(self) -> TurnTrace:
         """Build the TurnTrace from accumulated data."""

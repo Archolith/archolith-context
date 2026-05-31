@@ -341,6 +341,7 @@ function buildTurnCard(t) {
           ${t.model ? `<span>model: <span class="mono">${escapeHtml(t.model)}</span></span>` : ''}
           <span>user turn: <span class="mono">${t.user_turn_count || '?'}</span></span>
           ${t.curator_retained_turns ? `<span>retained turns: <span class="mono">[${t.curator_retained_turns.join(', ')}]</span></span>` : ''}
+          ${t.briefing_source_turn != null ? `<span>briefing: <span class="mono">t${t.briefing_source_turn} · ${fmtTokens(t.briefing_chars)} chars · ${t.briefing_files} files</span></span>` : ''}
         </div>
         <div style="margin-bottom:12px;">
           <span style="font-size:12px;color:var(--text-dim);margin-right:16px;">assembly ${latencyBar(t.assembly_latency_ms, 500)}</span>

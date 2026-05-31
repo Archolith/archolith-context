@@ -127,6 +127,11 @@ class TurnTrace(BaseModel):
     curator_tool_log: list[dict] = Field(default_factory=list)  # Per-call tool dispatch log
     curator_failure_reason: str = ""  # Why the curator failed (empty on success)
 
+    # Briefing metrics — populated when assembly_mode is "briefing" or "briefing_stale"
+    briefing_source_turn: int | None = None   # Turn the briefing was built after
+    briefing_chars: int = 0                   # Total chars in the formatted briefing prompt
+    briefing_files: int = 0                   # Number of pre-fetched files in briefing
+
 
 class SessionTraceSummary(BaseModel):
     """Aggregated view of a session's trace history."""

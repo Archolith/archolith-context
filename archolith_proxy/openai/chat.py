@@ -575,14 +575,23 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     )
                     if assembled:
                         # Tag assembly mode: briefing vs full curator
+                        _briefing_kwargs: dict = {}
                         if _pre_briefing and (_pre_fresh or _pre_briefing.source_turn >= turn_number - 2):
                             assembly_mode = "briefing" if _pre_fresh else "briefing_stale"
+                            from archolith_proxy.curator.briefing import format_briefing_for_prompt
+                            _briefing_text = format_briefing_for_prompt(_pre_briefing)
+                            _briefing_kwargs = {
+                                "briefing_source_turn": _pre_briefing.source_turn,
+                                "briefing_chars": len(_briefing_text),
+                                "briefing_files": len(_pre_briefing.files),
+                            }
                         else:
                             assembly_mode = "curator"
                         trace_builder.set_curator_info(
                             retained_turns=assembled.retained_turn_numbers,
                             context_block=(assembled.system_message or {}).get("content"),
                             tool_log=assembled.curator_tool_log,
+                            **_briefing_kwargs,
                         )
                     else:
                         # Curator was attempted but failed — capture what it tried
