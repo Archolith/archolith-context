@@ -592,6 +592,11 @@ def create_app() -> FastAPI:
         "session_recall_tool_enabled", "rtk_enabled",
         "pricing_input_per_million", "pricing_input_cached_per_million",
         "pricing_output_per_million",
+        "agent_solo_shrink_enabled", "agent_solo_dedup_enabled",
+        "agent_solo_compress_middle_enabled", "agent_solo_shrink_max_tokens",
+        "agent_solo_min_input_tokens", "agent_solo_dump_payloads",
+        "curator_enabled", "curator_max_iterations", "curator_latency_budget_ms",
+        "synthetic_tools_enabled", "drop_middle_on_assembly",
     }
 
     @app.get("/admin/config")
