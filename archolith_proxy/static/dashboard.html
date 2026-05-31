@@ -239,7 +239,7 @@ function pct(v) {
 }
 
 function modeTag(mode) {
-  const cls = mode === 'graph' ? 'graph' : mode === 'curator' ? 'curator' : mode === 'fallback' ? 'fallback' : mode === 'cold_start' ? 'cold_start' : mode === 'agent_solo' ? 'agent_solo' : mode.startsWith('skipped') ? 'skipped' : 'passthrough';
+  const cls = mode === 'graph' ? 'graph' : mode === 'curator' ? 'curator' : mode === 'briefing' ? 'curator' : mode === 'briefing_stale' ? 'curator' : mode === 'fallback' ? 'fallback' : mode === 'cold_start' ? 'cold_start' : mode === 'agent_solo' ? 'agent_solo' : mode.startsWith('skipped') ? 'skipped' : 'passthrough';
   return `<span class="tag ${cls}">${mode}</span>`;
 }
 
@@ -724,7 +724,7 @@ async function renderSessionDetail(sessionId) {
         sesInputTokens += t.input_tokens || 0;
         sesOutputTokens += t.output_tokens || 0;
         sesSavedTokens += t.savings_tokens || 0;
-        if (t.assembly_mode === 'curator') {
+        if (t.assembly_mode === 'curator' || t.assembly_mode === 'briefing' || t.assembly_mode === 'briefing_stale') {
           sesCuratorCount++;
           sesCuratorLatencySum += t.assembly_latency_ms || 0;
           sesCuratorToolCalls += (t.curator_tool_log || []).length;

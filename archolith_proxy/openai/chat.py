@@ -547,7 +547,11 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             if settings.curator_enabled:
                 try:
                     from archolith_proxy.curator import curate_context
+                    from archolith_proxy.curator.state import get_briefing, is_briefing_fresh
                     record_metric("curator_calls", 1)
+                    # Check if the briefing path will be used (for assembly_mode tagging)
+                    _pre_briefing = get_briefing(session_id)
+                    _pre_fresh = is_briefing_fresh(session_id, turn_number)
                     assembled = await curate_context(
                         session_id=session_id,
                         turn_number=turn_number,
@@ -557,7 +561,11 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                         messages=body.get("messages", []),
                     )
                     if assembled:
-                        assembly_mode = "curator"
+                        # Tag assembly mode: briefing vs full curator
+                        if _pre_briefing and (_pre_fresh or _pre_briefing.source_turn >= turn_number - 2):
+                            assembly_mode = "briefing" if _pre_fresh else "briefing_stale"
+                        else:
+                            assembly_mode = "curator"
                         trace_builder.set_curator_info(
                             retained_turns=assembled.retained_turn_numbers,
                             context_block=(assembled.system_message or {}).get("content"),
@@ -1882,6 +1890,9 @@ async def _run_extraction(
     When promotion_service is provided and settings.promotion_enabled is True,
     eligible facts are promoted to the configured durable memory engine after
     successful storage.
+
+    After extraction completes, triggers the background curator pass (if enabled)
+    so the next inline pass has a pre-built SessionBriefing.
     """
     from archolith_proxy.proxy.locks import get_session_lock
 
@@ -2249,6 +2260,33 @@ async def _run_extraction(
     finally:
         if acquired:
             lock.release()
+
+    # --- Trigger background curator pass (two-pass mode) ---
+    # Runs after extraction completes so the graph has fresh data.
+    # Fire-and-forget as an asyncio.Task — never blocks the response.
+    try:
+        _bg_settings = get_settings()
+        if _bg_settings.background_pass_enabled and _bg_settings.curator_enabled and session_id:
+            # Extract the last user message for the background pass prompt
+            _bg_user_msg = ""
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    _bg_user_msg = _normalize_message_content(msg.get("content"))
+                    break
+            if _bg_user_msg:
+                from archolith_proxy.curator import run_background_pass
+                asyncio.create_task(
+                    run_background_pass(
+                        session_id=session_id,
+                        turn_number=turn_number,
+                        user_message=_bg_user_msg[:4000],
+                        session_goal=session_goal,
+                        messages=messages,
+                    )
+                )
+                logger.debug("background_pass_triggered", session_id=session_id, turn=turn_number)
+    except Exception:
+        logger.debug("background_pass_trigger_failed", session_id=session_id, exc_info=True)
 
 
 
