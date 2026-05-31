@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-05-30 — Two-pass curator: background pre-fetch + inline briefing
+
+- Added two-pass curator architecture (disabled by default, `BACKGROUND_PASS_ENABLED=true`).
+  - **Background pass:** after each upstream response, an async curator loop runs with up to `BACKGROUND_PASS_MAX_ITERATIONS` (default 12) tool calls and caches a `SessionBriefing` for the next turn.
+  - **Inline pass:** on the next request, if a fresh briefing is available, the curator runs with only 2 iterations using the pre-fetched briefing (files, outlines, key facts) instead of re-discovering from scratch.
+  - Fallback: if no briefing exists or the briefing is stale (`source_turn < turn_number - 2`), falls through to the standard full curator run.
+- Added `raw_result` field to `CuratorToolCall` — stores the full tool result text so the briefing builder can use complete file contents instead of the 200-char preview. Excluded from `to_dict()` to keep traces bounded.
+- Added `background_pass_latency_budget_ms` config (default 30000ms) — `asyncio.wait_for` timeout guard on `run_background_pass()`. On timeout, logs and returns silently without blocking the response.
+- Added `background_pass_debounce_ms` config (default 2000ms) — minimum interval between background passes to avoid thrashing on rapid turns.
+- Dashboard: `modeTag()` now handles `briefing` and `briefing_stale` assembly modes.
+- 36 new tests (9 integration + 27 unit): background pass pipeline, inline briefing pipeline, raw-result fidelity, env-var config overrides.
+
 ## 2026-05-30 — License, CLA, and Benchmark Refresh
 
 - Switched license from Apache 2.0 to PolyForm Noncommercial 1.0.0 (consistent with archolith-bench and archolith-rtk).

@@ -143,6 +143,35 @@ knowledge store.
 - Hard latency cap: `asyncio.wait_for(loop, timeout=CURATOR_LATENCY_BUDGET_MS/1000)`
 - Returns `AssembledContext` on success, `None` on timeout/failure (triggers fallback)
 
+**Two-pass mode** (when `BACKGROUND_PASS_ENABLED=true`):
+
+1. **Background pass** (`run_background_pass()` in `curator/__init__.py`):
+   - Triggered after each upstream response in `_run_extraction()`
+   - Runs a full curator loop with up to `BACKGROUND_PASS_MAX_ITERATIONS` (default 12) tool calls
+   - Captures a `SessionBriefing` from the result: file contents, outlines, key facts, decisions
+   - Caches the briefing in session state with the source turn number
+   - Gated by `BACKGROUND_PASS_LATENCY_BUDGET_MS` (default 30s) — `asyncio.wait_for` timeout; on timeout, logs and returns silently
+   - Debounced by `BACKGROUND_PASS_DEBOUNCE_MS` (default 2s) — skips if a pass ran too recently
+
+2. **Inline pass** (`_run_with_briefing()` in `curator/__init__.py`):
+   - If a fresh briefing exists (`source_turn >= turn_number - 2`), the curator runs with only 2 iterations
+   - The briefing is formatted into the system prompt as pre-fetched context (file contents, outlines, key facts)
+   - Falls through to standard full curator run if briefing is missing or stale
+
+3. **Briefing schema** (`curator/briefing.py`):
+   - `SessionBriefing`: list of `PreFetchedFile` (path, content, outline), key facts, decisions
+   - `format_briefing_for_prompt()`: renders briefing as structured text sections
+   - 30K char cap on formatted briefing text
+
+4. **Briefing cache** (`curator/state.py`):
+   - `cache_briefing(session_id, briefing, turn)`: stores briefing with turn metadata
+   - `get_briefing(session_id)`: retrieves cached briefing
+   - `is_briefing_fresh(briefing, current_turn)`: checks staleness threshold
+
+5. **Result fidelity** (`curator/result.py`):
+   - `CuratorToolCall.raw_result`: full tool result text (excluded from `to_dict()`)
+   - `_build_briefing_from_result()` prefers `raw_result` over `result_preview` for file content and outlines
+
 **Loop:** `_run_curator_native()` in `curator/loop.py`
 - Up to `CURATOR_MAX_ITERATIONS` (default 4) tool-call iterations
 - Stuck-loop detection: 4-wide error window, aborts on repeated identical calls
@@ -352,7 +381,13 @@ CURATOR_MODEL=                    # defaults to EXTRACTOR_MODEL if empty
 CURATOR_BASE_URL=                 # defaults to EXTRACTOR_BASE_URL if empty
 CURATOR_API_KEY=                  # defaults to EXTRACTOR_API_KEY if empty
 CURATOR_MAX_ITERATIONS=4
-CURATOR_LATENCY_BUDGET_MS=6000    # hard timeout; falls back to heuristic on expiry
+CURATOR_LATENCY_BUDGET_MS=6000 # hard timeout; falls back to heuristic on expiry
+
+# Two-pass curator (background pre-fetch + inline briefing)
+BACKGROUND_PASS_ENABLED=false # enable two-pass curator mode
+BACKGROUND_PASS_MAX_ITERATIONS=12 # tool call budget for background pass
+BACKGROUND_PASS_DEBOUNCE_MS=2000 # minimum ms between background passes
+BACKGROUND_PASS_LATENCY_BUDGET_MS=30000 # hard timeout for background pass
 
 # Retry / resilience
 UPSTREAM_MAX_RETRIES=3
@@ -410,7 +445,7 @@ PROMOTION_DRY_RUN=false
 
 Metrics are in-memory (`_metrics` dict surfaced via `archolith_proxy/metrics.py`), reset on process restart. Prometheus-compatible OpenMetrics format is a future goal.
 
-`assembly_modes` tracks: `graph`, `fallback`, `cold_start`, `passthrough`, `curator`.
+`assembly_modes` tracks: `graph`, `fallback`, `cold_start`, `passthrough`, `curator`, `briefing`, `briefing_stale`.
 
 ## Resilience (Phase 4)
 
