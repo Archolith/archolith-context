@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
+
+from pydantic import BaseModel, Field as PydanticField
 
 
 @dataclass
@@ -19,3 +22,24 @@ class CuratorResult:
     # Turn numbers the curator selected to retain in the middle section.
     # None = keep all (curator did not call select_relevant_turns).
     retained_turn_numbers: list[int] | None = None
+
+
+class CuratorFailure(BaseModel):
+    """Diagnostic record saved when the curator fails to produce a context block.
+
+    Captures the full curator-LLM conversation (system prompt, user prompt,
+    tool calls, tool results, LLM responses) and the failure reason so
+    patterns can be analyzed and the curator prompt improved.
+
+    Persisted as JSONL in <trace_dir>/curator_failures.jsonl.
+    """
+
+    session_id: str
+    failure_reason: str             # e.g. empty_response, llm_error, empty_final, context_length, unexpected_finish, stuck_loop, max_iterations
+    messages: list[dict] = PydanticField(default_factory=list)
+    tool_calls_made: int = 0
+    curated_paths: list[str] = PydanticField(default_factory=list)
+    retained_turn_numbers: list[int] | None = None
+    iterations_completed: int = 0
+    error_detail: str = ""
+    timestamp: float = PydanticField(default_factory=time.time)

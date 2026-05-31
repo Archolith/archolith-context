@@ -11,6 +11,7 @@ import asyncio
 import json
 import random
 import re
+from pathlib import Path
 
 from openai import AsyncOpenAI
 from openai import (
@@ -23,7 +24,7 @@ from openai import (
 import structlog
 
 from archolith_proxy.curator.prompts import CURATOR_SYSTEM_PROMPT, build_curator_user_prompt
-from archolith_proxy.curator.result import CuratorResult
+from archolith_proxy.curator.result import CuratorFailure, CuratorResult
 from archolith_proxy.curator.schemas import ALL_CURATOR_TOOLS
 from archolith_proxy.curator.tools import TOOL_HANDLERS
 
@@ -37,6 +38,78 @@ _ERROR_WINDOW_SIZE = 4
 def _estimate_tokens(text: str) -> int:
     """Rough token estimate — ~3 chars per token (conservative for code)."""
     return max(1, len(text) // 3)
+
+
+# Max content length per message in failure diagnostics
+_DIAG_MAX_CONTENT = 2000
+
+
+def _serialize_message(msg) -> dict:
+    """Convert a message (dict or openai object) to a serializable dict.
+
+    Truncates large content to keep failure records bounded.
+    """
+    if isinstance(msg, dict):
+        d = dict(msg)
+        c = d.get("content")
+        if isinstance(c, str) and len(c) > _DIAG_MAX_CONTENT:
+            d["content"] = c[:_DIAG_MAX_CONTENT] + f"... [{len(c)} chars]"
+        return d
+    if hasattr(msg, "model_dump"):
+        return msg.model_dump(exclude_none=True)
+    return {"content": str(msg)[:_DIAG_MAX_CONTENT]}
+
+
+def _save_failure_diagnostic(
+    session_id: str,
+    failure_reason: str,
+    messages: list,
+    total_tool_calls: int,
+    curated_paths: set[str],
+    retained_turn_numbers: list[int] | None,
+    iteration: int,
+    error_detail: str = "",
+) -> None:
+    """Persist a curator failure record to disk for later analysis.
+
+    Writes a JSONL line to <trace_dir>/curator_failures.jsonl containing
+    the full curator conversation, failure reason, and accumulated state.
+    Non-fatal — never raises.
+    """
+    try:
+        from archolith_proxy.config import get_settings
+        settings = get_settings()
+        trace_dir = settings.trace_dir
+        if not trace_dir:
+            return
+
+        out_dir = Path(trace_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        failure = CuratorFailure(
+            session_id=session_id,
+            failure_reason=failure_reason,
+            messages=[_serialize_message(m) for m in messages],
+            tool_calls_made=total_tool_calls,
+            curated_paths=sorted(curated_paths),
+            retained_turn_numbers=retained_turn_numbers,
+            iterations_completed=iteration + 1,
+            error_detail=str(error_detail)[:500],
+        )
+
+        path = out_dir / "curator_failures.jsonl"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(failure.model_dump_json() + "\n")
+
+        logger.info(
+            "curator_failure_saved",
+            session_id=session_id,
+            reason=failure_reason,
+            tool_calls=total_tool_calls,
+            iterations=iteration + 1,
+        )
+    except Exception:
+        logger.warning("curator_failure_save_error", session_id=session_id, exc_info=True)
 
 
 async def _llm_call_with_retry(
@@ -126,10 +199,15 @@ async def _run_curator_native(
             )
             if not response.choices:
                 logger.warning("curator_empty_response", session_id=session_id)
+                _save_failure_diagnostic(session_id, "empty_response", messages,
+                    total_tool_calls, curated_paths, retained_turn_numbers, iteration)
                 return None
             choice = response.choices[0]
         except Exception as exc:
             logger.warning("curator_llm_error", session_id=session_id, error=str(exc))
+            _save_failure_diagnostic(session_id, "llm_error", messages,
+                total_tool_calls, curated_paths, retained_turn_numbers, iteration,
+                error_detail=str(exc))
             return None
 
         tool_count = len(choice.message.tool_calls or [])
@@ -170,6 +248,8 @@ async def _run_curator_native(
                     session_id=session_id,
                     tool_calls=total_tool_calls,
                 )
+                _save_failure_diagnostic(session_id, "empty_final", messages,
+                    total_tool_calls, curated_paths, retained_turn_numbers, iteration)
                 return None
             return CuratorResult(
                 context_text=content,
@@ -185,6 +265,8 @@ async def _run_curator_native(
                 session_id=session_id,
                 iteration=iteration + 1,
             )
+            _save_failure_diagnostic(session_id, "context_length", messages,
+                total_tool_calls, curated_paths, retained_turn_numbers, iteration)
             return None
 
         if choice.finish_reason != "tool_calls" or not choice.message.tool_calls:
@@ -194,6 +276,9 @@ async def _run_curator_native(
                 finish_reason=choice.finish_reason,
                 iteration=iteration + 1,
             )
+            _save_failure_diagnostic(session_id, "unexpected_finish", messages,
+                total_tool_calls, curated_paths, retained_turn_numbers, iteration,
+                error_detail=f"finish_reason={choice.finish_reason}")
             return None
 
         messages.append(choice.message)
@@ -245,11 +330,16 @@ async def _run_curator_native(
                 recent = error_window[-_ERROR_WINDOW_SIZE:]
                 if all(e[1] == "error" for e in recent) and len(set(e[0] for e in recent)) == 1:
                     logger.warning("curator_stuck_loop", tool=recent[0][0], session_id=session_id)
+                    _save_failure_diagnostic(session_id, "stuck_loop", messages,
+                        total_tool_calls, curated_paths, retained_turn_numbers, iteration,
+                        error_detail=f"stuck_on={recent[0][0]}")
                     return None
 
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_str})
 
     logger.info("curator_max_iterations", session_id=session_id, iterations=max_iterations)
+    _save_failure_diagnostic(session_id, "max_iterations", messages,
+        total_tool_calls, curated_paths, retained_turn_numbers, max_iterations - 1)
     return None
 
 
