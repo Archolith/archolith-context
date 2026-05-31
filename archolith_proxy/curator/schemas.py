@@ -244,4 +244,40 @@ ALL_CURATOR_TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "prefetch_file",
+            "description": (
+                "Read a file from the local filesystem and cache it for this session. "
+                "Use this to proactively load files the agent will likely need — imports "
+                "of files being edited, test files, configs referenced in decisions. "
+                "The file will then be available via get_file and get_file_lines on "
+                "subsequent turns. Prefer absolute paths. Returns a preview of the "
+                "cached content."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "File path to read and cache. Absolute paths work directly. "
+                            "Relative paths are resolved against existing cached file locations."
+                        ),
+                    },
+                    "focus": {
+                        "type": "string",
+                        "description": (
+                            "Optional: description of the section you need (e.g. 'the auth "
+                            "handler function', 'class TraceStore'). When provided, returns "
+                            "the structural outline plus the focused section (~80 lines max) "
+                            "instead of the full file. Omit to cache the entire file."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
 ]

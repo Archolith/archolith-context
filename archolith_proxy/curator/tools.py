@@ -321,6 +321,188 @@ async def get_file_outline(session_id: str, path: str = "", **kwargs) -> str:
     return outline
 
 
+async def prefetch_file(
+    session_id: str, path: str = "", focus: str = "", **kwargs,
+) -> str:
+    """Read a file from the local filesystem and cache it for this session.
+
+    Use this to proactively load files the agent will likely need on the next
+    turn — e.g. imports of a file already being edited, test files for a module
+    under review, or config files referenced in recent decisions.
+
+    When ``focus`` is provided (e.g. "the auth handler function"), the tool
+    returns the structural outline first so you know where everything is,
+    then returns the focused section matching your description. The full
+    file is cached either way — use get_file_lines later for other sections.
+
+    Only works with absolute paths. Respects file_cache_max_file_bytes limit.
+    """
+    if not path:
+        return "(no path specified — use get_touched_files to find relevant paths)"
+
+    import hashlib
+    from pathlib import Path
+
+    from archolith_proxy.config import get_settings
+
+    settings = get_settings()
+    file_path = Path(path)
+
+    if not file_path.is_absolute():
+        # Try to resolve relative paths against cached file roots
+        existing = await get_backend().list_cached_files(session_id)
+        resolved = False
+        if existing:
+            for f in existing:
+                cached = f.get("path", "")
+                if cached and Path(cached).is_absolute():
+                    candidate = Path(cached).parent
+                    for _ in range(8):  # max 8 levels up
+                        attempt = candidate / path
+                        if attempt.exists():
+                            file_path = attempt
+                            resolved = True
+                            break
+                        candidate = candidate.parent
+                    if resolved:
+                        break
+        if not resolved:
+            return f"(cannot resolve relative path: {path} — use absolute paths or ensure related files are already cached)"
+
+    if not file_path.exists():
+        return f"(file not found: {file_path})"
+
+    if not file_path.is_file():
+        return f"(not a file: {file_path})"
+
+    try:
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return f"(read error: {exc})"
+
+    byte_size = len(content.encode("utf-8"))
+    if byte_size > settings.file_cache_max_file_bytes:
+        return f"(file too large: {byte_size:,} bytes, limit {settings.file_cache_max_file_bytes:,})"
+
+    # Upsert into file cache
+    sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    backend = get_backend()
+    store_path = str(file_path)
+
+    try:
+        await backend.upsert_file_content(
+            session_id=session_id, path=store_path,
+            content=content, sha256=sha256, turn=0,
+        )
+    except Exception as exc:
+        return f"(cache write failed: {exc})"
+
+    # Build and store structural outline
+    all_lines = content.split("\n")
+    line_count = len(all_lines)
+    outline = ""
+    try:
+        from archolith_proxy.openai.chat import _build_outline
+        outline = _build_outline(content, store_path)
+        if outline:
+            await backend.upsert_file_outline(
+                session_id=session_id, path=store_path,
+                outline=outline, turn=0,
+            )
+    except Exception:
+        pass  # outline is non-fatal
+
+    logger.info(
+        "prefetch_file_cached",
+        session_id=session_id,
+        path=store_path,
+        lines=line_count,
+        bytes=byte_size,
+        focus=focus or "(none)",
+    )
+
+    # --- Build response: outline + focused or preview section ---
+    parts = [f"Cached: {store_path} ({line_count} lines, {byte_size:,} bytes)"]
+
+    if outline:
+        parts.append(f"\nOutline:\n{outline}")
+
+    if focus and outline:
+        # Find the best-matching symbol for the focus description
+        focused_range = _find_focused_range(outline, focus, line_count)
+        if focused_range:
+            start, end = focused_range
+            section = all_lines[start - 1 : end]
+            numbered = [f"{i}: {line}" for i, line in enumerate(section, start)]
+            parts.append(f"\nFocused section (lines {start}-{end}):\n" + "\n".join(numbered))
+        else:
+            # No match — fall back to first 20 lines
+            preview = [f"{i}: {line}" for i, line in enumerate(all_lines[:20], 1)]
+            parts.append(f"\n(no outline match for '{focus}' — showing first 20 lines):\n" + "\n".join(preview))
+    else:
+        # No focus — show first 20 lines as preview
+        preview_count = min(20, line_count)
+        preview = [f"{i}: {line}" for i, line in enumerate(all_lines[:preview_count], 1)]
+        parts.append("\n" + "\n".join(preview))
+        if line_count > 20:
+            parts.append(f"\n[use get_file_lines for specific sections]")
+
+    return "\n".join(parts)
+
+
+def _find_focused_range(
+    outline: str, focus: str, total_lines: int
+) -> tuple[int, int] | None:
+    """Find the line range in the outline that best matches the focus query.
+
+    Returns (start_line, end_line) or None if no reasonable match.
+    The range extends from the matched symbol to the next symbol (or EOF).
+    """
+    import re
+
+    # Parse outline entries: "line N: kind name"
+    entries: list[tuple[int, str]] = []
+    for line in outline.split("\n"):
+        m = re.match(r"line (\d+): (.+)", line.strip())
+        if m:
+            entries.append((int(m.group(1)), m.group(2)))
+
+    if not entries:
+        return None
+
+    # Score each entry by keyword overlap with focus
+    focus_lower = focus.lower()
+    focus_words = set(re.findall(r"\w+", focus_lower))
+    best_score = 0
+    best_idx = -1
+
+    for i, (_, symbol) in enumerate(entries):
+        sym_lower = symbol.lower()
+        # Substring match in either direction
+        score = 0
+        if focus_lower in sym_lower or sym_lower in focus_lower:
+            score += 3
+        # Word overlap
+        sym_words = set(re.findall(r"\w+", sym_lower))
+        overlap = focus_words & sym_words
+        score += len(overlap)
+        if score > best_score:
+            best_score = score
+            best_idx = i
+
+    if best_score == 0:
+        return None
+
+    start_line = entries[best_idx][0]
+    # End at the next symbol or EOF, capped at 80 lines
+    if best_idx + 1 < len(entries):
+        end_line = min(entries[best_idx + 1][0] - 1, start_line + 80)
+    else:
+        end_line = min(total_lines, start_line + 80)
+
+    return (start_line, end_line)
+
+
 TOOL_HANDLERS: dict[str, callable] = {
     "list_session_files": list_session_files,
     "get_file": get_file,
@@ -335,4 +517,5 @@ TOOL_HANDLERS: dict[str, callable] = {
     "get_open_issues": get_open_issues,
     "get_last_verification": get_last_verification,
     "select_relevant_turns": select_relevant_turns,
+    "prefetch_file": prefetch_file,
 }

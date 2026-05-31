@@ -17,7 +17,8 @@ file retrieval entirely and just do turn selection + checkpoint.
 Available tools: get_checkpoint, get_open_issues, get_last_verification,
 list_session_files, get_file, get_file_outline, get_file_lines,
 search_facts, search_facts_semantic,
-get_session_goal, get_recent_decisions, get_touched_files, select_relevant_turns.
+get_session_goal, get_recent_decisions, get_touched_files, select_relevant_turns,
+prefetch_file.
 
 Rules:
 1. The checkpoint is pre-loaded in the user prompt — skip get_checkpoint unless you need a refresh after several tool calls.

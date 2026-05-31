@@ -417,7 +417,7 @@ async function renderOverview() {
           <tr data-session-id="${escapeHtml(s.session_id)}" onclick="location.hash='/sessions/${s.session_id}'">
             <td class="mono">${escapeHtml(s.session_id.substring(0, 12))}…</td>
             <td>${s.turn_count}</td>
-            <td>${pct(s.avg_savings_ratio)}</td>
+            <td title="curator: ${pct(s.rewritten_savings_ratio)}">${pct(s.avg_savings_ratio)}</td>
             <td>${Object.entries(s.assembly_modes || {}).map(([k,v]) => modeTag(k)).join(' ')}</td>
             <td>${ago(s.last_turn_at)}</td>
           </tr>
@@ -637,6 +637,7 @@ async function renderSessionList() {
             <td class="mono">${escapeHtml(s.session_id)}</td>
             <td>${s.turn_count}</td>
             <td>${pct(s.avg_savings_ratio)}</td>
+            <td>${pct(s.rewritten_savings_ratio)}</td>
             <td>${s.total_input_tokens || 0}</td>
             <td>${s.total_savings_tokens || 0}</td>
             <td>${s.total_facts_stored || 0}</td>
@@ -653,7 +654,7 @@ async function renderSessionList() {
           <div class="card-header"><h2 id="session-count">Sessions (${data.count})</h2></div>
           <table>
             <thead><tr>
-              <th>Session ID</th><th>Turns</th><th>Savings</th><th>In Tokens</th><th>Saved Tokens</th>
+              <th>Session ID</th><th>Turns</th><th>Savings</th><th>Curator</th><th>In Tokens</th><th>Saved Tokens</th>
               <th>Facts</th><th>Dupes</th><th>Invalidations</th><th>Modes</th><th>Last</th>
             </tr></thead>
             <tbody id="session-list-body">${rows}</tbody>
@@ -670,12 +671,13 @@ async function renderSessionList() {
         // Update cells in-place
         row.children[1].textContent = s.turn_count;
         row.children[2].textContent = pct(s.avg_savings_ratio);
-        row.children[3].textContent = s.total_input_tokens || 0;
-        row.children[4].textContent = s.total_savings_tokens || 0;
-        row.children[5].textContent = s.total_facts_stored || 0;
-        row.children[6].textContent = s.total_duplicates_skipped || 0;
-        row.children[7].textContent = s.total_invalidations_attempted || 0;
-        row.children[9].textContent = ago(s.last_turn_at);
+        row.children[3].textContent = pct(s.rewritten_savings_ratio);
+        row.children[4].textContent = s.total_input_tokens || 0;
+        row.children[5].textContent = s.total_savings_tokens || 0;
+        row.children[6].textContent = s.total_facts_stored || 0;
+        row.children[7].textContent = s.total_duplicates_skipped || 0;
+        row.children[8].textContent = s.total_invalidations_attempted || 0;
+        row.children[10].textContent = ago(s.last_turn_at);
       } else if (!sessionListState.sessionIds.has(s.session_id)) {
         // New session — prepend row
         sessionListState.sessionIds.add(s.session_id);
@@ -686,6 +688,7 @@ async function renderSessionList() {
           <td class="mono">${escapeHtml(s.session_id)}</td>
           <td>${s.turn_count}</td>
           <td>${pct(s.avg_savings_ratio)}</td>
+          <td>${pct(s.rewritten_savings_ratio)}</td>
           <td>${s.total_input_tokens || 0}</td>
           <td>${s.total_savings_tokens || 0}</td>
           <td>${s.total_facts_stored || 0}</td>
@@ -758,7 +761,8 @@ async function renderSessionDetail(sessionId) {
             <div class="metric" data-key="in_tokens"><div class="value">${fmtTokens(summary.total_input_tokens || 0)}</div><div class="label">In Tokens</div></div>
             <div class="metric" data-key="out_tokens"><div class="value">${fmtTokens(sesOutputTokens)}</div><div class="label">Out Tokens</div></div>
             <div class="metric" data-key="saved_tokens"><div class="value green">${fmtTokens(summary.total_savings_tokens || 0)}</div><div class="label">Saved Tokens</div></div>
-            <div class="metric" data-key="savings"><div class="value">${pct(summary.avg_savings_ratio)}</div><div class="label">Savings</div></div>
+            <div class="metric" data-key="savings"><div class="value">${pct(summary.avg_savings_ratio)}</div><div class="label">Overall Savings</div></div>
+            <div class="metric" data-key="rew_savings"><div class="value">${pct(summary.rewritten_savings_ratio)}</div><div class="label">Curator Savings</div></div>
             <div class="metric" data-key="facts"><div class="value">${summary.total_facts_stored || 0}</div><div class="label">Facts Stored</div></div>
             <div class="metric" data-key="recalls"><div class="value">${summary.total_recalls || 0}</div><div class="label">Recalls</div></div>
             <div class="metric" data-key="cur_runs"><div class="value">${sesCuratorCount}</div><div class="label">Curator Runs</div></div>
@@ -829,6 +833,7 @@ async function renderSessionDetail(sessionId) {
       patch('in_tokens', summary.total_input_tokens || 0);
       patch('saved_tokens', summary.total_savings_tokens || 0);
       patch('savings', pct(summary.avg_savings_ratio));
+      patch('rew_savings', pct(summary.rewritten_savings_ratio));
       patch('facts', summary.total_facts_stored || 0);
       patch('dupes', summary.total_duplicates_skipped || 0);
       patch('invalidations', summary.total_invalidations_attempted || 0);

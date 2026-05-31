@@ -145,7 +145,8 @@ class SessionTraceSummary(BaseModel):
     # Cumulative token economics
     total_input_tokens: int = 0
     total_savings_tokens: int = 0
-    avg_savings_ratio: float = 0.0
+    avg_savings_ratio: float = 0.0          # savings / total input (all turns)
+    rewritten_savings_ratio: float = 0.0   # savings / input from rewritten turns only
 
     # Mode distribution
     assembly_modes: dict[str, int] = Field(default_factory=dict)

@@ -145,6 +145,8 @@ class TraceStore:
             first_at = None
             last_at = None
 
+            rewritten_input = 0  # input tokens from turns that were actually rewritten
+
             for t in turns:
                 total_input += t.input_tokens
                 total_savings += t.savings_tokens
@@ -158,8 +160,13 @@ class TraceStore:
                     first_at = t.created_at
                 if last_at is None or t.created_at > last_at:
                     last_at = t.created_at
+                if t.assembly_mode in ("curator", "graph", "briefing", "briefing_stale"):
+                    rewritten_input += t.input_tokens
 
+            # Overall ratio: savings across all traffic
             avg_savings = total_savings / total_input if total_input > 0 else 0.0
+            # Rewritten-only ratio: how effective the curator is per-turn it touches
+            rewritten_ratio = total_savings / rewritten_input if rewritten_input > 0 else 0.0
 
             return SessionTraceSummary(
                 session_id=session_id,
@@ -170,6 +177,7 @@ class TraceStore:
                 total_input_tokens=total_input,
                 total_savings_tokens=total_savings,
                 avg_savings_ratio=round(avg_savings, 4),
+                rewritten_savings_ratio=round(rewritten_ratio, 4),
                 assembly_modes=dict(modes),
                 total_facts_stored=total_facts_stored,
                 total_duplicates_skipped=total_dups_skipped,
@@ -196,7 +204,10 @@ class TraceStore:
                 for t in turns:
                     modes[t.assembly_mode] += 1
 
+                _rewritten_modes = {"curator", "graph", "briefing", "briefing_stale"}
+                rewritten_input = sum(t.input_tokens for t in turns if t.assembly_mode in _rewritten_modes)
                 avg_savings = total_savings / total_input if total_input > 0 else 0.0
+                rewritten_ratio = total_savings / rewritten_input if rewritten_input > 0 else 0.0
 
                 summaries.append(SessionTraceSummary(
                     session_id=session_id,
@@ -207,6 +218,7 @@ class TraceStore:
                     total_input_tokens=total_input,
                     total_savings_tokens=total_savings,
                     avg_savings_ratio=round(avg_savings, 4),
+                    rewritten_savings_ratio=round(rewritten_ratio, 4),
                     assembly_modes=dict(modes),
                     total_facts_stored=sum(t.facts_stored for t in turns),
                     total_duplicates_skipped=sum(t.duplicates_skipped for t in turns),
