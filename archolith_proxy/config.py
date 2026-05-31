@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     coherence_tail_size: int = 10
     max_tail_messages: int = 20
     context_token_budget: int = 15000
+    max_rewritten_tokens: int = 24000   # Hard ceiling on rewritten payload tokens (0 = no ceiling)
     session_ttl_hours: int = 24
     cold_start_turns: int = 3
     cold_start_token_threshold: int = 20000

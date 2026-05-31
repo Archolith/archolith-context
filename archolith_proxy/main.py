@@ -584,7 +584,7 @@ def create_app() -> FastAPI:
     # --- Runtime config admin endpoints ---
 
     TUNABLE_FIELDS = {
-        "context_token_budget", "coherence_tail_size", "max_tail_messages",
+        "context_token_budget", "max_rewritten_tokens", "coherence_tail_size", "max_tail_messages",
         "cold_start_turns", "cold_start_token_threshold",
         "assembly_min_savings_ratio", "assembly_min_input_tokens",
         "assembly_latency_budget_ms", "session_ttl_hours",

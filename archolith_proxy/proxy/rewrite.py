@@ -101,6 +101,7 @@ def rewrite_messages(
     assembled_context,
     coherence_tail_size: int,
     max_tail_messages: int = 20,
+    max_rewritten_tokens: int = 0,
 ) -> list[dict]:
     """Rewrite the messages array: curator turn selection + tool result compression.
 
@@ -231,6 +232,13 @@ def rewrite_messages(
     tail_shrunk = shrink_tail_tool_results(tail_validated)
     result.extend(tail_shrunk)
 
+    # Token ceiling: if the rewritten payload exceeds the cap, progressively
+    # compress tool results in the middle section (oldest retained turns first).
+    # This prevents the rewritten output from growing indefinitely as the
+    # curator accumulates more retained turns.
+    if max_rewritten_tokens > 0:
+        result = _enforce_token_ceiling(result, max_rewritten_tokens, len(result) - len(tail_shrunk))
+
     # Final validation: ensure first non-system is user
     first_non_system = next((i for i, m in enumerate(result) if m.get("role") != "system"), None)
     if first_non_system is not None and result[first_non_system].get("role") != "user":
@@ -329,6 +337,82 @@ def _compress_assistant_message(content: str, max_chars: int = 300) -> str:
     tail = content[-tail_budget:].split(" ", 1)[-1] if tail_budget > 0 else ""
     omitted = len(content) - len(head) - len(tail)
     return f"{head}\n[...{omitted} chars compressed...]\n{tail}"
+
+
+def _enforce_token_ceiling(
+    messages: list[dict],
+    max_tokens: int,
+    tail_start_idx: int,
+) -> list[dict]:
+    """Progressively compress middle-section tool results until under the token ceiling.
+
+    When the rewritten payload exceeds max_tokens, compress tool results in the
+    middle section (between system msg and tail) from oldest to newest. Each
+    oversized tool result gets truncated to _CEILING_COMPRESS_CHARS. If still
+    over budget after compressing all tool results, compress assistant messages
+    in the middle from oldest to newest.
+
+    The tail is never modified — it needs exact content for the current turn.
+    """
+    current = estimate_input_tokens(messages)
+    if current <= max_tokens:
+        return messages
+
+    import structlog
+    logger = structlog.get_logger()
+
+    result = list(messages)
+
+    # Phase 1: compress tool results in the middle (oldest first)
+    for i in range(tail_start_idx):
+        if estimate_input_tokens(result) <= max_tokens:
+            break
+        msg = result[i]
+        if msg.get("role") != "tool":
+            continue
+        content = msg.get("content", "") or ""
+        if isinstance(content, str) and len(content) > _CEILING_COMPRESS_CHARS:
+            result[i] = {**msg, "content": _compress_tool_result_ceiling(content)}
+
+    # Phase 2: if still over, compress assistant messages in the middle (oldest first)
+    if estimate_input_tokens(result) > max_tokens:
+        for i in range(tail_start_idx):
+            if estimate_input_tokens(result) <= max_tokens:
+                break
+            msg = result[i]
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content", "") or ""
+            if isinstance(content, str) and len(content) > _CEILING_COMPRESS_CHARS:
+                result[i] = {**msg, "content": _compress_assistant_message(content, _CEILING_COMPRESS_CHARS)}
+
+    final_tokens = estimate_input_tokens(result)
+    logger.info(
+        "token_ceiling_enforced",
+        before=current,
+        after=final_tokens,
+        ceiling=max_tokens,
+        compressed_to_budget=final_tokens <= max_tokens,
+    )
+    return result
+
+
+# Max chars for tool results when the token ceiling forces compression.
+# Larger than _TOOL_RESULT_MAX_CHARS (400) since these are file reads
+# the model may still reference — keep enough for identification.
+_CEILING_COMPRESS_CHARS = 800
+
+
+def _compress_tool_result_ceiling(content: str) -> str:
+    """Compress a tool result under the token ceiling — keeps more than middle compression."""
+    if len(content) <= _CEILING_COMPRESS_CHARS:
+        return content
+    preview = content[:_CEILING_COMPRESS_CHARS]
+    nl = preview.rfind("\n")
+    if nl > _CEILING_COMPRESS_CHARS // 2:
+        preview = preview[:nl]
+    omitted = len(content) - len(preview)
+    return f"{preview}\n[...{omitted} chars truncated by context ceiling...]"
 
 
 def _validate_tail(tail: list[dict]) -> list[dict]:

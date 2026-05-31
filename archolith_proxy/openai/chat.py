@@ -622,6 +622,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     assembled,
                     settings.coherence_tail_size,
                     max_tail_messages=settings.max_tail_messages,
+                    max_rewritten_tokens=settings.max_rewritten_tokens,
                 )
                 rewritten_count = len(body["messages"])
                 if assembly_mode != "curator":
@@ -723,6 +724,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                                         assembled,
                                         settings.coherence_tail_size,
                                         max_tail_messages=settings.max_tail_messages,
+                                        max_rewritten_tokens=settings.max_rewritten_tokens,
                                     )
                                     rewritten_count = len(body["messages"])
                                     rewritten_tokens = estimate_input_tokens(body["messages"])
