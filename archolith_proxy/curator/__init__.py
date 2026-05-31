@@ -21,6 +21,7 @@ from archolith_proxy.config import get_settings
 from archolith_proxy.curator.loop import _run_curator_native, _run_curator_nous
 from archolith_proxy.curator.prompts import CURATOR_SYSTEM_PROMPT, build_curator_user_prompt
 from archolith_proxy.curator.result import CuratorResult
+from archolith_proxy.curator.state import CuratorSnapshot, cache_snapshot, get_snapshot
 from archolith_proxy.models.dtos import AssembledContext
 
 logger = structlog.get_logger()
@@ -69,6 +70,9 @@ async def curate_context(
     except Exception:
         pass  # Non-fatal — curator falls back to calling get_checkpoint itself
 
+    # Retrieve previous curator snapshot for delta behaviour
+    previous_snapshot = get_snapshot(session_id)
+
     # Build prompt — include turn inventory so curator can call select_relevant_turns
     user_prompt = build_curator_user_prompt(
         session_goal,
@@ -77,6 +81,7 @@ async def curate_context(
         coherence_tail_size=settings.coherence_tail_size,
         max_tail_messages=settings.max_tail_messages,
         checkpoint=checkpoint,
+        previous_snapshot=previous_snapshot,
     )
 
     # Build OpenAI client
@@ -109,6 +114,16 @@ async def curate_context(
         from archolith_proxy.metrics import record_metric
         record_metric("curator_fallbacks", 1)
         return None
+
+    # Cache snapshot for next turn's delta behaviour
+    _max_summary = 2000
+    cache_snapshot(session_id, CuratorSnapshot(
+        curated_paths=tuple(sorted(result.curated_paths)),
+        retained_turn_numbers=tuple(result.retained_turn_numbers) if result.retained_turn_numbers else None,
+        context_summary=result.context_text[:_max_summary],
+        tool_calls_used=result.tool_calls_used,
+        turn_number=turn_number,
+    ))
 
     # Map CuratorResult to AssembledContext
     return AssembledContext(

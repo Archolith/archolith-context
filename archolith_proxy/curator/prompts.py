@@ -21,6 +21,9 @@ get_session_goal, get_recent_decisions, get_touched_files, select_relevant_turns
 
 Rules:
 1. The checkpoint is pre-loaded in the user prompt — skip get_checkpoint unless you need a refresh after several tool calls.
+   When a "Previous curator context" section is present, it shows what you fetched
+   last turn. Reuse that context when still relevant — only call tools for NEW files
+   or sections the current question needs beyond what was already fetched.
 2. Use get_open_issues and get_last_verification when the current question involves errors or tests.
 3. For files over 100 lines: call get_file_outline first to see functions/classes with
    line numbers, then call get_file_lines for the specific range you need. Skip
@@ -83,6 +86,7 @@ def build_curator_user_prompt(
     coherence_tail_size: int = 3,
     max_tail_messages: int = 20,
     checkpoint: dict | None = None,
+    previous_snapshot: object | None = None,
 ) -> str:
     """Build the user prompt that drives the curator's tool calls.
 
@@ -91,6 +95,9 @@ def build_curator_user_prompt(
 
     When checkpoint is provided, it is injected directly into the prompt so
     the curator can skip the get_checkpoint tool call (saves one iteration).
+
+    When previous_snapshot is provided (CuratorSnapshot from last turn), it is
+    injected so the curator can do delta work instead of re-discovering files.
     """
     goal = session_goal or "unknown"
     parts = [
@@ -106,11 +113,39 @@ def build_curator_user_prompt(
         if next_step:
             cp_lines.append(f"  Next step: {next_step}")
         parts.append("\n" + "\n".join(cp_lines))
+    if previous_snapshot is not None:
+        parts.append("\n" + _format_previous_snapshot(previous_snapshot))
     if messages:
         inventory = _build_turn_inventory(messages, coherence_tail_size, max_tail_messages)
         if inventory:
             parts.append("\n" + inventory)
     return "\n".join(parts)
+
+
+def _format_previous_snapshot(snapshot) -> str:
+    """Format the previous curator snapshot as a prompt section.
+
+    Tells the curator what it already fetched so it can do delta work.
+    """
+    lines = ["Previous curator context (from last turn — reuse if still relevant):"]
+    if snapshot.curated_paths:
+        lines.append(f"  Files already fetched: {', '.join(snapshot.curated_paths)}")
+    if snapshot.retained_turn_numbers is not None:
+        lines.append(f"  Turns retained: {list(snapshot.retained_turn_numbers)}")
+    lines.append(f"  Tool calls used: {snapshot.tool_calls_used}")
+    if snapshot.context_summary:
+        # Include truncated previous context block for reference
+        summary = snapshot.context_summary
+        if len(summary) > 1500:
+            summary = summary[:1500] + "..."
+        lines.append(f"  Previous context block:\n{summary}")
+    lines.append(
+        "\nDelta guidance: You do NOT need to re-fetch these files unless the "
+        "current question targets different sections or new files. If the previous "
+        "context block still applies, you can reuse its content and only fetch "
+        "what's new or changed. This saves iterations."
+    )
+    return "\n".join(lines)
 
 
 def _build_turn_inventory(
