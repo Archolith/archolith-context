@@ -676,7 +676,11 @@ function sessionRowHtml(s) {
 function buildSortedRows(sessions) {
   const { sortKey, sortDir } = sessionListState;
   const sorted = [...sessions].sort((a, b) => {
-    let va = a[sortKey] ?? 0, vb = b[sortKey] ?? 0;
+    let va = a[sortKey], vb = b[sortKey];
+    // Nulls sort last regardless of direction
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
     if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb || '').toLowerCase(); }
     if (va < vb) return sortDir === 'asc' ? -1 : 1;
     if (va > vb) return sortDir === 'asc' ? 1 : -1;
@@ -754,8 +758,12 @@ async function renderSessionList() {
     data.sessions.forEach(s => {
       const idx = sessionListState.sessions.findIndex(x => x.session_id === s.session_id);
       if (idx >= 0) {
-        sessionListState.sessions[idx] = s;
-        changed = true;
+        const old = sessionListState.sessions[idx];
+        if (old.turn_count !== s.turn_count || old.last_turn_at !== s.last_turn_at
+            || old.total_savings_tokens !== s.total_savings_tokens) {
+          sessionListState.sessions[idx] = s;
+          changed = true;
+        }
       } else if (!sessionListState.sessionIds.has(s.session_id)) {
         sessionListState.sessionIds.add(s.session_id);
         sessionListState.sessions.push(s);
