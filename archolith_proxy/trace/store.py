@@ -240,7 +240,17 @@ class TraceStore:
         import json as _json
 
         loaded = 0
+        skipped_files = 0
         for jsonl_path in sorted(self._trace_dir.glob("*.jsonl")):
+            # Only load files named as hex session IDs — skip other JSONL
+            # files in the same directory (e.g. curator_failures.jsonl).
+            stem = jsonl_path.stem
+            try:
+                int(stem, 16)
+            except ValueError:
+                skipped_files += 1
+                continue
+
             try:
                 with open(jsonl_path, "r", encoding="utf-8") as f:
                     for line in f:
@@ -248,7 +258,14 @@ class TraceStore:
                         if not line:
                             continue
                         try:
-                            trace = TurnTrace.model_validate_json(line)
+                            # Quick pre-check: real trace records always have
+                            # "created_at" in the JSON.  Records without it
+                            # (e.g. curator failure dumps) get time.time() as
+                            # default, poisoning last_turn_at with startup time.
+                            raw = _json.loads(line)
+                            if "created_at" not in raw:
+                                continue
+                            trace = TurnTrace.model_validate(raw)
                             session_id = trace.session_id or "__no_session__"
                             self._by_session[session_id].append(trace)
                             self._by_turn_id[trace.turn_id] = trace
