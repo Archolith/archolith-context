@@ -258,6 +258,14 @@ class TraceStore:
             )
         return loaded
 
+    async def get_max_turn_number(self, session_id: str) -> int | None:
+        """Return the highest turn_number seen for a session, or None if no traces."""
+        async with self._lock:
+            turns = self._by_session.get(session_id, [])
+            if not turns:
+                return None
+            return max(t.turn_number for t in turns)
+
     @property
     def total_traces(self) -> int:
         return self._total_traces

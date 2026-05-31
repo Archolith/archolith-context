@@ -15,8 +15,13 @@ import re
 import structlog
 
 from archolith_proxy.graph.backend import get_backend
+from archolith_proxy.trace.store import get_trace_store
 
 logger = structlog.get_logger()
+
+# Track which sessions have already been reconciled this process lifetime.
+# Reconciliation only needs to happen once per session after a restart.
+_reconciled_sessions: set[str] = set()
 
 # ── Benchmark session-ID override ─────────────────────────────────────────────
 # When set, any request that arrives WITHOUT an explicit X-Session-ID header
@@ -99,6 +104,42 @@ def compute_fingerprint(system_prompt: str, first_user_message: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+async def _reconcile_turn_number(session_id: str) -> None:
+    """Reconcile the DB turn number with trace history after a restart.
+
+    On proxy restart, the LadybugDB session row may have a stale turn_number
+    (WAL recovery doesn't guarantee the latest increment landed). The trace
+    store — loaded from persistent JSONL at startup — is the source of truth.
+    If the trace shows a higher turn number than the DB, update the DB.
+
+    Only runs once per session per process lifetime (cheap no-op after that).
+    """
+    if session_id in _reconciled_sessions:
+        return
+    _reconciled_sessions.add(session_id)
+
+    try:
+        trace_max = await get_trace_store().get_max_turn_number(session_id)
+        if trace_max is None:
+            return  # No trace history — nothing to reconcile
+
+        db_turn = await get_backend().get_turn_number(session_id)
+        if db_turn < trace_max:
+            # DB is behind — fix it up
+            delta = trace_max - db_turn
+            for _ in range(delta):
+                await get_backend().touch_session(session_id)
+            logger.info(
+                "session_turn_reconciled",
+                session_id=session_id,
+                db_turn=db_turn,
+                trace_max=trace_max,
+                advanced_by=delta,
+            )
+    except Exception as e:
+        logger.warning("session_reconcile_error", session_id=session_id, error=str(e))
+
+
 async def resolve_session(
     headers: dict,
     messages: list[dict],
@@ -121,6 +162,7 @@ async def resolve_session(
     if session_id:
         existing = await get_backend().find_session_by_id(session_id)
         if existing:
+            await _reconcile_turn_number(session_id)
             if is_new_user_turn:
                 await get_backend().touch_session(session_id)
             return session_id, False
@@ -135,6 +177,7 @@ async def resolve_session(
     if benchmark_id:
         existing = await get_backend().find_session_by_id(benchmark_id)
         if existing:
+            await _reconcile_turn_number(benchmark_id)
             if is_new_user_turn:
                 await get_backend().touch_session(benchmark_id)
             return benchmark_id, False
@@ -174,7 +217,9 @@ async def resolve_session(
 
     if is_new:
         logger.info("session_created", session_id=session_id, fingerprint=fingerprint)
-    elif is_new_user_turn:
-        await get_backend().touch_session(session_id)
+    else:
+        await _reconcile_turn_number(session_id)
+        if is_new_user_turn:
+            await get_backend().touch_session(session_id)
 
     return session_id, is_new
