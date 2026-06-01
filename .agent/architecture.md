@@ -17,6 +17,12 @@ better continuity in long coding sessions, and — critically — a coding agent
 never re-reads a file it already knows, never loses a decision it has already made,
 and never degrades from context bloat.
 
+**Naming reality in the live repo:**
+- Public repo / product name: `archolith-context`
+- Python distribution name: `archolith-proxy`
+- Import/package root: `archolith_proxy`
+- Historical `cth.context-engine` naming still appears in older docs, prompts, and changelog entries
+
 ## Archolith Ecosystem
 
 archolith-context is one module in a broader end-to-end AI tooling platform.
@@ -68,8 +74,9 @@ to adopt a custom memory SDK or internal framework.
 | Layer | Technology |
 |-------|-----------|
 | Proxy server | Python, FastAPI, uvicorn |
-| Graph database (primary) | LadybugDB (embedded, file-backed, zero infra) |
-| Graph database (alt.) | Neo4j (label-based isolation in default database) |
+| Graph backend abstraction | `GraphBackend` protocol with Neo4j and LadybugDB implementations |
+| Graph database (bootstrap-friendly) | LadybugDB (embedded, file-backed, zero infra) |
+| Graph database (code default) | Neo4j (label-based isolation in default database) |
 | Graph framework | Graphiti (temporal knowledge graph) |
 | Fact extraction | gpt-4.1-mini (OpenAI API, cheap tier) |
 | Context Manager LLM | Any OpenAI-compatible model (gpt-4.1-mini default; configurable per-deployment) |
@@ -83,21 +90,33 @@ to adopt a custom memory SDK or internal framework.
 Harness → POST /v1/chat/completions → Proxy
 │
 ├─ ON REQUEST:
-│ 1. Parse incoming messages array
-│ 2. Preserve: system prompt + last N messages (coherence tail)
-│ 3. If CURATOR_ENABLED and turn >= cold_start_turns:
-│    a. Run Context Manager LLM loop (≤4 tool calls, 6s budget)
-│    b. LLM retrieves file sections, facts, decisions via 7 tools
-│    c. Returns CuratorResult → assembled as system message
-│    d. On timeout/failure: fall through to heuristic assembler
-│ 4. Heuristic assembler (fallback or when curator disabled):
-│    a. Query session graph: goal, active files, decisions, relevant facts
-│    b. Score and budget facts to CONTEXT_TOKEN_BUDGET tokens
-│ 5. rewrite_messages(): merge graph context + coherence tail
-│    a. RTK Layer 1: filter_tool_messages() strips noise from tool-role messages
-│    b. RTK Layer 2: shrink_tool_call_args() collapses large Write/Edit args
-│    c. RTK Layer 2: shrink_tail_tool_results() caps token footprint of tail tool msgs
-│ 6. Forward curated payload to real upstream API
+│ 1. Parse incoming messages array, detect turn type
+│    - User turn: last message role = "user" → full assembly path
+│    - Agent-solo turn: last message role = "tool" → mechanical compression
+│
+│ 2a. AGENT-SOLO PATH (tool-call continuations, ~85% of requests):
+│    a. Curator prefix cache: if cached rewrite exists from last user turn,
+│       splice it in (count + fingerprint match, O(1) check)
+│    b. RTK Layer 3 strategies (D→C→B→A):
+│       D: Compact completed Write/Edit tool_use arguments
+│       C: filter_output() on compressible tools in middle section
+│       B: Cross-turn dedup via per-session DedupeTracker
+│       A: Char-budget all tool results to max_tokens * 4 chars
+│    c. Forward compressed payload to upstream
+│
+│ 2b. USER TURN PATH:
+│    a. Preserve: system prompt + last N messages (coherence tail)
+│    b. If CURATOR_ENABLED and turn >= cold_start_turns:
+│       - Run Context Manager LLM loop (≤6 tool calls, 30s budget)
+│       - LLM retrieves file sections, facts, decisions via 13 tools
+│       - Returns CuratorResult → assembled as system message
+│       - On timeout/failure: fall through to passthrough
+│       - Cache rewritten messages for agent-solo prefix persistence
+│    c. rewrite_messages(): merge graph context + coherence tail
+│       - RTK Layer 1: filter_tool_messages() strips noise from tool-role messages
+│       - RTK Layer 2: shrink_tool_call_args() collapses large Write/Edit args
+│       - RTK Layer 2: shrink_tail_tool_results() caps token footprint of tail
+│    d. Forward curated payload to real upstream API
 │
 ├─ ON RESPONSE:
 │ 7. Stream response back to harness (unchanged)
@@ -213,6 +232,47 @@ class CuratorResult:
 - 3–6 tool calls per run; hard latency cap via `CURATOR_LATENCY_BUDGET_MS`
 - Output format: `=== SESSION GOAL ===`, `=== CURRENT STATE ===`, `=== OPEN ISSUES ===`, `=== LAST VERIFICATION ===`, `=== RELEVANT CODE ===`, `=== KEY FACTS ===`, `=== DECISIONS ===`
 
+### Agent-Solo Compression (`archolith_proxy/proxy/agent_solo.py`)
+
+Mechanical token reduction for agent-solo turns (tool-call continuations where the
+last message role is "tool"). These comprise ~85% of requests in typical coding sessions.
+No LLM call is involved — all strategies are deterministic and sub-millisecond.
+
+**Entry point:** `compress_agent_solo()` — called from `chat.py` when the request is
+classified as an agent-solo turn. Returns `(messages, stats_dict)`.
+
+**Two-phase pipeline:**
+
+1. **Curator prefix cache** — if a cached curator rewrite exists from the most recent
+   user turn, splice it into the message prefix. Detection is O(1): compare message
+   count + md5 fingerprint of the boundary message (`role:content[:200]`). This solves
+   the fundamental persistence problem: the client re-sends the full original history
+   on every API call, so curator savings evaporate unless the proxy re-applies the
+   cached rewrite on each subsequent agent-solo turn.
+
+2. **RTK Layer 3 strategies** — delegates to `archolith_rtk.agent_solo.compress_agent_solo_turn()`
+   with four composable strategies (D→C→B→A):
+   - **D (Compact)**: Replace large Write/Edit/create_file arguments in completed tool_use
+     calls with compact summaries. The model can Read the file to recover. Default on.
+   - **C (Filter middle)**: Apply `filter_output()` to compressible tools in older turns.
+   - **B (Dedup)**: Replace byte-identical tool results with compact markers via per-session
+     `DedupeTracker`.
+   - **A (Shrink)**: Cap every tool-role message to `shrink_max_tokens * 4` chars.
+
+**Curator prefix cache internals:**
+
+| Function | Purpose |
+|----------|---------|
+| `cache_curator_rewrite(session_id, original, rewritten)` | Store cache after successful curator rewrite (called from `chat.py`) |
+| `_apply_curator_prefix(session_id, messages)` | Splice cached rewrite into message prefix on agent-solo turns |
+| `_fingerprint_message(msg)` | md5 of `role:content[:200]` for O(1) boundary check |
+| `clear_curator_cache(session_id)` | Invalidate cache for a session |
+| `clear_session_hashes(session_id)` | Clear both dedup trackers and curator cache |
+
+**Stats dict keys:** `chars_saved_curator_cache`, `chars_saved_compact`, `chars_saved_shrink`,
+`chars_saved_dedup`, `chars_saved_middle`, `total_chars_saved`, `strategies_applied`,
+`skipped_reason`.
+
 ### File Content Cache (LadybugDB `FileContent` table)
 
 Populated during `_run_extraction()` via `_extract_file_reads()` + `_upsert_file_cache()`:
@@ -238,20 +298,23 @@ Cache methods on `LadybugBackend`: `upsert_file_content`, `get_file_content`,
 (returns None/[]) — file cache is LadybugDB-only in MVP.
 
 ### Fact Extractor (`archolith_proxy/extractor/`)
-- Calls cheap model (gpt-4.1-mini) to parse assistant responses + tool results
-- Extracts: entities, relationships, decisions, state changes
-- Produces structured facts with temporal metadata
+- Legacy mode: single generic extraction call over assistant text + recent tool results
+- Current optional mode: per-tool extraction dispatch via `extract_facts_per_tool()`
+- Registry-based routing maps tool names to specialized extractor classes (`bash`, `grep`, `glob`, `ls`, `find`, `web_search`, `web_fetch`, `memory_recall`, fallback)
+- LLM-backed extractors are semaphore-limited by `extractor_llm_concurrency`; non-LLM extractors run fully concurrently
+- Produces structured facts, decisions, issues, verifications, and checkpoint state
 - Runs async (off critical path, concurrent with user think time)
 
 ### Session Graph (`archolith_proxy/graph/`)
-- Neo4j driver targeting `context_sessions` database (isolated from memory)
-- Graphiti client for temporal entity/edge management
+- Access is brokered through the `GraphBackend` protocol, not direct database calls
+- `Neo4jBackend` wraps the legacy graph modules and remains the bare-config default in `Settings`
+- `LadybugBackend` is the zero-infra path used by the public bootstrap docs and file-cache-heavy local runs
 - Session lifecycle: create, query, invalidate, expire, promote
-- Node types: File, Function, Decision, Error, Goal, ToolResult, State
+- Node families: session, fact, file, decision, checkpoint, issue, verification, cached file content, cached file outline
 
 ### Config (`archolith_proxy/config.py`)
 - Upstream API URL and credentials (validated: must be http/https)
-- Neo4j connection (separate from long-term memory)
+- Graph backend selection (`graph_backend`) plus backend-specific settings
 - Extraction model selection
 - Token budgets, TTL, coherence tail size
 - Cold start turns gate (user-turn count is authoritative; token threshold is retained as a compatibility setting)
@@ -260,8 +323,16 @@ Cache methods on `LadybugBackend`: `upsert_file_content`, `get_file_content`,
 - Memory engine config (JSON array of engine definitions)
 - Promotion policy defaults (min confidence, dry-run mode)
 - Synthetic tools: enabled, circuit breaker thresholds, file recall limits
+- Native read interception toggle (`native_read_intercept_enabled`) for serving repeated file reads from cache
+- Per-tool extraction toggles (`per_tool_extraction_enabled`, `extractor_llm_concurrency`)
+- Agent-solo compression toggles and payload dump switch
 - Session token budget: max input tokens per session, budget action (passthrough/reject)
 - Settings singleton caching (get_settings / reset_settings)
+
+**Important default nuance:** the Python `Settings` class still defaults `graph_backend` to `neo4j`
+and `upstream_base_url` to DeepSeek. The repo README and `.env.example` are optimized around the
+public/local bootstrap path (`ladybug` + OpenAI-compatible upstream). Keep both realities explicit
+when updating docs or helping operators.
 
 ### Memory Engine & Promotion (`archolith_proxy/memory/`)
 - **Registry** (`registry.py`): Config-driven engine registration, lazy adapter instantiation, priority-based default resolution
@@ -300,6 +371,15 @@ the result to SSE via `_wrap_response_as_sse()`.
 made mixed calls (synthetic + real), OpenCode received `finish_reason: "tool_calls"`
 but no tool call data, causing an infinite retry loop. Fixed by emitting tool_calls as
 separate name+argument deltas with proper `index` keys (matching the OpenAI streaming spec).
+
+### Native Read Intercept (`archolith_proxy/proxy/tool_injection.py`)
+
+Transparent cache-backed read interception for repeated file reads inside the same session.
+
+- When `native_read_intercept_enabled=true` and the synthetic tooling path is active, the proxy can answer repeated file reads from `FileContent` instead of forwarding the read upstream
+- Works only for files already cached earlier in the session
+- Emits cache-hit / cache-miss metrics (`native_read_cache_hits`, `native_read_cache_misses`, `file_cache_invalidations`)
+- Written files invalidate stale cache entries before new content is re-cached during extraction
 
 ### Circuit Breaker (`archolith_proxy/proxy/circuit_breaker.py`)
 
@@ -353,7 +433,8 @@ EMBEDDING_API_KEY=sk-...
 EMBEDDING_MODEL=text-embedding-3-small
 
 # Session graph backend
-GRAPH_BACKEND=ladybug
+# Code default: neo4j. Public/local bootstrap docs usually switch this to ladybug.
+GRAPH_BACKEND=neo4j
 LADYBUG_DB_PATH=./data/context.lbug
 
 # Neo4j alternative (only when GRAPH_BACKEND=neo4j)
@@ -408,6 +489,15 @@ RECALL_FILE_CONTEXT_LINES=3           # padding lines around a symbol
 MAX_INPUT_TOKENS_PER_SESSION=2000000  # 0 = unlimited; stop context management when exceeded
 SESSION_TOKEN_BUDGET_ACTION=passthrough  # "passthrough" (forward raw) or "reject"
 
+# Agent-solo turn compression (mechanical, no LLM)
+AGENT_SOLO_SHRINK_ENABLED=false          # A: char-budget all tool results
+AGENT_SOLO_DEDUP_ENABLED=false           # B: cross-turn content hash dedup
+AGENT_SOLO_COMPRESS_MIDDLE_ENABLED=false # C: filter compressible tools in middle
+# Strategy D (compact Write/Edit args) is always on when RTK is installed
+AGENT_SOLO_SHRINK_MAX_TOKENS=2000        # per-result token cap for strategy A
+AGENT_SOLO_MIN_INPUT_TOKENS=8000         # skip compression below this input size
+AGENT_SOLO_DUMP_PAYLOADS=false           # dump payloads to data/agent_solo_payloads/
+
 # Optional: promotion to long-term memory
 MEMORY_API_URL=http://localhost:8200
 MEMORY_API_KEY=...
@@ -423,8 +513,12 @@ PROMOTION_DRY_RUN=false
 
 | Endpoint | Purpose |
 |----------|---------|
+| `GET /live` | Liveness probe — process is up |
+| `GET /ready` | Readiness probe — graph backend and upstream reachability |
 | `GET /health` | Health check: Neo4j status, upstream status, version, uptime |
 | `GET /metrics` | Process-level counters: total_requests, assembly_modes, extraction_successes/empties/failures, upstream_errors, neo4j_errors, active_sessions, token_savings_estimated, total_input_tokens_seen, trace_records, trace_sessions, uptime, curator_calls, curator_timeouts, curator_fallbacks, synthetic_tool_successes, synthetic_tool_failures, synthetic_circuit_opens, synthetic_circuit_hard_disables, synthetic_injections_skipped, synthetic_circuit_states (per-session) |
+| `GET/PATCH/POST /admin/config` | Runtime-tunable config surface for experiments and operator control |
+| `POST /admin/shutdown` | Graceful SIGTERM-based shutdown path |
 | `GET /sessions` | List active sessions (admin, 503 if Neo4j down) |
 | `GET /sessions/{id}` | Session stats (admin, 404 if not found, 503 if Neo4j down) |
 | `GET /trace/sessions` | List all sessions with trace records |
@@ -436,6 +530,7 @@ PROMOTION_DRY_RUN=false
 | `GET /trace/graph/{sid}/decisions` | Decisions recorded for a session |
 | `GET /trace/graph/{sid}/recall` | Recall events from trace records |
 | `POST /trace/qa/extract` | Extraction QA workbench — run extraction without full proxy replay; dedup and invalidation checks now route through the active backend (`ladybug` or `neo4j`) |
+| `GET/POST/DELETE /trace/benchmark/session-id` | Benchmark session-id override for traceable scripted runs |
 | `GET /memory-engines` | List configured memory engines with health status |
 | `GET /memory-engines/{id}` | Single engine details, health, and capabilities |
 | `GET /promotions` | Promotion history and stats |
@@ -445,7 +540,7 @@ PROMOTION_DRY_RUN=false
 
 Metrics are in-memory (`_metrics` dict surfaced via `archolith_proxy/metrics.py`), reset on process restart. Prometheus-compatible OpenMetrics format is a future goal.
 
-`assembly_modes` tracks: `graph`, `fallback`, `cold_start`, `passthrough`, `curator`, `briefing`, `briefing_stale`.
+`assembly_modes` tracks: `graph`, `fallback`, `cold_start`, `passthrough`, `curator`, `briefing`, `briefing_stale`, `agent_solo`, `agent_solo_compressed`.
 
 ## Resilience (Phase 4)
 
@@ -494,6 +589,7 @@ without RTK passes.
 |-------|--------|-------------|
 | Layer 1 — Output Filtering | `archolith_rtk.filter_output` | Strips noise/boilerplate from tool results: git diffs, test output, build logs, lint, directory trees, JSON payloads, search results. 13 named categories + cross-turn deduplication via `DedupeTracker`. ANSI stripping is always applied. Fail-open: exceptions return ANSI-stripped input unchanged. |
 | Layer 2 — Shrink | `archolith_rtk.shrink` | Deterministic token budgeting: `shrink_oversized_tool_call_args_by_tokens` collapses large string values in assistant tool_call JSON (Write/Edit file content); `shrink_oversized_tool_results_by_tokens` truncates tool-role messages over a per-message token cap. |
+| Layer 3 — Agent-Solo | `archolith_rtk.agent_solo` | Four composable strategies (D→C→B→A) for tool-call continuation turns. Strategy D compacts completed Write/Edit args, C filters middle-section tools, B deduplicates byte-identical results, A char-budgets all results. Called by `archolith_proxy/proxy/agent_solo.py`. |
 
 ### Adapter (`archolith_proxy/rtk.py`)
 

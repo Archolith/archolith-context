@@ -2,6 +2,13 @@
 
 Read everything in this directory before starting work.
 
+## Naming Note
+
+- Public product and repo: `archolith-context`
+- Python package / import path: `archolith_proxy`
+- Python distribution name in `pyproject.toml`: `archolith-proxy`
+- Older `cth.context-engine` naming still appears in some historical docs and prompts; prefer the `archolith-*` names when updating current documentation.
+
 ## Files
 
 | File | Purpose |
@@ -9,7 +16,10 @@ Read everything in this directory before starting work.
 | `architecture.md` | System design, data flow, tech stack, config/env reference |
 | `ROADMAP.md` | Context quality improvement backlog — Next / Plan / Later / Done |
 | `data_models.md` | Entities, DTOs, enums, converters, repository reference |
+| `design.md` | Product framing, proxy ergonomics, and longer-form design notes |
+| `mcp-extractor-ideas.md` | Extension notes for deployment-specific extractor plugins |
 | `CHANGELOG.md` | Running log of changes, most recent first |
+| `prompts/` | Prompt artifacts used for documentation and evaluation support |
 | `workflows/code_conventions.md` | Language-specific style and formatting rules |
 | `workflows/benchmarking.md` | Benchmark suite, tuning experiments, recall analysis |
 | `BENCHMARK-AUDIT-TEMPLATE.md` | Template for benchmark/performance audit reports |
@@ -20,6 +30,7 @@ Read everything in this directory before starting work.
 | `CONCURRENCY-LOAD-TEMPLATE.md` | Template for concurrency, memory leaks, and load audits |
 | `MEMORY-ALIGNMENT-TEMPLATE.md` | Template for long-term memory promotion, adapter, and drift audits |
 | `audits/` | Completed audit reports |
+| `worktrees/` | Historical scratch worktrees and snapshots. Do not treat them as the live repo state when documenting current behavior. |
 
 ## Maintenance Rules
 

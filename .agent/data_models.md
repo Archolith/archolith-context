@@ -1,170 +1,187 @@
-# cth.context-engine — Data Models
+# archolith-context — Data Models
 
-## Graph Nodes
+`archolith-context` is the product/repo name. The live Python import surface is
+`archolith_proxy`, and older `cth.context-engine` naming may still appear in
+historical notes.
 
-> **Isolation note:** All session graph nodes carry the `:ContextSession` label. Long-term memory nodes (cth.mcp.memory) carry the `:Memory` label. All queries are label-scoped to prevent cross-contamination.
+The project stores session-state through a backend abstraction:
 
-### Session
-Represents a single coding agent conversation.
+- `GraphBackend` protocol defines the write/read contract
+- `Neo4jBackend` wraps the legacy graph modules
+- `LadybugBackend` stores the same logical entities in an embedded local database
+- `TraceStore` holds observability records separately from the graph backend
 
-| Property | Type | Description |
-|----------|------|-------------|
-| session_id | str | Unique ID (generated on first request) |
-| fingerprint | str | Hash of system prompt + first user message |
-| goal | str | Extracted session goal/intent |
-| created_at | datetime | When session started |
-| last_active | datetime | Last request timestamp |
-| ttl_hours | int | Hours until expiry |
-| status | SessionStatus | active, expired, promoted |
+## Core Graph Models
 
-### Fact
-An extracted piece of session knowledge.
+These are the shared Pydantic node shapes in
+`archolith_proxy/models/graph_nodes.py`. Backends may store extra timestamps or
+derived fields, but these are the canonical application-level fields.
 
-| Property | Type | Description |
-|----------|------|-------------|
-| fact_id | str | Unique ID |
-| session_id | str | Owning session |
-| content | str | The fact text |
-| fact_type | FactType | Type classification |
-| valid_from | datetime | When fact became true |
-| valid_until | datetime? | When superseded (null = still active) |
-| invalidated_at | datetime? | When fact was explicitly invalidated (null = still active) |
-| confidence | float | Extraction confidence (0–1) |
-| source_turn | int | Which turn produced this fact |
-| embedding | list[float] | Vector embedding for similarity search |
-
-> **Indexes:** `invalidated_at` and `session_id` on Fact nodes (added Phase 4 for invalidation queries + session-scoped lookups).
-
-### File
-A file referenced or modified during the session.
+### SessionNode
 
 | Property | Type | Description |
 |----------|------|-------------|
-| path | str | Absolute or project-relative path |
-| session_id | str | Owning session |
-| last_read_turn | int? | Last turn where file was read |
-| last_modified_turn | int? | Last turn where file was edited |
-| status | FileStatus | read, modified, created, deleted |
+| `session_id` | `str` | Stable session identifier |
+| `fingerprint` | `str \| None` | Fallback hash when the caller does not provide `X-Session-ID` |
+| `goal` | `str \| None` | Current session objective |
+| `created_at` | `datetime` | Session creation time |
+| `last_active` | `datetime` | Last touch time |
+| `ttl_hours` | `int` | Expiry window |
+| `status` | `SessionStatus` | `active`, `expired`, or `promoted` |
+| `turn_number` | `int` | Current session turn counter |
 
-> **Index:** `session_id` on File nodes (added Phase 4 for session-scoped file lookups).
-
-### Decision
-An explicit choice made during the session.
+### FactNode
 
 | Property | Type | Description |
 |----------|------|-------------|
-| decision_id | str | Unique ID |
-| session_id | str | Owning session |
-| summary | str | What was decided |
-| rationale | str? | Why (if extractable) |
-| turn | int | When decided |
-| superseded_by | str? | Later decision that replaced this |
+| `fact_id` | `str` | Unique fact identifier |
+| `session_id` | `str` | Owning session |
+| `content` | `str` | Extracted fact text |
+| `fact_type` | `FactType` | Classification such as `file_state` or `decision` |
+| `valid_from` | `datetime` | First-valid timestamp |
+| `valid_until` | `datetime \| None` | Supersession timestamp; `None` means still active |
+| `confidence` | `float` | Extractor confidence |
+| `source_turn` | `int` | Turn that produced the fact |
+| `embedding` | `list[float] \| None` | Optional semantic-search vector |
+
+### FileNode
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `path` | `str` | File path touched during the session |
+| `session_id` | `str` | Owning session |
+| `last_read_turn` | `int \| None` | Last read turn |
+| `last_modified_turn` | `int \| None` | Last write/edit turn |
+| `status` | `FileStatus` | `read`, `modified`, `created`, or `deleted` |
+
+### DecisionNode
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `decision_id` | `str` | Unique decision identifier |
+| `session_id` | `str` | Owning session |
+| `summary` | `str` | What was decided |
+| `rationale` | `str \| None` | Optional reasoning |
+| `turn` | `int` | Turn where the decision was made |
+| `superseded_by` | `str \| None` | Later decision identifier when replaced |
+
+### CheckpointNode
+
+Single-record working-state summary for a session.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `session_id` | `str` | Primary key for the session checkpoint |
+| `summary` | `str` | One-line statement of current work state |
+| `next_step` | `str \| None` | Highest-priority follow-up action |
+| `confidence` | `float` | Extractor confidence |
+| `source_turn` | `int` | Turn that produced the checkpoint |
+
+### IssueNode
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `issue_id` | `str` | Unique issue identifier |
+| `session_id` | `str` | Owning session |
+| `status` | `str` | `"open"` or `"resolved"` |
+| `summary` | `str` | Blocker or error description |
+| `related_file` | `str \| None` | File path when applicable |
+| `related_command` | `str \| None` | Command or verification that surfaced the issue |
+| `resolution_ref` | `str \| None` | Resolution reference or note |
+| `source_turn` | `int` | Turn where the issue appeared |
+| `resolved_turn` | `int` | Turn where the issue was resolved; default `0` until resolved |
+
+### VerificationNode
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `verification_id` | `str` | Unique verification identifier |
+| `session_id` | `str` | Owning session |
+| `command` | `str` | Exact command that was run |
+| `status` | `str` | `"pass"`, `"fail"`, or `"partial"` |
+| `summary` | `str` | Human-readable outcome |
+| `source_turn` | `int` | Turn where the verification happened |
+
+## Cache-Backed File Models
+
+These records are backend-managed rather than first-class Pydantic models, but
+they are core to curator and native-read behavior.
 
 ### FileContent
-Cached file content stored when the agent reads or writes a file. Enables the curator to serve `get_file` and `get_file_lines` without re-reading from disk.
+
+Cached full-text file content for a session.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| file_id | str | Unique ID (`sha256` of session_id + path) |
-| session_id | str | Owning session |
-| path | str | Absolute or project-relative path |
-| content | str | Full file text |
-| sha256 | str | SHA-256 hash of content |
-| line_count | int | Number of lines |
-| last_updated_turn | int | Turn number of last cache write |
-| created_at | datetime | First ingested |
+| `file_id` | `str` | Backend record identifier |
+| `session_id` | `str` | Owning session |
+| `path` | `str` | File path |
+| `content` | `str` | Full file text |
+| `sha256` | `str` | Content hash for dedup/change detection |
+| `line_count` | `int` | Cached line count for fast slices |
+| `last_updated_turn` | `int` | Turn of the last cache write |
 
-> **Ingest triggers:** Write/create_file tool call args (direct content capture) and Read tool results (content from proxy intercept or result pass-through).
+Ingest sources:
+
+- read-style tool results paired by `tool_call_id`
+- write/create-file tool arguments captured directly from assistant tool calls
 
 ### FileOutline
-Symbol index for a cached file. Built on ingest via AST (Python) or regex fallback (other types). Allows the curator to locate functions/classes before fetching full content.
+
+Symbol index generated from cached file content.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| outline_id | str | Unique ID |
-| session_id | str | Owning session |
-| path | str | Path matching the `FileContent` entry |
-| outline | str | Newline-delimited symbol list with line numbers |
-| last_updated_turn | int | Turn number of last outline write |
+| `outline_id` | `str` | Backend record identifier |
+| `session_id` | `str` | Owning session |
+| `path` | `str` | File path matching the cached content entry |
+| `outline` | `str` | Newline-delimited symbol list with line numbers |
+| `last_updated_turn` | `int` | Turn of the last outline write |
 
-> **Format:** Each line: `<type> <name> L<start>[-<end>]` e.g. `def authenticate L42-58`, `class AuthService L10-140`. Cap ~100 symbols.
+Used by curator `get_file_outline()` before targeted `get_file_lines()` fetches.
 
-### Checkpoint
-Single-record work state for the session. Overwritten on every extraction turn. Used by the curator's `get_checkpoint` tool and pre-injected into the curator prompt to save one tool-call iteration.
+## Graph Relationships
 
-| Property | Type | Description |
-|----------|------|-------------|
-| session_id | str | Primary key — one record per session |
-| summary | str | One sentence: what state work is in right now |
-| next_step | str? | Most important next action, or null |
-| confidence | float | Extractor confidence in this summary (0–1) |
-| source_turn | int | Turn number that produced this checkpoint |
-| updated_at | datetime | Last write timestamp |
+The logical edge vocabulary used across backends:
 
-### Issue
-An open or resolved blocker/error discovered during the session.
+| Edge Type | Meaning |
+|-----------|---------|
+| `BELONGS_TO` | Ownership edge from a session artifact back to its session |
+| `TOUCHES` | Session touched a file |
+| `SUPERSEDES` | A newer fact invalidated an older fact |
+| `MODIFIES` | A fact describes a file mutation |
+| `SUPPORTS` | A fact supports a decision |
+| `CAUSED_BY` | Causal link such as error -> follow-up state |
 
-| Property | Type | Description |
-|----------|------|-------------|
-| issue_id | str | Unique ID |
-| session_id | str | Owning session |
-| status | str | `open` or `resolved` |
-| summary | str | Description of the problem |
-| related_file | str? | File path if directly relevant |
-| related_command | str? | Command that surfaced the issue |
-| resolution_ref | str? | Fact ID or description of the fix (if resolved) |
-| source_turn | int | Turn where issue was first detected |
-| resolved_turn | int? | Turn where issue was resolved (null if still open) |
-| created_at | datetime | When first recorded |
-
-### Verification
-A test run, build, or API call with an observable outcome — recorded when the agent executes a command with known pass/fail semantics.
-
-| Property | Type | Description |
-|----------|------|-------------|
-| verification_id | str | Unique ID |
-| session_id | str | Owning session |
-| command | str | Exact command that was run |
-| status | str | `pass`, `fail`, or `partial` |
-| summary | str | What was tested and the key outcome |
-| source_turn | int | Turn where verification ran |
-| created_at | datetime | When recorded |
-
-## Graph Edges
-
-| Edge Type | From → To | Meaning |
-|-----------|-----------|---------|
-| TOUCHES | Session → File | Session interacted with file |
-| MODIFIES | Fact → File | Fact describes a file modification |
-| IMPORTS | File → File | Import/dependency relationship |
-| CAUSED_BY | Fact → Fact | Causal chain (error → fix) |
-| SUPERSEDES | Fact → Fact | Newer fact invalidates older |
-| SUPPORTS | Fact → Decision | Fact informed a decision |
-| BELONGS_TO | * → Session | Ownership edge |
+Backends may materialize these differently, but application code treats them as
+the same logical relationships.
 
 ## Enums
 
 ### FactType
+
 ```python
 class FactType(str, Enum):
-    FILE_STATE = "file_state"       # "src/app.ts now exports X"
-    ERROR = "error"                 # "build fails with TypeError"
-    TOOL_RESULT = "tool_result"     # condensed tool output
-    DECISION = "decision"           # "chose approach X"
-    STATE = "state"                 # "tests passing", "migration applied"
-    GOAL = "goal"                   # session objective
-    OBSERVATION = "observation"     # general finding
+    FILE_STATE = "file_state"
+    ERROR = "error"
+    TOOL_RESULT = "tool_result"
+    DECISION = "decision"
+    STATE = "state"
+    GOAL = "goal"
+    OBSERVATION = "observation"
 ```
 
 ### SessionStatus
+
 ```python
 class SessionStatus(str, Enum):
     ACTIVE = "active"
     EXPIRED = "expired"
-    PROMOTED = "promoted"           # facts moved to long-term memory
+    PROMOTED = "promoted"
 ```
 
 ### FileStatus
+
 ```python
 class FileStatus(str, Enum):
     READ = "read"
@@ -173,131 +190,181 @@ class FileStatus(str, Enum):
     DELETED = "deleted"
 ```
 
-## DTOs
+### PromotionOutcome
+
+```python
+class PromotionOutcome(str, Enum):
+    PENDING = "pending"
+    SUCCESS = "success"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    RETRY = "retry"
+```
+
+## Proxy / Extraction DTOs
 
 ### AssembledContext
-What the assembler produces for the proxy to forward.
 
-```python
-class AssembledContext(BaseModel):
-    system_message: dict  # original system prompt (pass-through)
-    graph_context: list[dict]  # synthesized messages from graph facts
-    coherence_tail: list[dict]  # last N raw messages (verbatim)
-    token_estimate: int  # estimated total tokens
-    facts_retrieved: int  # how many facts contributed
-    session_id: str
-    files_selected: list[dict]  # files injected into the assembled context
-    decisions_selected: list[dict]  # decisions injected into the assembled context
-```
+What the assembler or curator returns to the chat handler.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `system_message` | `dict` | Original system message |
+| `graph_context` | `list[dict]` | Synthesized injected context messages |
+| `coherence_tail` | `list[dict]` | Recent preserved conversation tail |
+| `token_estimate` | `int` | Estimated outbound token count |
+| `facts_retrieved` | `int` | Number of selected facts |
+| `session_id` | `str` | Owning session |
+| `files_selected` | `list[dict]` | File snippets chosen for injection |
+| `decisions_selected` | `list[dict]` | Decision records chosen for injection |
+| `compression_ratio` | `float` | Output-size ratio for the rewrite |
+| `retained_turn_numbers` | `list[int] \| None` | Explicit middle turns kept by the curator |
+| `curator_tool_log` | `list[dict]` | Per-tool call log for trace surfaces |
 
 ### ExtractionResult
-What the extractor produces after parsing a response.
 
-```python
-class ExtractionResult(BaseModel):
-    facts: list[dict]               # [{content, fact_type, confidence}]
-    files_touched: list[str]        # file paths
-    decisions: list[dict]           # [{summary, rationale}]
-    invalidated_fact_ids: list[str] # description strings matched via Jaccard similarity
-    turn_number: int
-    session_goal: str | None        # inferred or updated goal
-    checkpoint: dict | None         # {summary, next_step, confidence}
-    issues: list[dict]              # [{summary, status, related_file, related_command}]
-    verifications: list[dict]       # [{command, status, summary}]
-```
+Structured output from either legacy extraction or per-tool extraction.
 
-### AssemblyMode
-How the chat handler resolved context for a request.
+| Property | Type | Description |
+|----------|------|-------------|
+| `facts` | `list[dict]` | Facts extracted from the turn |
+| `files_touched` | `list[str]` | Files inferred from the turn |
+| `decisions` | `list[dict]` | Decision summaries and rationales |
+| `invalidated_fact_ids` | `list[str]` | Description strings to match against active facts |
+| `turn_number` | `int` | Source turn |
+| `session_goal` | `str \| None` | Updated or inferred session goal |
+| `checkpoint` | `dict \| None` | Working-state summary block |
+| `issues` | `list[dict]` | Open/resolved issues |
+| `verifications` | `list[dict]` | Recorded verification results |
 
-| Mode | Meaning |
-|------|---------|
-| `cold_start` | Below turn/token threshold — full passthrough |
-| `graph` | Graph query succeeded — context assembled |
-| `fallback` | Graph query failed — passthrough after attempted assembly |
-| `passthrough` | Neo4j not configured — always passthrough |
+### TurnTrace
 
-### Metrics (in-memory, process-level)
-`_metrics` dict in `archolith_proxy/metrics.py` — exposed via `GET /metrics`:
+Primary observability record for one proxied request.
 
-| Key | Type | Description |
-|-----|------|-------------|
-| total_requests | int | All HTTP requests processed |
-| assembly_modes | dict[str, int] | Count per assembly_mode |
-| extraction_successes | int | Turns where extraction produced and stored one or more facts |
-| extraction_empties | int | Turns where extraction ran successfully but produced zero facts |
-| extraction_failures | int | Extraction task failures or unavailable extractor responses |
-| upstream_errors | int | Upstream API errors (5xx, timeout, connection) |
-| neo4j_errors | int | Neo4j query failures |
-| active_sessions | int | Sessions currently in graph |
-| token_savings_estimated | int | Estimated tokens saved by context assembly |
-| total_input_tokens_seen | int | Total input tokens across all requests |
-| uptime_s | float | Seconds since process start |
+Key fields:
 
-## Repository / Storage
+| Property | Type | Description |
+|----------|------|-------------|
+| `turn_id` | `str` | Unique trace identifier |
+| `session_id` | `str \| None` | Session owning the turn |
+| `turn_number` | `int` | Session turn counter |
+| `model` | `str` | Upstream model name |
+| `stream` | `bool` | Whether the client requested streaming |
+| `input_tokens` | `int` | Estimated inbound tokens |
+| `message_count` | `int` | Raw message count |
+| `user_turn_count` | `int` | Number of user-role turns seen so far |
+| `is_user_turn` | `bool` | Distinguishes user turns from agent-solo continuations |
+| `assembly_mode` | `str` | `passthrough`, `graph`, `curator`, `agent_solo`, etc. |
+| `assembly_reason` | `str` | Human-readable rationale for the chosen path |
+| `rewritten_tokens` | `int` | Estimated rewritten payload size |
+| `savings_tokens` | `int` | Estimated tokens saved |
+| `original_messages` | `list[dict]` | Original payload snapshot |
+| `rewritten_messages` | `list[dict]` | Rewritten payload snapshot |
+| `facts_stored` | `int` | Facts written after extraction |
+| `duplicates_skipped` | `int` | Deduped facts skipped |
+| `invalidations_attempted` | `int` | Supersession descriptions produced |
+| `invalidations_matched` | `int` | Supersession descriptions matched to fact ids |
+| `recall_used` | `bool` | Whether recall interception executed |
+| `cache_hit_tokens` | `int` | Upstream prompt-cache hits when reported |
+| `cache_miss_tokens` | `int` | Upstream prompt-cache misses when reported |
+| `curator_tool_log` | `list[dict]` | Curator tool-dispatch record |
 
-| Store | Technology | Access Pattern |
-|-------|-----------|----------------|
-| Session graph | Neo4j (default `neo4j` database, `:ContextSession` label) | Cypher queries via neo4j-driver, label-scoped |
-| Embeddings | Stored as node properties in Neo4j | Vector index for similarity search |
-| Session metadata | Neo4j Session nodes (`:ContextSession`) | Direct lookup by session_id/fingerprint |
-| Cleanup | Neo4j TTL-based sweep | Background task deletes expired sessions by label |
+### SessionTraceSummary
 
-## Promotion Models (`src/memory/models.py`)
+Aggregated trace summary per session.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `session_id` | `str` | Session identifier |
+| `goal` | `str \| None` | Current session goal |
+| `turn_count` | `int` | Recorded turn count |
+| `total_input_tokens` | `int` | Sum of observed input tokens |
+| `total_savings_tokens` | `int` | Aggregate estimated savings |
+| `avg_savings_ratio` | `float` | Savings over all input |
+| `rewritten_savings_ratio` | `float` | Savings over rewritten turns only |
+| `assembly_modes` | `dict[str, int]` | Counts by assembly mode |
+| `total_facts_stored` | `int` | All stored facts |
+| `total_duplicates_skipped` | `int` | All dedup skips |
+| `total_invalidations_attempted` | `int` | All invalidation attempts |
+| `total_recalls` | `int` | Count of recall events |
+| `max_user_turns` | `int` | Highest user-turn count observed |
+
+## Storage Layout
+
+### GraphBackend protocol
+
+`archolith_proxy/graph/protocol.py` defines the backend contract:
+
+- lifecycle: connect, close, ensure_schema, verify_connectivity
+- session CRUD and goal updates
+- fact storage, invalidation, semantic lookup support
+- file cache and file outline operations
+- checkpoint, issue, verification surfaces
+- cleanup / TTL expiration
+
+### Backend-specific notes
+
+- `Neo4jBackend` is still the code-default backend in `Settings`
+- `LadybugBackend` is the preferred zero-infra local/bootstrap path
+- file-content caching is richest on LadybugDB; Neo4j paths exist mainly for graph/session operations
+- `TraceStore` is separate from graph storage and can optionally persist JSONL traces to disk
+
+## Promotion Models
+
+These live in `archolith_proxy/memory/models.py`.
 
 ### PromotionRecord
-Canonical payload for outbound fact promotion — one durable fact being promoted to a memory engine.
+
+Canonical outbound payload for one promoted fact.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| promotion_id | str | Unique ID (auto-generated hex[:16]) |
-| session_id | str | Source session |
-| source_turn | int | Which turn produced this fact |
-| fact_type | str | Type classification (matches FactType values) |
-| content | str | The fact text |
-| confidence | float | Extraction confidence (0–1) |
-| session_goal | str \| None | Session objective at time of promotion |
-| touched_files | list[str] | Files referenced by this fact |
-| decision_context | str \| None | Rationale if fact_type == decision |
-| promotion_reason | str | Why this fact was promoted |
-| promoted_at | float | Unix timestamp |
-| tags | list[str] | Classification tags |
-| dedupe_key | str | Deterministic hash for idempotency |
-| source_trace_ref | str \| None | TurnTrace.turn_id for audit trail |
+| `promotion_id` | `str` | Unique promotion identifier |
+| `session_id` | `str` | Source session |
+| `source_turn` | `int` | Source turn |
+| `fact_type` | `str` | Fact classification |
+| `content` | `str` | Durable fact text |
+| `confidence` | `float` | Promotion confidence |
+| `session_goal` | `str \| None` | Goal at promotion time |
+| `touched_files` | `list[str]` | Related files |
+| `decision_context` | `str \| None` | Decision rationale when relevant |
+| `promotion_reason` | `str` | Why the fact was promoted |
+| `promoted_at` | `float` | Unix timestamp |
+| `tags` | `list[str]` | Classification tags |
+| `dedupe_key` | `str` | Deterministic idempotency key |
+| `source_trace_ref` | `str \| None` | TurnTrace linkage for auditability |
 
 ### PromotionResult
-Outcome of a single promotion attempt through an adapter.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| promotion_id | str | Matches the PromotionRecord |
-| engine_id | str | Target engine |
-| outcome | PromotionOutcome | pending / success / failed / skipped / retry |
-| remote_id | str \| None | ID in the target memory system |
-| error_message | str \| None | Error details on failure |
-| elapsed_ms | float | Latency of the promotion attempt |
+| `promotion_id` | `str` | Source `PromotionRecord` id |
+| `engine_id` | `str` | Target engine id |
+| `outcome` | `PromotionOutcome` | Attempt result |
+| `remote_id` | `str \| None` | Identifier in the target memory system |
+| `error_message` | `str \| None` | Failure details |
+| `elapsed_ms` | `float` | Attempt latency |
 
 ### MemoryEngineConfig
-Configuration for a single registered memory engine.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| id | str | Unique engine identifier |
-| type | str | Adapter type: cth_mcp_memory, mem0, zep, generic_http |
-| enabled | bool | Whether the engine is active |
-| priority | int | Higher = preferred default |
-| base_url | str | Backend endpoint URL |
-| api_key_env | str | Env var name holding the API key |
-| extra | dict | Adapter-specific configuration |
+| `id` | `str` | Unique engine identifier |
+| `type` | `str` | Adapter type |
+| `enabled` | `bool` | Whether the engine is active |
+| `priority` | `int` | Higher value wins default selection |
+| `base_url` | `str` | Engine endpoint |
+| `api_key_env` | `str` | Env var containing the credential |
+| `extra` | `dict` | Adapter-specific config |
 
 ### EngineCapabilities
-What a memory engine adapter supports.
 
 | Property | Type | Default |
 |----------|------|---------|
-| promote_fact | bool | True |
-| promote_batch | bool | True |
-| dedupe_lookup | bool | False |
-| list_by_source | bool | False |
-| update_promoted | bool | False |
-| delete_promoted | bool | False |
-| healthcheck | bool | True |
+| `promote_fact` | `bool` | `True` |
+| `promote_batch` | `bool` | `True` |
+| `dedupe_lookup` | `bool` | `False` |
+| `list_by_source` | `bool` | `False` |
+| `update_promoted` | `bool` | `False` |
+| `delete_promoted` | `bool` | `False` |
+| `healthcheck` | `bool` | `True` |

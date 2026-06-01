@@ -23,6 +23,10 @@ Kills any existing proxy on port 9801, inspects the LadybugDB for WAL corruption
 (common after force-kills), switches to a fresh timestamped DB if needed, starts
 the proxy, and polls until `graph_ready=true`. Updates `.env` if DB is switched.
 
+This is the canonical restart path for this repo. Do not add or use an alternate
+restart helper unless it launches the proxy with the same durable background-process
+behavior and log capture.
+
 ### `proxy_status.py` — One-shot proxy metrics and trace inspection
 ```bash
 python scripts/proxy_status.py metrics               # quick metrics overview

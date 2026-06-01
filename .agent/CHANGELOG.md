@@ -1,4 +1,24 @@
-# Changelog — cth.context-engine
+# Changelog — archolith-context
+
+## 2026-05-31 — Agent-Solo Compression, Curator Prefix Cache, Dashboard Fixes
+
+- **`archolith_proxy/openai/chat.py`**: Fixed agent-solo savings being zeroed by catch-all `set_assembly` overwrite — replaced early `set_assembly` with direct variable updates. Fixed broadcast zeroing savings for non-assembled turns. Added `cache_curator_rewrite()` call after successful curator rewrite. Added Java/Kotlin/C# regex fallback patterns to `_build_outline()` for file outline generation.
+- **`archolith_proxy/proxy/agent_solo.py`**: Rewrote module with curator prefix cache — `_CuratorCache` stores `{original_count, fingerprint, rewritten}` after curator rewrites; `_apply_curator_prefix()` splices cached rewrite into agent-solo turns via O(1) count + md5 fingerprint check. Added `chars_saved_curator_cache` and `chars_saved_compact` to stats dict. `compress_agent_solo()` runs two-phase pipeline: curator prefix cache → RTK Layer 3 strategies.
+- **`archolith_proxy/static/dashboard.html`**: Split "Turns" (user turns) and "API Calls" columns in session list. Added null-safe sort with explicit null-last handling. Incremental merge now only triggers DOM rebuild on meaningful field changes. Turn cards show raw input as "ctx" with "→ N sent" when savings exist, plus color-coded savings delta.
+- **`archolith_proxy/config.py`**: Lowered `agent_solo_min_input_tokens` from 30K to 8K — sessions at 20K were below threshold and never compressed.
+- **`archolith_proxy/main.py`**: Expanded `TUNABLE_FIELDS` for `PATCH /admin/config` to include `agent_solo_*`, `curator_*`, `synthetic_tools_enabled`, `drop_middle_on_assembly`.
+- **`.agent/architecture.md`**: Added agent-solo component section, updated data flow to show agent-solo path (2a) with curator prefix cache and RTK Layer 3, updated assembly_modes list, added Layer 3 to RTK layers table, added `AGENT_SOLO_*` env vars to config reference.
+
+## 2026-05-31 — Remove Faulty Restart Script
+
+- **`scripts/restart_proxy.py`**: Removed the faulty alternate restart helper. In practice it could report a successful restart while failing to leave a durable background proxy process running in this environment.
+- **`scripts/README.md`**: Clarified that `scripts/proxy_restart.py` is the canonical restart path and that alternate restart helpers should not be added unless they preserve the same durable launch behavior and logging.
+
+## 2026-05-31 — Deep-Dive Doc Refresh for Current Proxy State
+
+- **`.agent/README.md`**: Added a naming map for `archolith-context` vs `archolith_proxy` vs `archolith-proxy`, documented `design.md`, `mcp-extractor-ideas.md`, `prompts/`, and warned that `.agent/worktrees/` snapshots are not the live source of truth for current docs.
+- **`.agent/architecture.md`**: Brought the architecture narrative in line with the live repo by documenting the current naming reality, the `GraphBackend` abstraction, the code-default `neo4j` vs bootstrap-friendly `ladybug` split, per-tool extraction, native read interception, and the current operator/benchmark endpoints (`/live`, `/ready`, `/admin/config`, `/admin/shutdown`, `/trace/benchmark/session-id`).
+- **`.agent/data_models.md`**: Replaced the older Neo4j-first `cth.context-engine` model reference with a current model map covering the shared graph node shapes, file-cache records, trace DTOs, backend contract, and promotion/memory-engine payloads used by `archolith_proxy`.
 
 ## 2026-05-26 — Per-Tool Extraction Post-Review Fixes
 
