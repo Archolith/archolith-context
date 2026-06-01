@@ -126,6 +126,11 @@ class Settings(BaseSettings):
     file_cache_enabled: bool = True
     file_cache_max_file_bytes: int = 500_000  # skip caching files larger than this
 
+    # Workspace allowlist for prefetch_file / get_file_lines.
+    # Comma-separated directory prefixes the curator LLM may read.
+    # Empty list = unrestricted (backward compat).
+    prefetch_allowed_roots: list[str] = []
+
     # Transparent native Read call interception — serves Read results from file cache
     # when the file has been previously read this session. Rides on synthetic_tools_enabled.
     native_read_intercept_enabled: bool = True

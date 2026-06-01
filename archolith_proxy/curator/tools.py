@@ -348,6 +348,15 @@ async def prefetch_file(
     settings = get_settings()
     file_path = Path(path)
 
+    # Workspace allowlist — reject paths outside permitted roots
+    if settings.prefetch_allowed_roots:
+        resolved = file_path.resolve()
+        if not any(
+            resolved == Path(root).resolve() or resolved.is_relative_to(Path(root).resolve())
+            for root in settings.prefetch_allowed_roots
+        ):
+            return f"(blocked: {path} is outside allowed workspace roots)"
+
     if not file_path.is_absolute():
         # Try to resolve relative paths against cached file roots
         existing = await get_backend().list_cached_files(session_id)
