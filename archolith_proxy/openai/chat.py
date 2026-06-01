@@ -2391,7 +2391,6 @@ async def _run_extraction(
                         if svc.should_promote(
                             fact_type=fact_type,
                             confidence=confidence,
-                            turn_count=turn_number,
                             tags=fact.get("tags", []),
                         ):
                             record = PromotionRecord(

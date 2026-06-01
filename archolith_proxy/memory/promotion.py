@@ -41,11 +41,12 @@ _PROMOTABLE_FACT_TYPES: set[str] = {
 # Minimum confidence for automatic promotion
 _MIN_CONFIDENCE = 0.9
 
-# Fact types that require multi-turn survival before promotion
-_MULTI_TURN_TYPES: set[str] = {"observation", "state"}
-
-# Minimum turns a fact must survive to be promotable
-_MIN_SURVIVAL_TURNS = 2
+# NOTE: Multi-turn survival gate removed (2026-06-01).
+# The gate received session turn_number instead of fact age, so it
+# rubber-stamped everything after turn 2.  The extraction pipeline
+# doesn't re-confirm facts across turns, so there's no real survival
+# signal to gate on.  Reintroduce when a deterministic fact-lifecycle
+# layer exists.
 
 
 class PromotionService:
@@ -84,7 +85,6 @@ class PromotionService:
         self,
         fact_type: str,
         confidence: float,
-        turn_count: int = 1,
         tags: list[str] | None = None,
         *,
         explicit: bool = False,
@@ -95,8 +95,6 @@ class PromotionService:
         - Explicit operator promotion always goes through
         - fact_type must be in the promotable allowlist
         - confidence must meet threshold
-        - observation/state types must survive multiple turns
-        - facts tagged 'durable' or 'promote' bypass survival check
         """
         if explicit:
             return True
@@ -106,13 +104,6 @@ class PromotionService:
 
         if confidence < self.min_confidence:
             return False
-
-        tags_set = set(tags or [])
-
-        # Multi-turn survival gate
-        if fact_type in _MULTI_TURN_TYPES:
-            if turn_count < _MIN_SURVIVAL_TURNS and "durable" not in tags_set and "promote" not in tags_set:
-                return False
 
         return True
 

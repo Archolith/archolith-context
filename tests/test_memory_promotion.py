@@ -294,18 +294,16 @@ class TestPromotionPolicy:
         svc = PromotionService()
         assert svc.should_promote("decision", 0.95)
 
-    def test_observation_needs_multi_turn(self):
+    def test_observation_high_confidence_promotes(self):
+        """After removing the broken multi-turn gate, observations promote on confidence alone."""
         svc = PromotionService()
-        assert not svc.should_promote("observation", 0.95, turn_count=1)
-        assert svc.should_promote("observation", 0.95, turn_count=3)
+        assert svc.should_promote("observation", 0.95)
+        assert not svc.should_promote("observation", 0.5)
 
-    def test_durable_tag_bypasses_survival(self):
+    def test_state_high_confidence_promotes(self):
         svc = PromotionService()
-        assert svc.should_promote("observation", 0.95, turn_count=1, tags=["durable"])
-
-    def test_promote_tag_bypasses_survival(self):
-        svc = PromotionService()
-        assert svc.should_promote("state", 0.95, turn_count=1, tags=["promote"])
+        assert svc.should_promote("state", 0.95)
+        assert not svc.should_promote("state", 0.5)
 
 
 class TestPromotionService:
