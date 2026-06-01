@@ -44,6 +44,10 @@ Rules:
    - Introduced a design pattern, schema, or API contract being extended now
    - Contain code or decisions being directly referenced or modified
    - Established an active requirement or constraint
+   - **Established the task list, plan, or workflow the user is iterating through.**
+     When the user is working through items sequentially (reviewing plans, fixing
+     issues, processing a list), the turn that produced the list/overview is workflow
+     anchor context — keep it even if the current item differs from what that turn discussed.
    Drop turns whose information is fully captured in your context block above.
    IMPORTANT: each retained turn keeps ALL its tool results verbatim (file reads,
    grep output, command logs). A turn with 5 tool calls adds ~5-15K tokens. Only
