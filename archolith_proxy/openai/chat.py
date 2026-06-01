@@ -142,6 +142,14 @@ def _extract_response_text(response_data: dict) -> str:
     return _normalize_message_content(message.get("content"))
 
 
+def _extract_finish_reason(response_data: dict) -> str | None:
+    """Extract finish_reason from the first choice of a non-streaming response."""
+    choices = response_data.get("choices", [])
+    if not choices:
+        return None
+    return choices[0].get("finish_reason")
+
+
 def _extract_file_reads(messages: list[dict]) -> list[dict]:
     """Pair file-read tool calls with their results via tool_call_id.
 
@@ -416,6 +424,11 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             turn_number = await get_backend().get_turn_number(session_id)
             logger.debug("session_resolved", session_id=session_id, turn=turn_number, is_new=is_new)
 
+            # Cancel any in-flight background curator pass — a new turn means
+            # the briefing it's building is already stale.
+            from archolith_proxy.curator.state import cancel_background_task
+            cancel_background_task(session_id)
+
             # Set initial session goal + extract harness env on new sessions
             if is_new:
                 first_user_msg = ""
@@ -450,6 +463,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                         harness=harness_env.get("harness", "unknown"),
                         workspace=harness_env.get("workspace_root_folder", ""),
                     )
+
+                # Snapshot proxy feature flags so session grading can
+                # reconstruct which features were active at session start.
+                from archolith_proxy.config import snapshot_config
+                get_trace_store().set_session_metadata(
+                    session_id, "proxy_config", snapshot_config(),
+                )
 
             # Bind session context for request-level logging middleware
             structlog.contextvars.bind_contextvars(
@@ -584,6 +604,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 savings = est_savings
                 rewritten_tokens = max(0, input_tokens - est_savings)
                 savings_ratio = savings / input_tokens if input_tokens > 0 else 0.0
+                trace_builder.set_solo_stats(solo_stats)
                 logger.info(
                     "agent_solo_compressed",
                     session_id=session_id,
@@ -1381,6 +1402,7 @@ async def _handle_streaming(
         cap = capture_holder.get("capture")
         response_text = cap.get_full_text() if cap else ""
         stream_output_tokens = cap.output_tokens if cap else None
+        _is_user_turn = bool(messages) and messages[-1].get("role") == "user"
 
         if trace_builder:
             trace_builder.set_response(
@@ -1404,6 +1426,8 @@ async def _handle_streaming(
                     session_goal=session_goal,
                     trace_builder=trace_builder,
                     promotion_service=getattr(request.app.state, "promotion_service", None),
+                    is_user_turn=_is_user_turn,
+                    response_finish_reason=cap.finish_reason if cap else None,
                 )
             except Exception:
                 logger.warning("streaming_extraction_finalize_failed", exc_info=True)
@@ -1474,6 +1498,9 @@ async def _handle_non_streaming(
             request_preview=body[:500].decode("utf-8", errors="replace") if isinstance(body, bytes) else str(body)[:500],
         )
 
+    # Predictive gate inputs for background curator pass
+    _ns_is_user_turn = bool(messages) and messages[-1].get("role") == "user"
+
     # Check for recall tool call interception via the shared helper.
     # This handles up to 2 recall rounds consistently with the streaming path.
     recall_result = None
@@ -1540,6 +1567,8 @@ async def _handle_non_streaming(
                         session_goal=session_goal,
                         trace_builder=trace_builder,
                         promotion_service=getattr(request.app.state, "promotion_service", None),
+                        is_user_turn=_ns_is_user_turn,
+                        response_finish_reason=_extract_finish_reason(final_data),
                     )
         except Exception as e:
             logger.warning("recall_interception_failed", session_id=session_id, error=str(e), exc_info=True)
@@ -1602,6 +1631,8 @@ async def _handle_non_streaming(
                         session_goal=session_goal,
                         trace_builder=trace_builder,
                         promotion_service=getattr(request.app.state, "promotion_service", None),
+                        is_user_turn=_ns_is_user_turn,
+                        response_finish_reason=_extract_finish_reason(final_data),
                     )
 
         except Exception as e:
@@ -1657,6 +1688,8 @@ async def _handle_non_streaming(
                         session_goal=session_goal,
                         trace_builder=trace_builder,
                         promotion_service=getattr(request.app.state, "promotion_service", None),
+                        is_user_turn=_ns_is_user_turn,
+                        response_finish_reason=_extract_finish_reason(final_data),
                     )
 
         except Exception as e:
@@ -1679,6 +1712,7 @@ async def _handle_non_streaming(
         try:
             data = resp.json()
             response_text = _extract_response_text(data)
+            _ns_finish = _extract_finish_reason(data)
 
             if response_text:
                 background_tasks.add_task(
@@ -1691,6 +1725,8 @@ async def _handle_non_streaming(
                     session_goal=session_goal,
                     trace_builder=trace_builder,
                     promotion_service=getattr(request.app.state, "promotion_service", None),
+                    is_user_turn=_ns_is_user_turn,
+                    response_finish_reason=_ns_finish,
                 )
         except Exception as e:
             logger.warning("non_streaming_extraction_setup_failed", error=str(e))
@@ -2010,6 +2046,8 @@ async def _run_extraction(
     session_goal: str | None = None,
     trace_builder: TraceBuilder | None = None,
     promotion_service: object | None = None,
+    is_user_turn: bool = True,
+    response_finish_reason: str | None = None,
 ) -> None:
     """Run fact extraction and store results in graph. Best-effort, non-blocking.
 
@@ -2024,7 +2062,10 @@ async def _run_extraction(
     successful storage.
 
     After extraction completes, triggers the background curator pass (if enabled)
-    so the next inline pass has a pre-built SessionBriefing.
+    so the next inline pass has a pre-built SessionBriefing. The background pass
+    is only triggered on user turns where the response finished with text (not
+    tool calls), since that's when the user is reading/thinking and there's
+    idle time before the next request.
     """
     from archolith_proxy.proxy.locks import get_session_lock
 
@@ -2396,6 +2437,12 @@ async def _run_extraction(
     # --- Trigger background curator pass (two-pass mode) ---
     # Runs after extraction completes so the graph has fresh data.
     # Fire-and-forget as an asyncio.Task — never blocks the response.
+    # Predictive gate: only fire on user turns where the response ended with
+    # text (finish_reason != "tool_calls"). Tool-call responses mean the agent
+    # will immediately continue with an agent-solo turn, leaving no idle window.
+    if not is_user_turn or response_finish_reason == "tool_calls":
+        return
+
     try:
         _bg_settings = get_settings()
         if _bg_settings.background_pass_enabled and _bg_settings.curator_enabled and session_id:
@@ -2407,7 +2454,8 @@ async def _run_extraction(
                     break
             if _bg_user_msg:
                 from archolith_proxy.curator import run_background_pass
-                asyncio.create_task(
+                from archolith_proxy.curator.state import swap_background_task
+                _bg_task = asyncio.create_task(
                     run_background_pass(
                         session_id=session_id,
                         turn_number=turn_number,
@@ -2416,6 +2464,7 @@ async def _run_extraction(
                         messages=messages,
                     )
                 )
+                swap_background_task(session_id, _bg_task)
                 logger.debug("background_pass_triggered", session_id=session_id, turn=turn_number)
     except Exception:
         logger.debug("background_pass_trigger_failed", session_id=session_id, exc_info=True)

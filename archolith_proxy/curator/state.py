@@ -15,6 +15,7 @@ from the graph/cache backend anyway.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 
@@ -84,3 +85,31 @@ def is_briefing_fresh(session_id: str, current_turn: int) -> bool:
 def clear_briefing(session_id: str) -> None:
     """Remove cached briefing for a session."""
     _briefing_cache.pop(session_id, None)
+
+
+# ---------------------------------------------------------------------------
+# Background pass task guard — one in-flight per session
+# ---------------------------------------------------------------------------
+
+_bg_tasks: dict[str, asyncio.Task] = {}
+
+
+def swap_background_task(session_id: str, task: asyncio.Task) -> None:
+    """Register a new background pass task, cancelling any in-flight one.
+
+    Ensures at most one background pass runs per session at a time.
+    Cancelled tasks see ``CancelledError`` and exit cleanly.
+    """
+    old = _bg_tasks.pop(session_id, None)
+    if old is not None and not old.done():
+        old.cancel()
+
+    _bg_tasks[session_id] = task
+    task.add_done_callback(lambda t: _bg_tasks.pop(session_id, None))
+
+
+def cancel_background_task(session_id: str) -> None:
+    """Cancel the in-flight background pass for a session, if any."""
+    task = _bg_tasks.pop(session_id, None)
+    if task is not None and not task.done():
+        task.cancel()

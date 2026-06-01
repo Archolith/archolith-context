@@ -239,3 +239,33 @@ def reset_settings() -> None:
     """Reset the cached settings — used in tests."""
     global _settings
     _settings = None
+
+
+# Fields excluded from config snapshots (secrets, connection strings, paths
+# that leak host info, pricing constants that don't affect proxy behavior).
+_SNAPSHOT_EXCLUDE = frozenset({
+    "upstream_api_key", "extractor_api_key", "embedding_api_key",
+    "curator_api_key", "session_neo4j_password", "memory_api_key",
+    "admin_token",
+    "upstream_base_url", "extractor_base_url", "embedding_base_url",
+    "curator_base_url", "session_neo4j_uri", "session_neo4j_database",
+    "session_neo4j_user", "memory_api_url",
+    "ladybug_db_path", "trace_dir", "memory_engines_json",
+    "pricing_input_per_million", "pricing_input_cached_per_million",
+    "pricing_output_per_million",
+})
+
+
+def snapshot_config() -> dict[str, object]:
+    """Return a dict of active feature flags and key thresholds.
+
+    Excludes secrets, connection URIs, and pricing constants.  Intended for
+    persisting in the trace so session grading can reconstruct which proxy
+    features were enabled.
+    """
+    settings = get_settings()
+    return {
+        k: v
+        for k, v in settings.model_dump().items()
+        if k not in _SNAPSHOT_EXCLUDE
+    }

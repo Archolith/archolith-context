@@ -76,6 +76,27 @@ async def run_background_pass(
     if not settings.background_pass_enabled or not settings.curator_enabled:
         return
 
+    try:
+        await _run_background_pass_inner(
+            settings, session_id, turn_number, user_message, session_goal, messages,
+        )
+    except asyncio.CancelledError:
+        logger.info("background_pass_cancelled", session_id=session_id, turn=turn_number,
+                     reason="superseded_by_next_turn")
+        return
+
+
+async def _run_background_pass_inner(
+    settings,
+    session_id: str,
+    turn_number: int,
+    user_message: str,
+    session_goal: str | None,
+    messages: list[dict],
+) -> None:
+    """Inner body of run_background_pass — separated so the outer function
+    can catch CancelledError at any await point (debounce, LLM call, etc.)."""
+
     # Debounce: wait for extraction to finish so the graph has fresh data
     debounce_s = settings.background_pass_debounce_ms / 1000
     await asyncio.sleep(debounce_s)
@@ -132,8 +153,7 @@ async def run_background_pass(
                      budget_ms=settings.background_pass_latency_budget_ms)
         return
     except asyncio.CancelledError:
-        logger.info("background_pass_cancelled", session_id=session_id, turn=turn_number)
-        return
+        raise  # Let outer handler in run_background_pass log with reason
     except Exception:
         logger.warning("background_pass_failed", session_id=session_id, turn=turn_number, exc_info=True)
         return

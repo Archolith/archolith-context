@@ -132,6 +132,15 @@ class TurnTrace(BaseModel):
     briefing_chars: int = 0                   # Total chars in the formatted briefing prompt
     briefing_files: int = 0                   # Number of pre-fetched files in briefing
 
+    # Agent-solo compression breakdown — populated when assembly_mode == "agent_solo_compressed"
+    solo_strategies: list[str] = Field(default_factory=list)  # e.g. ["shrink", "dedup", "curator_cache"]
+    solo_chars_saved_shrink: int = 0      # Strategy A: per-result shrink
+    solo_chars_saved_dedup: int = 0       # Strategy B: byte-identical dedup
+    solo_chars_saved_middle: int = 0      # Strategy C: compressible middle-turn filter
+    solo_chars_saved_compact: int = 0     # Strategy D: compact
+    solo_chars_saved_curator: int = 0     # Curator prefix cache reuse
+    solo_chars_saved_total: int = 0       # Sum of all strategies
+
 
 class SessionTraceSummary(BaseModel):
     """Aggregated view of a session's trace history."""
@@ -162,3 +171,6 @@ class SessionTraceSummary(BaseModel):
 
     # Harness environment metadata (extracted from system prompt <env> block)
     harness_env: dict[str, str] = Field(default_factory=dict)
+
+    # Proxy config snapshot — feature flags and key thresholds at session start
+    proxy_config: dict[str, object] = Field(default_factory=dict)

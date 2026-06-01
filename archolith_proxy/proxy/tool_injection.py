@@ -17,7 +17,7 @@ Architecture:
 4. Strip internal tool artifacts from the final response
 
 Gated behind SESSION_RECALL_TOOL_ENABLED=true (default false).
-Non-streaming path only for now; streaming interception is Phase 5b.
+Both streaming and non-streaming interception are implemented.
 
 Requires:
 - Step 6: embedding-driven retrieval (for meaningful results)

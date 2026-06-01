@@ -203,6 +203,7 @@ class TraceStore:
                 total_recalls=total_recalls,
                 max_user_turns=max((t.user_turn_count for t in turns), default=0),
                 harness_env=self._session_meta.get(session_id, {}).get("harness_env", {}),
+                proxy_config=self._session_meta.get(session_id, {}).get("proxy_config", {}),
             )
 
     async def list_sessions(self) -> list[SessionTraceSummary]:
@@ -245,6 +246,7 @@ class TraceStore:
                     total_recalls=sum(1 for t in turns if t.recall_used),
                     max_user_turns=max((t.user_turn_count for t in turns), default=0),
                     harness_env=self._session_meta.get(session_id, {}).get("harness_env", {}),
+                    proxy_config=self._session_meta.get(session_id, {}).get("proxy_config", {}),
                 ))
             return summaries
 

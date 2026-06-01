@@ -149,6 +149,16 @@ class TraceBuilder:
     def set_fallback_reason(self, reason: str) -> None:
         self._data["fallback_reason"] = reason
 
+    def set_solo_stats(self, stats: dict) -> None:
+        """Record agent-solo compression strategy breakdown for trace inspection."""
+        self._data["solo_strategies"] = stats.get("strategies_applied", [])
+        self._data["solo_chars_saved_shrink"] = stats.get("chars_saved_shrink", 0)
+        self._data["solo_chars_saved_dedup"] = stats.get("chars_saved_dedup", 0)
+        self._data["solo_chars_saved_middle"] = stats.get("chars_saved_middle", 0)
+        self._data["solo_chars_saved_compact"] = stats.get("chars_saved_compact", 0)
+        self._data["solo_chars_saved_curator"] = stats.get("chars_saved_curator_cache", 0)
+        self._data["solo_chars_saved_total"] = stats.get("total_chars_saved", 0)
+
     def set_curator_info(
         self,
         retained_turns: list[int] | None = None,
