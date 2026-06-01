@@ -77,21 +77,32 @@ def strip_dsml_artifacts(text: str) -> str:
     return text.rstrip()
 
 
+def _get_encoder():
+    """Return a cached tiktoken encoder."""
+    import tiktoken
+    return tiktoken.get_encoding("cl100k_base")
+
+
+def _estimate_content_tokens(content) -> int:
+    """Estimate tokens for a single message content value (str or list)."""
+    enc = _get_encoder()
+    if isinstance(content, list):
+        return sum(
+            len(enc.encode(part.get("text", "")))
+            for part in content
+            if isinstance(part, dict)
+        )
+    if isinstance(content, str):
+        return len(enc.encode(content))
+    return 0
+
+
 def estimate_input_tokens(messages: list[dict]) -> int:
     """Estimate total input tokens using tiktoken cl100k_base with 10% margin + 500 floor."""
-    import tiktoken
-
-    enc = tiktoken.get_encoding("cl100k_base")
-    total_tokens = 0
-    for msg in messages:
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            # Multi-part content
-            for part in content:
-                if isinstance(part, dict):
-                    total_tokens += len(enc.encode(part.get("text", "")))
-        elif isinstance(content, str):
-            total_tokens += len(enc.encode(content))
+    total_tokens = sum(
+        _estimate_content_tokens(msg.get("content", ""))
+        for msg in messages
+    )
     with_margin = int(total_tokens * 1.10)
     return max(with_margin, 500)
 
@@ -434,6 +445,20 @@ def _enforce_token_ceiling(
 
     result = list(messages)
 
+    # Track running token estimate incrementally instead of re-tokenizing
+    # the entire array on every compression (was O(n²), now O(n)).
+    running_tokens = current
+
+    def _replace_content(idx: int, new_content: str) -> None:
+        """Swap content at idx, adjusting the running token estimate."""
+        nonlocal running_tokens
+        old = result[idx].get("content", "") or ""
+        old_toks = _estimate_content_tokens(old)
+        new_toks = _estimate_content_tokens(new_content)
+        result[idx] = {**result[idx], "content": new_content}
+        # Adjust within the 1.10× margin used by estimate_input_tokens
+        running_tokens += int((new_toks - old_toks) * 1.10)
+
     # Extract the system context block for dedup detection
     context_block = ""
     for m in result:
@@ -455,7 +480,7 @@ def _enforce_token_ceiling(
     # Preserved tools (read, artifact_read, cat, etc.) contain reference content
     # the model may need verbatim — skip them in this phase.
     for i in compress_order:
-        if estimate_input_tokens(result) <= max_tokens:
+        if running_tokens <= max_tokens:
             break
         msg = result[i]
         if msg.get("role") != "tool":
@@ -467,17 +492,17 @@ def _enforce_token_ceiling(
         if not isinstance(content, str) or len(content) <= _CEILING_COMPRESS_CHARS:
             continue
         if _content_already_in_context(content, context_block):
-            result[i] = {**msg, "content": _dedup_tool_result(content)}
+            _replace_content(i, _dedup_tool_result(content))
             dedup_count += 1
         else:
-            result[i] = {**msg, "content": _compress_tool_result_ceiling(content)}
+            _replace_content(i, _compress_tool_result_ceiling(content))
 
     # Phase 1b: if still over, compress preserved tool results as last resort —
     # but use a larger budget to retain more reference content.
     _PRESERVED_CEILING_CHARS = 3000
-    if estimate_input_tokens(result) > max_tokens:
+    if running_tokens > max_tokens:
         for i in compress_order:
-            if estimate_input_tokens(result) <= max_tokens:
+            if running_tokens <= max_tokens:
                 break
             msg = result[i]
             if msg.get("role") != "tool":
@@ -486,7 +511,7 @@ def _enforce_token_ceiling(
             if not isinstance(content, str) or len(content) <= _PRESERVED_CEILING_CHARS:
                 continue
             if _content_already_in_context(content, context_block):
-                result[i] = {**msg, "content": _dedup_tool_result(content)}
+                _replace_content(i, _dedup_tool_result(content))
                 dedup_count += 1
             else:
                 # Keep 3x more content for preserved tools than compressible ones
@@ -495,19 +520,19 @@ def _enforce_token_ceiling(
                 if nl > _PRESERVED_CEILING_CHARS // 2:
                     preview = preview[:nl]
                 omitted = len(content) - len(preview)
-                result[i] = {**msg, "content": f"{preview}\n[...{omitted} chars truncated by context ceiling...]"}
+                _replace_content(i, f"{preview}\n[...{omitted} chars truncated by context ceiling...]")
 
     # Phase 2: if still over, compress assistant messages (least relevant first)
-    if estimate_input_tokens(result) > max_tokens:
+    if running_tokens > max_tokens:
         for i in compress_order:
-            if estimate_input_tokens(result) <= max_tokens:
+            if running_tokens <= max_tokens:
                 break
             msg = result[i]
             if msg.get("role") != "assistant":
                 continue
             content = msg.get("content", "") or ""
             if isinstance(content, str) and len(content) > _CEILING_COMPRESS_CHARS:
-                result[i] = {**msg, "content": _compress_assistant_message(content, _CEILING_COMPRESS_CHARS)}
+                _replace_content(i, _compress_assistant_message(content, _CEILING_COMPRESS_CHARS))
 
     final_tokens = estimate_input_tokens(result)
     logger.info(
