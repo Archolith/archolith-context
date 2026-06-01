@@ -159,3 +159,6 @@ class SessionTraceSummary(BaseModel):
 
     # User turns (max across all recorded turns = current user turn count)
     max_user_turns: int = 0
+
+    # Harness environment metadata (extracted from system prompt <env> block)
+    harness_env: dict[str, str] = Field(default_factory=dict)

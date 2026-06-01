@@ -144,6 +144,68 @@ def compute_fingerprint(system_prompt: str, first_user_message: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+# ── Harness environment extraction ───────────────────────────────────────────
+
+_ENV_PATTERN = re.compile(
+    r"<env>\s*(.*?)\s*</env>", re.DOTALL | re.IGNORECASE,
+)
+_ENV_FIELD = re.compile(r"^\s*(.+?):\s*(.+)$", re.MULTILINE)
+
+# Harness identity: first line of the system prompt that names the agent
+_HARNESS_PATTERN = re.compile(
+    r"You are (\w[\w\s.]*?)(?:,|\.|—)", re.IGNORECASE,
+)
+
+
+def extract_harness_env(messages: list[dict]) -> dict[str, str]:
+    """Extract structured metadata from the harness system prompt.
+
+    Parses the ``<env>`` block injected by harnesses like OpenCode and
+    Claude Code, plus the harness identity line.  Returns a dict with
+    normalised keys (lowercase, underscores).  Keys may include:
+
+    - ``harness``: harness name (e.g. "OpenCode", "Claude Code")
+    - ``working_directory``: absolute path of the current project
+    - ``workspace_root``: absolute path of the workspace root
+    - ``platform``: OS platform (e.g. "win32", "linux")
+    - ``is_git_repo``: "yes" or "no"
+    - ``model``: model name from the env block
+
+    Returns an empty dict when no system message or ``<env>`` is found.
+    """
+    system_content = ""
+    for msg in messages:
+        if msg.get("role") == "system":
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    p.get("text", "") for p in content if isinstance(p, dict)
+                )
+            system_content = content
+            break
+
+    if not system_content:
+        return {}
+
+    result: dict[str, str] = {}
+
+    # Harness identity
+    m = _HARNESS_PATTERN.search(system_content[:500])
+    if m:
+        result["harness"] = m.group(1).strip()
+
+    # <env> block
+    env_match = _ENV_PATTERN.search(system_content)
+    if env_match:
+        env_text = env_match.group(1)
+        for fm in _ENV_FIELD.finditer(env_text):
+            key = fm.group(1).strip().lower().replace(" ", "_").replace("'", "")
+            value = fm.group(2).strip()
+            result[key] = value
+
+    return result
+
+
 async def _reconcile_turn_number(session_id: str) -> None:
     """Reconcile the DB turn number with trace history after a restart.
 

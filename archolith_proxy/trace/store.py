@@ -56,6 +56,8 @@ class TraceStore:
         # Track insertion order for LRU eviction
         self._session_order: list[str] = []
         self._total_traces = 0
+        # Per-session metadata (harness_env, etc.) — set once on session creation
+        self._session_meta: dict[str, dict[str, object]] = {}
         # Optional disk persistence
         self._trace_dir = Path(trace_dir) if trace_dir else None
         if self._trace_dir:
@@ -110,6 +112,22 @@ class TraceStore:
                     f.write(line)
             except Exception:
                 logger.warning("trace_disk_write_failed", session_id=session_id, exc_info=True)
+
+    def set_session_metadata(
+        self, session_id: str, key: str, value: object,
+    ) -> None:
+        """Store per-session metadata (e.g. harness_env).
+
+        Non-async — called from the request path before any awaits.
+        """
+        meta = self._session_meta.setdefault(session_id, {})
+        meta[key] = value
+
+    def get_session_metadata(
+        self, session_id: str, key: str,
+    ) -> object | None:
+        """Retrieve per-session metadata by key."""
+        return self._session_meta.get(session_id, {}).get(key)
 
     async def get_turn(self, turn_id: str) -> TurnTrace | None:
         """Look up a single turn by its turn_id."""
@@ -184,6 +202,7 @@ class TraceStore:
                 total_invalidations_attempted=total_invalidations,
                 total_recalls=total_recalls,
                 max_user_turns=max((t.user_turn_count for t in turns), default=0),
+                harness_env=self._session_meta.get(session_id, {}).get("harness_env", {}),
             )
 
     async def list_sessions(self) -> list[SessionTraceSummary]:
@@ -225,6 +244,7 @@ class TraceStore:
                     total_invalidations_attempted=sum(t.invalidations_attempted for t in turns),
                     total_recalls=sum(1 for t in turns if t.recall_used),
                     max_user_turns=max((t.user_turn_count for t in turns), default=0),
+                    harness_env=self._session_meta.get(session_id, {}).get("harness_env", {}),
                 ))
             return summaries
 

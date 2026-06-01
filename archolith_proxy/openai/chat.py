@@ -416,7 +416,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             turn_number = await get_backend().get_turn_number(session_id)
             logger.debug("session_resolved", session_id=session_id, turn=turn_number, is_new=is_new)
 
-            # Set initial session goal from first user message on new sessions
+            # Set initial session goal + extract harness env on new sessions
             if is_new:
                 first_user_msg = ""
                 for msg in messages_raw:
@@ -437,6 +437,19 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                         await broadcast_session_event(session_id, "session_created", goal=goal)
                     except Exception as e:
                         logger.warning("session_goal_set_failed", session_id=session_id, error=str(e))
+
+                # Extract harness environment metadata from system prompt
+                from archolith_proxy.proxy.session import extract_harness_env
+                harness_env = extract_harness_env(messages_raw)
+                if harness_env:
+                    trace_store = get_trace_store()
+                    trace_store.set_session_metadata(session_id, "harness_env", harness_env)
+                    logger.info(
+                        "harness_env_extracted",
+                        session_id=session_id,
+                        harness=harness_env.get("harness", "unknown"),
+                        workspace=harness_env.get("workspace_root_folder", ""),
+                    )
 
             # Bind session context for request-level logging middleware
             structlog.contextvars.bind_contextvars(
