@@ -57,9 +57,25 @@ class TraceBuilder:
         self._data["user_turn_count"] = user_turn_count
         self._data["is_user_turn"] = is_user_turn
 
-    def set_original_messages(self, messages: list[dict]) -> None:
-        # Deep copy to avoid mutation issues; truncate very long messages
-        self._data["original_messages"] = _truncate_messages(messages)
+    def set_original_messages(
+        self,
+        messages: list[dict],
+        *,
+        is_user_turn: bool = True,
+    ) -> None:
+        """Store original messages in the trace.
+
+        On agent-solo turns (is_user_turn=False), skip the full message array
+        and store only the count + last two messages.  The full array is
+        monotonically growing and dominates trace storage (~99%); agent-solo
+        turns just append 2-3 messages to the previous state.
+        """
+        if not is_user_turn and len(messages) > 4:
+            # Store lightweight summary: count + last 2 messages for debugging
+            self._data["original_messages"] = _truncate_messages(messages[-2:])
+            self._data["original_messages_count"] = len(messages)
+        else:
+            self._data["original_messages"] = _truncate_messages(messages)
 
     def set_rewritten_messages(self, messages: list[dict]) -> None:
         self._data["rewritten_messages"] = _truncate_messages(messages)

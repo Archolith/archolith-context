@@ -511,7 +511,9 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         user_turn_count=user_turn_count,
         is_user_turn=is_user_turn,
     )
-    trace_builder.set_original_messages(body.get("messages", []))
+    trace_builder.set_original_messages(
+        body.get("messages", []), is_user_turn=is_user_turn,
+    )
 
     # Live stream: broadcast incoming request
     await broadcast_request(
