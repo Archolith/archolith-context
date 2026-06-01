@@ -450,23 +450,52 @@ def _enforce_token_ceiling(
 
     dedup_count = 0
 
-    # Phase 1: compress tool results (least relevant first)
+    # Phase 1a: compress COMPRESSIBLE tool results (least relevant first)
+    # Compressible tools (search, grep, bash, etc.) are safe to truncate.
+    # Preserved tools (read, artifact_read, cat, etc.) contain reference content
+    # the model may need verbatim — skip them in this phase.
     for i in compress_order:
         if estimate_input_tokens(result) <= max_tokens:
             break
         msg = result[i]
         if msg.get("role") != "tool":
             continue
+        tool_name = (msg.get("name") or "").lower()
+        if not _is_compressible_tool(tool_name):
+            continue  # Preserve file reads, artifact reads, etc.
         content = msg.get("content", "") or ""
         if not isinstance(content, str) or len(content) <= _CEILING_COMPRESS_CHARS:
             continue
-        # Dedup: if the tool result's key content is already in the context block,
-        # compress much more aggressively (just a pointer, not a preview)
         if _content_already_in_context(content, context_block):
             result[i] = {**msg, "content": _dedup_tool_result(content)}
             dedup_count += 1
         else:
             result[i] = {**msg, "content": _compress_tool_result_ceiling(content)}
+
+    # Phase 1b: if still over, compress preserved tool results as last resort —
+    # but use a larger budget to retain more reference content.
+    _PRESERVED_CEILING_CHARS = 3000
+    if estimate_input_tokens(result) > max_tokens:
+        for i in compress_order:
+            if estimate_input_tokens(result) <= max_tokens:
+                break
+            msg = result[i]
+            if msg.get("role") != "tool":
+                continue
+            content = msg.get("content", "") or ""
+            if not isinstance(content, str) or len(content) <= _PRESERVED_CEILING_CHARS:
+                continue
+            if _content_already_in_context(content, context_block):
+                result[i] = {**msg, "content": _dedup_tool_result(content)}
+                dedup_count += 1
+            else:
+                # Keep 3x more content for preserved tools than compressible ones
+                preview = content[:_PRESERVED_CEILING_CHARS]
+                nl = preview.rfind("\n")
+                if nl > _PRESERVED_CEILING_CHARS // 2:
+                    preview = preview[:nl]
+                omitted = len(content) - len(preview)
+                result[i] = {**msg, "content": f"{preview}\n[...{omitted} chars truncated by context ceiling...]"}
 
     # Phase 2: if still over, compress assistant messages (least relevant first)
     if estimate_input_tokens(result) > max_tokens:
