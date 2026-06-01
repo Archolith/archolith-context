@@ -770,22 +770,40 @@ class LadybugBackend:
 
         # Suffix fallback: normalize separators and check if any stored path ends
         # with the query path (handles absolute-stored vs relative-queried case).
+        # When multiple paths match the suffix, prefer the shortest stored path
+        # (fewest extra segments).  If two matches are equally specific, return
+        # None rather than guessing wrong.
         norm_query = path.replace("\\", "/").lstrip("/")
         if not norm_query:
             return None
+        suffix = "/" + norm_query
         all_files = await self.list_cached_files(session_id)
+        candidates: list[tuple[int, dict]] = []
         for f in all_files:
             stored = f.get("path", "").replace("\\", "/")
-            if stored == norm_query or stored.endswith("/" + norm_query):
-                full_rows = await self._execute(
-                    """
-                    MATCH (fc:FileContent {session_id: $session_id, path: $stored_path})
-                    RETURN fc.content AS content, fc.sha256 AS sha256, fc.line_count AS line_count
-                    """,
-                    {"session_id": session_id, "stored_path": f["path"]},
-                )
-                return full_rows[0] if full_rows else None
-        return None
+            if stored == norm_query or stored.endswith(suffix):
+                candidates.append((len(stored), f))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda t: t[0])  # shortest path first
+        # Ambiguous: two+ matches at the same path length → refuse to guess
+        if len(candidates) > 1 and candidates[0][0] == candidates[1][0]:
+            logger.warning(
+                "file_recall_ambiguous",
+                session_id=session_id,
+                query=path,
+                matches=[c[1].get("path") for c in candidates],
+            )
+            return None
+        best = candidates[0][1]
+        full_rows = await self._execute(
+            """
+            MATCH (fc:FileContent {session_id: $session_id, path: $stored_path})
+            RETURN fc.content AS content, fc.sha256 AS sha256, fc.line_count AS line_count
+            """,
+            {"session_id": session_id, "stored_path": best["path"]},
+        )
+        return full_rows[0] if full_rows else None
 
     async def get_file_lines(self, session_id: str, path: str, start: int, end: int) -> str | None:
         """Retrieve a line range from cached file content (1-indexed, inclusive).
