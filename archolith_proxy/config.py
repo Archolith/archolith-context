@@ -126,6 +126,11 @@ class Settings(BaseSettings):
     file_cache_enabled: bool = True
     file_cache_max_file_bytes: int = 500_000  # skip caching files larger than this
 
+    # Maximum active facts fetched for dedup, assembly, and recall.
+    # Higher values improve dedup coverage in long sessions but increase
+    # per-turn latency.  Needs a typed-pool redesign for proper fix.
+    fact_pool_limit: int = 200
+
     # Workspace allowlist for prefetch_file / get_file_lines.
     # Comma-separated directory prefixes the curator LLM may read.
     # Empty list = unrestricted (backward compat).
