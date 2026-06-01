@@ -70,20 +70,38 @@ async def run_background_pass(
     to the in-memory cache for the next inline pass to consume.
 
     Never raises — errors are logged and the briefing is simply not written.
+    Records a BackgroundPassTrace for dashboard visibility.
     """
     settings = get_settings()
 
     if not settings.background_pass_enabled or not settings.curator_enabled:
         return
 
+    from archolith_proxy.models.dtos import BackgroundPassTrace
+    from archolith_proxy.trace.store import get_trace_store
+
+    bp_trace = BackgroundPassTrace(
+        session_id=session_id,
+        trigger_turn=turn_number,
+    )
+
     try:
         await _run_background_pass_inner(
             settings, session_id, turn_number, user_message, session_goal, messages,
+            bp_trace=bp_trace,
         )
     except asyncio.CancelledError:
+        bp_trace.outcome = "cancelled"
+        bp_trace.cancel_reason = "superseded_by_next_turn"
+        bp_trace.completed_at = time.time()
+        bp_trace.latency_ms = (time.time() - bp_trace.started_at) * 1000
         logger.info("background_pass_cancelled", session_id=session_id, turn=turn_number,
                      reason="superseded_by_next_turn")
-        return
+    finally:
+        try:
+            await get_trace_store().record_bg_pass(bp_trace)
+        except Exception:
+            logger.warning("bg_pass_trace_record_failed", session_id=session_id, exc_info=True)
 
 
 async def _run_background_pass_inner(
@@ -93,12 +111,15 @@ async def _run_background_pass_inner(
     user_message: str,
     session_goal: str | None,
     messages: list[dict],
+    *,
+    bp_trace,
 ) -> None:
     """Inner body of run_background_pass — separated so the outer function
     can catch CancelledError at any await point (debounce, LLM call, etc.)."""
 
     # Debounce: wait for extraction to finish so the graph has fresh data
     debounce_s = settings.background_pass_debounce_ms / 1000
+    bp_trace.debounce_ms = settings.background_pass_debounce_ms
     await asyncio.sleep(debounce_s)
 
     # Resolve model/url/key
@@ -107,6 +128,9 @@ async def _run_background_pass_inner(
     api_key = settings.curator_api_key or settings.extractor_api_key
 
     if not api_key:
+        bp_trace.outcome = "failed"
+        bp_trace.failure_detail = "no_api_key"
+        bp_trace.completed_at = time.time()
         return
 
     # Pre-fetch checkpoint
@@ -149,18 +173,38 @@ async def _run_background_pass_inner(
             timeout=budget_s,
         )
     except asyncio.TimeoutError:
+        bp_trace.outcome = "timeout"
+        bp_trace.latency_ms = (time.monotonic() - t0) * 1000
+        bp_trace.completed_at = time.time()
         logger.info("background_pass_timeout", session_id=session_id, turn=turn_number,
                      budget_ms=settings.background_pass_latency_budget_ms)
         return
     except asyncio.CancelledError:
-        raise  # Let outer handler in run_background_pass log with reason
-    except Exception:
+        raise  # Let outer handler in run_background_pass record trace
+    except Exception as exc:
+        bp_trace.outcome = "failed"
+        bp_trace.failure_detail = str(exc)[:500]
+        bp_trace.latency_ms = (time.monotonic() - t0) * 1000
+        bp_trace.completed_at = time.time()
         logger.warning("background_pass_failed", session_id=session_id, turn=turn_number, exc_info=True)
         return
 
     latency_ms = (time.monotonic() - t0) * 1000
 
+    # Capture tool log for trace
+    if _bg_tool_log:
+        bp_trace.tool_log = [
+            {"tool": tc.tool, "status": tc.status, "args": tc.args,
+             "result_preview": (tc.result_preview or "")[:200],
+             "error": tc.error or ""}
+            for tc in _bg_tool_log
+        ]
+        bp_trace.tool_calls_count = len(_bg_tool_log)
+
     if result is None:
+        bp_trace.outcome = "no_result"
+        bp_trace.latency_ms = latency_ms
+        bp_trace.completed_at = time.time()
         logger.info("background_pass_no_result", session_id=session_id, turn=turn_number)
         return
 
@@ -175,6 +219,14 @@ async def _run_background_pass_inner(
     )
 
     cache_briefing(session_id, briefing)
+
+    # Finalize trace
+    bp_trace.outcome = "success"
+    bp_trace.latency_ms = latency_ms
+    bp_trace.completed_at = time.time()
+    bp_trace.files_fetched = len(briefing.files)
+    bp_trace.context_chars = len(result.context_text)
+    bp_trace.briefing_cached = True
 
     try:
         from archolith_proxy.metrics import record_metric

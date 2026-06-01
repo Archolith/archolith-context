@@ -142,6 +142,40 @@ class TurnTrace(BaseModel):
     solo_chars_saved_total: int = 0       # Sum of all strategies
 
 
+class BackgroundPassTrace(BaseModel):
+    """Trace record for a single background curator pass.
+
+    Captures timing, outcome, and tool usage for the background pass
+    that runs after a user turn completes. Displayed in the dashboard
+    parallel lane alongside the turn timeline.
+    """
+
+    record_type: str = "bg_pass"  # Discriminator for JSONL persistence
+
+    # Identity
+    pass_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:16])
+    session_id: str = ""
+    trigger_turn: int = 0  # Turn number that triggered this pass
+
+    # Timing
+    started_at: float = Field(default_factory=time.time)
+    completed_at: float | None = None
+    latency_ms: float = 0.0
+    debounce_ms: float = 0.0  # How long the debounce sleep lasted
+
+    # Outcome
+    outcome: str = "pending"  # success | cancelled | timeout | failed | no_result
+    cancel_reason: str = ""   # e.g. "superseded_by_next_turn"
+    failure_detail: str = ""  # Exception message on failure
+
+    # Work done
+    tool_calls_count: int = 0
+    tool_log: list[dict] = Field(default_factory=list)
+    files_fetched: int = 0
+    context_chars: int = 0     # Length of context block produced
+    briefing_cached: bool = False  # Whether a SessionBriefing was written
+
+
 class SessionTraceSummary(BaseModel):
     """Aggregated view of a session's trace history."""
 

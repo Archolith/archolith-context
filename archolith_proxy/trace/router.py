@@ -105,10 +105,12 @@ async def trace_get_session(session_id: str, limit: int = 200, offset: int = 0) 
         pass  # Non-critical — proceed without goal enrichment
 
     turns = await store.get_session_turns(session_id, limit=limit, offset=offset)
+    bg_passes = await store.get_bg_passes(session_id)
     return {
         "summary": summary.model_dump(),
         "turns": [t.model_dump() for t in turns],
         "turn_count": len(turns),
+        "background_passes": [bp.model_dump() for bp in bg_passes],
     }
 
 

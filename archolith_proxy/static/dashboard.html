@@ -99,6 +99,7 @@
 
   /* Toggle for hiding non-user turns */
   .timeline.user-only .turn-card[data-user-turn="false"] { display: none; }
+  .timeline.user-only .bg-lane .bg-card { display: none; }
   .filter-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; user-select: none; }
   .filter-toggle input { cursor: pointer; }
 
@@ -107,8 +108,56 @@
   .session-header .sid { font-family: var(--mono); font-size: 16px; font-weight: 600; word-break: break-all; }
   .session-header .goal { color: var(--text-dim); font-style: italic; max-width: 600px; }
 
-  /* Turn timeline */
+  /* Turn timeline — two-lane grid (turns left, background passes right) */
   .timeline { position: relative; }
+  .timeline-lanes {
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 0 12px;
+    align-items: start;
+  }
+  .turn-lane { grid-column: 1; }
+  .bg-lane {
+    grid-column: 2;
+    position: sticky;
+    top: 60px;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+    padding: 0 0 8px 0;
+  }
+  .bg-lane-header {
+    font-size: 11px; text-transform: uppercase; color: var(--text-dim);
+    padding: 4px 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 8px;
+    font-weight: 600; letter-spacing: 0.5px;
+  }
+  .bg-card {
+    background: var(--surface); border: 1px solid #d29922; border-radius: 6px;
+    padding: 10px 12px; margin-bottom: 6px; font-size: 12px;
+    border-left: 3px solid #d29922; cursor: pointer; transition: border-color 0.15s;
+  }
+  .bg-card:hover { border-color: #e8b940; }
+  .bg-card.success { border-left-color: var(--green); }
+  .bg-card.cancelled { border-left-color: var(--text-dim); }
+  .bg-card.timeout { border-left-color: var(--red); }
+  .bg-card.failed { border-left-color: var(--red); }
+  .bg-card .bg-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .bg-card .bg-trigger { font-family: var(--mono); font-weight: 700; font-size: 11px; }
+  .bg-card .bg-outcome { font-size: 11px; font-weight: 600; }
+  .bg-card .bg-outcome.success { color: var(--green); }
+  .bg-card .bg-outcome.cancelled { color: var(--text-dim); }
+  .bg-card .bg-outcome.timeout { color: var(--red); }
+  .bg-card .bg-outcome.failed { color: var(--red); }
+  .bg-card .bg-outcome.no_result { color: var(--yellow); }
+  .bg-card .bg-outcome.pending { color: var(--text-dim); }
+  .bg-card .bg-stats { color: var(--text-dim); font-family: var(--mono); font-size: 11px; }
+  .bg-card .bg-detail { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .bg-card.selected .bg-detail { display: block; }
+  .bg-empty { color: var(--text-dim); font-size: 12px; font-style: italic; padding: 12px 0; }
+  @media (max-width: 1024px) {
+    .timeline-lanes { grid-template-columns: 1fr; }
+    .bg-lane { position: static; max-height: none; grid-column: 1; margin-top: 16px; }
+  }
+
   .turn-card {
     background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
     padding: 16px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s;
@@ -196,7 +245,7 @@ const statusBar = document.getElementById('status-bar');
 
 // Track what's been rendered to enable incremental updates
 let currentView = null;   // 'overview' | 'sessions' | 'detail'
-let detailState = { sessionId: null, turnCount: 0, turnIds: new Set() };
+let detailState = { sessionId: null, turnCount: 0, turnIds: new Set(), bgPassIds: new Set() };
 let sessionListState = { sessionIds: new Set(), sessions: [], sortKey: 'last_turn_at', sortDir: 'desc' };
 let overviewBuilt = false;
 
@@ -204,7 +253,7 @@ function route() {
   const hash = location.hash.slice(1) || '/';
   nav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
   // Reset incremental state on navigation
-  detailState = { sessionId: null, turnCount: 0, turnIds: new Set() };
+  detailState = { sessionId: null, turnCount: 0, turnIds: new Set(), bgPassIds: new Set() };
   sessionListState = { sessionIds: new Set(), sessions: [], sortKey: 'last_turn_at', sortDir: 'desc' };
   overviewBuilt = false;
 
@@ -409,6 +458,49 @@ function buildTurnCard(t) {
         ` : ''}
         <div style="margin-top:8px;font-size:11px;color:var(--text-dim);">turn_id: <span class="mono">${escapeHtml(t.turn_id)}</span></div>
       </div>
+    </div>
+  `;
+}
+
+// Build HTML for a background pass card
+function buildBgPassCard(bp) {
+  const outcomeIcon = bp.outcome === 'success' ? '✔' : bp.outcome === 'cancelled' ? '✕' : bp.outcome === 'timeout' ? '⏱' : bp.outcome === 'failed' ? '✗' : '…';
+  const latStr = bp.latency_ms ? `${(bp.latency_ms / 1000).toFixed(1)}s` : '—';
+
+  let detailHtml = '';
+  if (bp.debounce_ms) {
+    detailHtml += `<div>debounce: <span class="mono">${bp.debounce_ms}ms</span></div>`;
+  }
+  if (bp.cancel_reason) {
+    detailHtml += `<div style="color:var(--text-dim)">reason: ${escapeHtml(bp.cancel_reason)}</div>`;
+  }
+  if (bp.failure_detail) {
+    detailHtml += `<div style="color:var(--red)">${escapeHtml(bp.failure_detail.substring(0, 200))}</div>`;
+  }
+  if (bp.tool_log && bp.tool_log.length > 0) {
+    detailHtml += `<div style="margin-top:4px;font-family:var(--mono);font-size:11px;max-height:150px;overflow:auto;">`;
+    bp.tool_log.forEach(tc => {
+      const statusColor = tc.status === 'ok' ? 'var(--green)' : tc.status === 'soft_error' ? 'var(--yellow)' : 'var(--red)';
+      const argsStr = tc.args ? Object.entries(tc.args).map(([k,v]) => k+'='+JSON.stringify(v).substring(0,40)).join(', ') : '';
+      detailHtml += `<div><span style="color:${statusColor}">[${tc.status}]</span> ${escapeHtml(tc.tool)}(${escapeHtml(argsStr)})</div>`;
+    });
+    detailHtml += '</div>';
+  }
+
+  return `
+    <div class="bg-card ${bp.outcome}" data-pass-id="${escapeHtml(bp.pass_id)}" onclick="this.classList.toggle('selected')">
+      <div class="bg-header">
+        <span class="bg-trigger">t${bp.trigger_turn}</span>
+        <span class="bg-outcome ${bp.outcome}">${outcomeIcon} ${bp.outcome}</span>
+        <span class="bg-stats" style="margin-left:auto;">${latStr}</span>
+      </div>
+      <div class="bg-stats">
+        ${bp.tool_calls_count > 0 ? `tools: ${bp.tool_calls_count}` : ''}
+        ${bp.files_fetched > 0 ? ` · files: ${bp.files_fetched}` : ''}
+        ${bp.context_chars > 0 ? ` · ctx: ${fmtTokens(Math.round(bp.context_chars / 3))}` : ''}
+        ${bp.briefing_cached ? ' · <span style="color:var(--green)">briefing ✔</span>' : ''}
+      </div>
+      <div class="bg-detail">${detailHtml}</div>
     </div>
   `;
 }
@@ -794,6 +886,7 @@ async function renderSessionDetail(sessionId) {
     ]);
     const summary = data.summary || {};
     const turns = data.turns || [];
+    const bgPasses = data.background_passes || [];
 
     // First load — full render
     if (detailState.turnCount === 0) {
@@ -875,7 +968,9 @@ async function renderSessionDetail(sessionId) {
         </div>
       `;
 
-      html += `<div class="card"><div class="card-header"><h2>Turn Timeline</h2><label class="filter-toggle"><input type="checkbox" id="user-only-toggle" onchange="document.getElementById('timeline').classList.toggle('user-only', this.checked)"> User turns only</label></div><div class="timeline" id="timeline">`;
+      html += `<div class="card"><div class="card-header"><h2>Turn Timeline</h2><label class="filter-toggle"><input type="checkbox" id="user-only-toggle" onchange="document.getElementById('timeline').classList.toggle('user-only', this.checked)"> User turns only</label></div><div class="timeline" id="timeline"><div class="timeline-lanes">`;
+      // Left lane — turns
+      html += '<div class="turn-lane" id="turn-lane">';
       if (turns.length === 0) {
         html += '<div class="empty">No turns recorded</div>';
       } else {
@@ -884,7 +979,17 @@ async function renderSessionDetail(sessionId) {
           html += buildTurnCard(t);
         });
       }
-      html += '</div></div>';
+      html += '</div>';
+      // Right lane — background passes
+      html += '<div class="bg-lane" id="bg-lane">';
+      html += '<div class="bg-lane-header">Background Passes</div>';
+      if (bgPasses.length === 0) {
+        html += '<div class="bg-empty">No background passes recorded</div>';
+      } else {
+        bgPasses.forEach(bp => { html += buildBgPassCard(bp); });
+      }
+      html += '</div>';
+      html += '</div></div></div>';
 
       content.innerHTML = html;
       detailState.turnCount = turns.length;
@@ -910,9 +1015,9 @@ async function renderSessionDetail(sessionId) {
       patch('recalls', summary.total_recalls || 0);
     }
 
-    // Find new turns and append them
-    const timeline = document.getElementById('timeline');
-    if (timeline && turns.length > detailState.turnCount) {
+    // Find new turns and append them to the turn lane
+    const turnLane = document.getElementById('turn-lane');
+    if (turnLane && turns.length > detailState.turnCount) {
       const newTurns = turns.slice(detailState.turnCount);
       newTurns.forEach(t => {
         if (!detailState.turnIds.has(t.turn_id)) {
@@ -921,7 +1026,7 @@ async function renderSessionDetail(sessionId) {
           wrapper.innerHTML = buildTurnCard(t);
           const card = wrapper.firstElementChild;
           card.style.opacity = '0';
-          timeline.appendChild(card);
+          turnLane.appendChild(card);
           requestAnimationFrame(() => { card.style.transition = 'opacity 0.3s'; card.style.opacity = '1'; });
         }
       });
@@ -929,8 +1034,27 @@ async function renderSessionDetail(sessionId) {
 
       // Auto-scroll only if user is near bottom
       if (!userScrolledUp) {
-        timeline.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        turnLane.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
+    }
+
+    // Find new BG passes and append them to the BG lane
+    const bgLane = document.getElementById('bg-lane');
+    if (bgLane && bgPasses.length > 0) {
+      const existingIds = new Set([...bgLane.querySelectorAll('.bg-card')].map(el => el.dataset.passId));
+      bgPasses.forEach(bp => {
+        if (!existingIds.has(bp.pass_id)) {
+          // Remove the "no passes" placeholder if present
+          const placeholder = bgLane.querySelector('.bg-empty');
+          if (placeholder) placeholder.remove();
+          const wrapper = document.createElement('div');
+          wrapper.innerHTML = buildBgPassCard(bp);
+          const card = wrapper.firstElementChild;
+          card.style.opacity = '0';
+          bgLane.appendChild(card);
+          requestAnimationFrame(() => { card.style.transition = 'opacity 0.3s'; card.style.opacity = '1'; });
+        }
+      });
     }
 
   } catch (e) {

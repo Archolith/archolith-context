@@ -25,7 +25,7 @@ from pathlib import Path
 
 import structlog
 
-from archolith_proxy.models.dtos import SessionTraceSummary, TurnTrace
+from archolith_proxy.models.dtos import BackgroundPassTrace, SessionTraceSummary, TurnTrace
 
 logger = structlog.get_logger()
 
@@ -58,6 +58,8 @@ class TraceStore:
         self._total_traces = 0
         # Per-session metadata (harness_env, etc.) — set once on session creation
         self._session_meta: dict[str, dict[str, object]] = {}
+        # Background pass traces — session_id -> list[BackgroundPassTrace]
+        self._bg_passes: dict[str, list[BackgroundPassTrace]] = defaultdict(list)
         # Optional disk persistence
         self._trace_dir = Path(trace_dir) if trace_dir else None
         if self._trace_dir:
@@ -128,6 +130,30 @@ class TraceStore:
     ) -> object | None:
         """Retrieve per-session metadata by key."""
         return self._session_meta.get(session_id, {}).get(key)
+
+    async def record_bg_pass(self, trace: BackgroundPassTrace) -> None:
+        """Store a background pass trace record.
+
+        Persists to disk as JSONL with record_type="bg_pass" discriminator.
+        """
+        session_id = trace.session_id or "__no_session__"
+        async with self._lock:
+            self._bg_passes[session_id].append(trace)
+
+        if self._trace_dir:
+            try:
+                safe_session = session_id.replace("/", "_").replace("\\", "_")
+                path = self._trace_dir / f"{safe_session}.jsonl"
+                line = trace.model_dump_json() + "\n"
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(line)
+            except Exception:
+                logger.warning("bg_pass_disk_write_failed", session_id=session_id, exc_info=True)
+
+    async def get_bg_passes(self, session_id: str) -> list[BackgroundPassTrace]:
+        """Get all background pass traces for a session."""
+        async with self._lock:
+            return list(self._bg_passes.get(session_id, []))
 
     async def get_turn(self, turn_id: str) -> TurnTrace | None:
         """Look up a single turn by its turn_id."""
@@ -280,11 +306,20 @@ class TraceStore:
                         if not line:
                             continue
                         try:
+                            raw = _json.loads(line)
+
+                            # Route by record_type discriminator
+                            if raw.get("record_type") == "bg_pass":
+                                bp = BackgroundPassTrace.model_validate(raw)
+                                bp_sid = bp.session_id or "__no_session__"
+                                self._bg_passes[bp_sid].append(bp)
+                                loaded += 1
+                                continue
+
                             # Quick pre-check: real trace records always have
                             # "created_at" in the JSON.  Records without it
                             # (e.g. curator failure dumps) get time.time() as
                             # default, poisoning last_turn_at with startup time.
-                            raw = _json.loads(line)
                             if "created_at" not in raw:
                                 continue
                             trace = TurnTrace.model_validate(raw)
