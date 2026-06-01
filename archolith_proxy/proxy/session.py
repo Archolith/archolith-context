@@ -84,7 +84,41 @@ _SANITIZE_PATTERNS = [
     ),
     # JSON tool schema lines (e.g., "\"name\": \"read_file\", ...")
     re.compile(r'(?m)^\s*"(?:name|description|parameters)"\s*:\s*".*?(?:",|"\s*[,}])\s*$'),
+    # ── Dynamic context blocks injected by harnesses ──
+    # These change mid-session (git commits, doc edits, memory writes) and
+    # must be stripped for stable fingerprinting.  Each pattern eats from
+    # its marker through ALL subsequent content until a clearly different
+    # top-level section or EOF, using greedy match to avoid stopping at
+    # internal blank lines within the block.
+    #
+    # Git status / recent commits / active plans — eat to end of prompt
+    # (these are typically the last injected blocks).
+    re.compile(
+        r"(?ms)^(?:git\s*status|gitstatus)\s*[:=].*\Z",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?ms)^Recent commits\s*[:=].*\Z", re.IGNORECASE),
+    re.compile(r"(?ms)^Active plans\s*[:=].*\Z", re.IGNORECASE),
+    # Specific sub-fields within git blocks (branch, status lines)
+    re.compile(r"(?m)^Current branch\s*[:=].*$", re.IGNORECASE),
+    re.compile(r"(?m)^Main branch\s*[:=].*$", re.IGNORECASE),
+    re.compile(r"(?m)^Git user\s*[:=].*$", re.IGNORECASE),
+    re.compile(r"(?m)^Status\s*:\s*$"),  # bare "Status:" header
+    re.compile(r"(?m)^\s*[MADRCU?!]{1,2}\s+\S+.*$"),  # git status file lines
+    # CLAUDE.md / instruction file injections — eat to next Contents block or EOF
+    re.compile(
+        r"(?ms)^Contents of\s+\S+.*?\Z",
+        re.IGNORECASE,
+    ),
+    # Memory/context blocks injected by hooks or harness plugins
+    re.compile(r"(?ms)^# Memory\b.*\Z", re.IGNORECASE),
 ]
+
+# Cap the sanitized system prompt to this many chars for fingerprinting.
+# The identity portion of a system prompt (harness name, core rules) is in the
+# first few thousand chars.  Everything after is injected context (CLAUDE.md,
+# git status, memory) that changes mid-session and causes fingerprint drift.
+_FINGERPRINT_SYSTEM_CAP = 4000
 
 
 def sanitize_system_prompt(prompt: str) -> str:
@@ -98,9 +132,15 @@ def sanitize_system_prompt(prompt: str) -> str:
 
 
 def compute_fingerprint(system_prompt: str, first_user_message: str) -> str:
-    """Compute session fingerprint from sanitized system prompt + first user message."""
+    """Compute session fingerprint from sanitized system prompt + first user message.
+
+    The sanitized system prompt is capped at _FINGERPRINT_SYSTEM_CAP chars so
+    that dynamic context injected after the harness identity (CLAUDE.md, git
+    status, memory blocks) cannot cause fingerprint drift mid-session.
+    """
     sanitized = sanitize_system_prompt(system_prompt)
-    raw = f"{sanitized}\n{first_user_message}"
+    capped = sanitized[:_FINGERPRINT_SYSTEM_CAP]
+    raw = f"{capped}\n{first_user_message}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
