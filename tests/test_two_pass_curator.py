@@ -820,3 +820,413 @@ class TestRawResultFidelity:
 
         assert len(briefing.files) == 1
         assert briefing.files[0].sections[0][2] == "short preview"
+
+
+# ---------------------------------------------------------------------------
+# Registration hooks — register_curation_mode / unregister_curation_mode
+# ---------------------------------------------------------------------------
+
+import archolith_proxy.curator as _curator_module  # noqa: E402
+importlib.reload(_curator_module)
+
+from archolith_proxy.curator import (  # noqa: E402
+    register_curation_mode,
+    unregister_curation_mode,
+)
+from archolith_proxy.models.dtos import AssembledContext  # noqa: E402
+
+
+class TestRegistrationHooks:
+    """Test curation mode registration and unregistration."""
+
+    def setup_method(self):
+        unregister_curation_mode()
+
+    def teardown_method(self):
+        unregister_curation_mode()
+
+    def test_register_background_pass_only(self):
+        async def my_bg_fn(*args, **kwargs):
+            return None
+
+        register_curation_mode(background_pass_fn=my_bg_fn)
+        assert _curator_module._background_pass_fn is my_bg_fn
+        assert _curator_module._inline_pass_fn is None
+
+    def test_register_inline_pass_only(self):
+        async def my_inline_fn(*args, **kwargs):
+            return None
+
+        register_curation_mode(inline_pass_fn=my_inline_fn)
+        assert _curator_module._inline_pass_fn is my_inline_fn
+        assert _curator_module._background_pass_fn is None
+
+    def test_register_both(self):
+        async def my_bg_fn(*args, **kwargs):
+            return None
+
+        async def my_inline_fn(*args, **kwargs):
+            return None
+
+        register_curation_mode(background_pass_fn=my_bg_fn, inline_pass_fn=my_inline_fn)
+        assert _curator_module._background_pass_fn is my_bg_fn
+        assert _curator_module._inline_pass_fn is my_inline_fn
+
+    def test_register_none_leaves_unregistered(self):
+        register_curation_mode()  # both None — no change
+        assert _curator_module._background_pass_fn is None
+        assert _curator_module._inline_pass_fn is None
+
+    def test_register_does_not_unregister_existing(self):
+        async def bg1(*args, **kwargs):
+            return None
+
+        async def bg2(*args, **kwargs):
+            return None
+
+        register_curation_mode(background_pass_fn=bg1)
+        register_curation_mode(inline_pass_fn=bg2)  # only sets inline
+        assert _curator_module._background_pass_fn is bg1  # bg unchanged
+        assert _curator_module._inline_pass_fn is bg2
+
+    def test_unregister_clears_both(self):
+        async def my_fn(*args, **kwargs):
+            return None
+
+        register_curation_mode(background_pass_fn=my_fn, inline_pass_fn=my_fn)
+        unregister_curation_mode()
+        assert _curator_module._background_pass_fn is None
+        assert _curator_module._inline_pass_fn is None
+
+
+# ---------------------------------------------------------------------------
+# Integration: background pass dispatch with registered mode function
+# ---------------------------------------------------------------------------
+
+class TestBackgroundPassDispatch:
+    """Test that run_background_pass dispatches to registered function."""
+
+    _ENV_KEYS = (
+        "CURATOR_ENABLED", "FILE_CACHE_ENABLED", "BACKGROUND_PASS_ENABLED",
+        "BACKGROUND_PASS_DEBOUNCE_MS", "EXTRACTOR_API_KEY",
+    )
+
+    def setup_method(self):
+        _briefing_cache.clear()
+        unregister_curation_mode()
+        from archolith_proxy.config import reset_settings
+        reset_settings()
+
+    def teardown_method(self):
+        _clear_env(*self._ENV_KEYS)
+        unregister_curation_mode()
+
+    @pytest.mark.asyncio
+    async def test_registered_bg_fn_is_called(self):
+        """When a background pass fn is registered, run_background_pass calls it."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            BACKGROUND_PASS_ENABLED="true",
+            BACKGROUND_PASS_DEBOUNCE_MS="0",
+            EXTRACTOR_API_KEY="test-key",
+        )
+        from archolith_proxy.curator import run_background_pass
+
+        called = False
+
+        async def my_bg_fn(session_id, turn_number, user_message, session_goal, messages):
+            nonlocal called
+            called = True
+            return None
+
+        register_curation_mode(background_pass_fn=my_bg_fn)
+
+        await run_background_pass(
+            session_id="s1", turn_number=5,
+            user_message="test", session_goal=None, messages=[],
+        )
+        assert called, "Registered background pass fn was not called"
+
+    @pytest.mark.asyncio
+    async def test_registered_bg_fn_caches_briefing(self):
+        """When registered bg fn returns a briefing, it is cached."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            BACKGROUND_PASS_ENABLED="true",
+            BACKGROUND_PASS_DEBOUNCE_MS="0",
+            EXTRACTOR_API_KEY="test-key",
+        )
+        from archolith_proxy.curator import run_background_pass
+
+        expected_briefing = SessionBriefing(session_id="s1", source_turn=5, session_goal="test")
+
+        async def my_bg_fn(session_id, turn_number, user_message, session_goal, messages):
+            return expected_briefing
+
+        register_curation_mode(background_pass_fn=my_bg_fn)
+
+        await run_background_pass(
+            session_id="s1", turn_number=5,
+            user_message="test", session_goal="test", messages=[],
+        )
+        cached = get_briefing("s1")
+        assert cached is expected_briefing
+
+    @pytest.mark.asyncio
+    async def test_default_bg_fn_used_when_no_registration(self):
+        """Without registration, run_background_pass uses the default _run_background_pass_inner."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            BACKGROUND_PASS_ENABLED="true",
+            BACKGROUND_PASS_DEBOUNCE_MS="0",
+            BACKGROUND_PASS_LATENCY_BUDGET_MS="30000",
+            EXTRACTOR_API_KEY="test-key",
+        )
+        from archolith_proxy.curator import run_background_pass
+
+        mock_result = CuratorResult(
+            context_text="=== SESSION GOAL ===\nTest\n",
+            curated_paths={"test.py"},
+            tool_calls_used=1,
+            estimated_tokens=10,
+            tool_log=[
+                CuratorToolCall(
+                    tool="get_file",
+                    args={"path": "test.py"},
+                    status="ok",
+                    result_preview="test content",
+                    raw_result="test content",
+                ),
+            ],
+        )
+
+        with patch("archolith_proxy.curator._run_curator_native",
+                    new_callable=AsyncMock) as mock_loop:
+            mock_loop.return_value = (mock_result, mock_result.tool_log, "")
+            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                await run_background_pass(
+                    session_id="s1", turn_number=5,
+                    user_message="test", session_goal="Test", messages=[],
+                )
+
+        # Default path should have run via _run_background_pass_inner,
+        # which calls _run_curator_native
+        mock_loop.assert_called_once()
+        briefing = get_briefing("s1")
+        assert briefing is not None
+        assert briefing.session_goal == "Test"
+
+
+# ---------------------------------------------------------------------------
+# Integration: inline pass dispatch with registered mode function
+# ---------------------------------------------------------------------------
+
+class TestInlinePassDispatch:
+    """Test that curate_context dispatches to registered inline pass."""
+
+    _ENV_KEYS = (
+        "CURATOR_ENABLED", "FILE_CACHE_ENABLED", "CURATOR_API_KEY",
+        "CURATOR_LATENCY_BUDGET_MS", "COHERENCE_TAIL_SIZE",
+        "MAX_TAIL_MESSAGES", "COLD_START_TURNS",
+    )
+
+    def setup_method(self):
+        _briefing_cache.clear()
+        unregister_curation_mode()
+        from archolith_proxy.config import reset_settings
+        reset_settings()
+
+    def teardown_method(self):
+        _clear_env(*self._ENV_KEYS)
+        unregister_curation_mode()
+
+    @pytest.mark.asyncio
+    async def test_registered_inline_fn_is_called(self):
+        """When an inline pass fn is registered, curate_context calls it for briefing passes."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            CURATOR_API_KEY="test-key",
+            CURATOR_LATENCY_BUDGET_MS="10000",
+            COHERENCE_TAIL_SIZE="10",
+            MAX_TAIL_MESSAGES="20",
+            COLD_START_TURNS="3",
+        )
+        from archolith_proxy.curator import curate_context
+
+        # Cache a fresh briefing
+        briefing = SessionBriefing(session_id="s1", source_turn=5, session_goal="test")
+        cache_briefing("s1", briefing)
+
+        called = False
+
+        async def my_inline_fn(session_id, turn_number, user_message, session_goal,
+                               briefing, messages, client, model, settings):
+            nonlocal called
+            called = True
+            return None
+
+        register_curation_mode(inline_pass_fn=my_inline_fn)
+
+        # Mock the full curator path so the fallback doesn't actually run
+        with patch("archolith_proxy.curator._run_curator_native",
+                    new_callable=AsyncMock) as mock_loop:
+            result = await curate_context(
+                session_id="s1", turn_number=6,
+                user_message="test", session_goal="test",
+                http_client=None,
+                messages=[{"role": "user", "content": "hi"}] * 5,
+            )
+
+        assert called, "Registered inline pass fn was not called"
+        # The registered inline fn returned None, so it should fall through
+        # to the full curator path. result is None because full curator is mocked.
+        # The important thing is that my_inline_fn was called.
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_registered_inline_fn_returns_context(self):
+        """When registered inline fn returns an AssembledContext, it is used directly."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            CURATOR_API_KEY="test-key",
+            CURATOR_LATENCY_BUDGET_MS="10000",
+            COHERENCE_TAIL_SIZE="10",
+            MAX_TAIL_MESSAGES="20",
+            COLD_START_TURNS="3",
+        )
+        from archolith_proxy.curator import curate_context
+
+        briefing = SessionBriefing(session_id="s1", source_turn=5)
+        cache_briefing("s1", briefing)
+
+        expected_result = AssembledContext(
+            system_message={"role": "system", "content": "from registered inline"},
+            graph_context=[{"role": "system", "content": "from registered inline"}],
+            coherence_tail=[],
+            token_estimate=50,
+            session_id="s1",
+        )
+
+        async def my_inline_fn(session_id, turn_number, user_message, session_goal,
+                               briefing, messages, client, model, settings):
+            return expected_result
+
+        register_curation_mode(inline_pass_fn=my_inline_fn)
+
+        with patch("archolith_proxy.curator._run_curator_native",
+                    new_callable=AsyncMock) as mock_loop:
+            result = await curate_context(
+                session_id="s1", turn_number=6,
+                user_message="test", session_goal="test",
+                http_client=None,
+                messages=[{"role": "user", "content": "hi"}] * 5,
+            )
+
+        assert result is expected_result
+        # Verify the full curator was never called
+        mock_loop.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_inline_used_when_no_registration(self):
+        """Without registration, curate_context uses _run_with_briefing."""
+        _set_env_and_reload(
+            CURATOR_ENABLED="true",
+            FILE_CACHE_ENABLED="true",
+            CURATOR_API_KEY="test-key",
+            CURATOR_LATENCY_BUDGET_MS="10000",
+            COHERENCE_TAIL_SIZE="10",
+            MAX_TAIL_MESSAGES="20",
+            COLD_START_TURNS="3",
+        )
+        from archolith_proxy.curator import curate_context
+
+        briefing = SessionBriefing(
+            session_id="s1",
+            source_turn=5,
+            session_goal="test",
+            checkpoint_text="State: ok",
+        )
+        cache_briefing("s1", briefing)
+
+        inline_result = CuratorResult(
+            context_text="=== SESSION GOAL ===\ntest\n=== CURRENT STATE ===\nok\n",
+            curated_paths=set(),
+            tool_calls_used=0,
+            estimated_tokens=20,
+            tool_log=[],
+        )
+
+        with patch("archolith_proxy.curator._run_curator_native",
+                    new_callable=AsyncMock) as mock_loop:
+            mock_loop.return_value = (inline_result, [], "")
+            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                result = await curate_context(
+                    session_id="s1", turn_number=6,
+                    user_message="test", session_goal="test",
+                    http_client=None,
+                    messages=[{"role": "user", "content": "hi"}] * 5,
+                )
+
+        # Default _run_with_briefing was called → executed _run_curator_native with 2 iters
+        assert result is not None
+        mock_loop.assert_called_once()
+        assert mock_loop.call_args.kwargs.get("max_iterations") == 2
+
+
+# ---------------------------------------------------------------------------
+# SessionBriefing.mode field
+# ---------------------------------------------------------------------------
+
+class TestBriefingModeField:
+    """Test the new mode field on SessionBriefing."""
+
+    def test_mode_defaults_to_two_pass(self):
+        b = SessionBriefing(session_id="s1", source_turn=1)
+        assert b.mode == "two_pass"
+
+    def test_mode_can_be_set(self):
+        b = SessionBriefing(session_id="s1", source_turn=1, mode="two_curator")
+        assert b.mode == "two_curator"
+
+    def test_build_briefing_sets_mode(self):
+        """_build_briefing_from_result should set mode='two_pass'."""
+        result = CuratorResult(
+            context_text="=== SESSION GOAL ===\nTest\n",
+            curated_paths=set(),
+            tool_calls_used=0,
+            estimated_tokens=10,
+        )
+        briefing = _build_briefing_from_result(
+            result=result,
+            session_id="s1",
+            turn_number=5,
+            latency_ms=100.0,
+            session_goal="Test",
+            messages=[],
+        )
+        assert briefing.mode == "two_pass"
+
+
+# ---------------------------------------------------------------------------
+# CuratorResult.assembly_mode field
+# ---------------------------------------------------------------------------
+
+class TestCuratorResultAssemblyMode:
+    """Test the new assembly_mode field on CuratorResult."""
+
+    def test_defaults_to_curator(self):
+        r = CuratorResult(context_text="test")
+        assert r.assembly_mode == "curator"
+
+    def test_can_be_set(self):
+        r = CuratorResult(context_text="test", assembly_mode="briefing")
+        assert r.assembly_mode == "briefing"
+
+    def test_can_be_set_stale(self):
+        r = CuratorResult(context_text="test", assembly_mode="briefing_stale")
+        assert r.assembly_mode == "briefing_stale"

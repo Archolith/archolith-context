@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-01 — Briefing enabler: pluggable curation mode registration
+
+- Added `SessionBriefing.mode` field (`"two_pass"` | `"two_curator"`) — tags which curation mode produced a briefing.
+- Added `register_curation_mode()` / `unregister_curation_mode()` to `curator/__init__.py` — lets the two-curator mode swap in its own prepper/assembler functions while the single-bot two-pass mode remains the default fallback.
+- Refactored `run_background_pass()` to dispatch to a registered background pass function when present, falling back to `_run_background_pass_inner()` otherwise.
+- Refactored `curate_context()` to dispatch to a registered inline pass function for briefing-assisted passes when present, falling back to `_run_with_briefing()` otherwise.
+- Added `briefing_max_staleness` config key (default 2) — replaces the hardcoded `turn_number - 2` threshold in briefings staleness check.
+- Added `CuratorResult.assembly_mode` field (default `"curator"`) — enables mode-specific results to self-identify their assembly path.
+- 18 new tests: registration hooks (6), background pass dispatch (3), inline pass dispatch (3), briefing mode field (3), CuratorResult assembly_mode (3). All 54 tests pass.
+- Full backward compatibility — single-bot two-pass behavior is unchanged when no mode is registered.
+
 ## 2026-05-30 — Two-pass curator: background pre-fetch + inline briefing
 
 - Added two-pass curator architecture (disabled by default, `BACKGROUND_PASS_ENABLED=true`).

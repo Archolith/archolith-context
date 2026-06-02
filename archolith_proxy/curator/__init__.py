@@ -14,12 +14,18 @@ Two-pass mode: when background_pass_enabled is True, the curator runs twice:
      writes a SessionBriefing to cache.
   2. Inline pass (on next request): reads briefing, formats as prompt text,
      runs curator with 2 iterations (most work already done).
+
+Mode registration: the background and inline passes are pluggable via
+register_curation_mode(). The single-bot two-pass mode is the default when
+no mode is registered. Other modes (e.g., two-curator prepper/assembler)
+can register their own background and inline pass functions.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 
 import structlog
 from openai import AsyncOpenAI
@@ -41,6 +47,54 @@ logger = structlog.get_logger()
 # tried before falling through to passthrough. Keyed by session_id, consumed
 # once via get_last_attempt().
 _last_attempt: dict[str, dict] = {}
+
+# ---------------------------------------------------------------------------
+# Mode registration — allows mode-specific curator implementations to replace
+# the default single-bot two-pass background/inline passes.
+# ---------------------------------------------------------------------------
+
+# Type aliases for mode-specific pass functions.
+# Background pass: runs after response completes, produces a SessionBriefing.
+BackgroundPassFn = Callable[..., Awaitable[SessionBriefing | None]]
+# Inline pass: runs on the next request with a cached briefing, produces an AssembledContext.
+InlinePassFn = Callable[..., Awaitable[AssembledContext | None]]
+
+_background_pass_fn: BackgroundPassFn | None = None
+_inline_pass_fn: InlinePassFn | None = None
+
+
+def register_curation_mode(
+    background_pass_fn: BackgroundPassFn | None = None,
+    inline_pass_fn: InlinePassFn | None = None,
+) -> None:
+    """Register mode-specific curation functions.
+
+    When a background pass function is registered, run_background_pass()
+    will call it instead of the built-in _run_background_pass_inner().
+
+    When an inline pass function is registered, curate_context() will
+    call it for briefing-assisted passes instead of _run_with_briefing().
+
+    Pass a function to set, or pass None to leave the current registration
+    unchanged. Call unregister_curation_mode() to clear both at once.
+
+    Only one mode can be active per process. This is sufficient for v1 —
+    config selects which mode is active. Per-session mode selection is
+    deferred to a future version.
+    """
+    global _background_pass_fn, _inline_pass_fn
+    if background_pass_fn is not None:
+        _background_pass_fn = background_pass_fn
+    if inline_pass_fn is not None:
+        _inline_pass_fn = inline_pass_fn
+
+
+def unregister_curation_mode() -> None:
+    """Unregister all mode-specific functions, reverting to the default
+    single-bot two-pass behavior."""
+    global _background_pass_fn, _inline_pass_fn
+    _background_pass_fn = None
+    _inline_pass_fn = None
 
 
 def get_last_attempt(session_id: str) -> dict | None:
@@ -86,10 +140,33 @@ async def run_background_pass(
     )
 
     try:
-        await _run_background_pass_inner(
-            settings, session_id, turn_number, user_message, session_goal, messages,
-            bp_trace=bp_trace,
-        )
+        if _background_pass_fn is not None:
+            # Mode-specific background pass (e.g., two-curator prepper)
+            briefing = await _background_pass_fn(
+                session_id, turn_number, user_message, session_goal, messages,
+            )
+            if briefing:
+                cache_briefing(session_id, briefing)
+                bp_trace.outcome = "success"
+                bp_trace.briefing_cached = True
+                bp_trace.files_fetched = len(briefing.files)
+                bp_trace.context_chars = len(briefing.context_block)
+                bp_trace.completed_at = time.time()
+                bp_trace.latency_ms = (time.time() - bp_trace.started_at) * 1000
+                logger.info(
+                    "background_pass_registered_complete",
+                    session_id=session_id, turn=turn_number,
+                    files=len(briefing.files), mode=briefing.mode,
+                )
+            else:
+                bp_trace.outcome = "no_result"
+                bp_trace.completed_at = time.time()
+        else:
+            # Default: single-bot two-pass background curator
+            await _run_background_pass_inner(
+                settings, session_id, turn_number, user_message, session_goal, messages,
+                bp_trace=bp_trace,
+            )
     except asyncio.CancelledError:
         bp_trace.outcome = "cancelled"
         bp_trace.cancel_reason = "superseded_by_next_turn"
@@ -315,6 +392,7 @@ def _build_briefing_from_result(
         files=prefetched,
         retained_turns=result.retained_turn_numbers,
         context_block=context_text,
+        mode="two_pass",
         tool_calls_used=result.tool_calls_used,
         iterations_used=result.tool_calls_used,  # approximation
         latency_ms=latency_ms,
@@ -483,8 +561,8 @@ async def curate_context(
     briefing = get_briefing(session_id)
     fresh = is_briefing_fresh(session_id, turn_number)
 
-    if briefing and (fresh or briefing.source_turn >= turn_number - 2):
-        # Briefing-assisted inline pass (fresh or stale-by-1)
+    if briefing and (fresh or briefing.source_turn >= turn_number - settings.briefing_max_staleness):
+        # Briefing-assisted inline pass (fresh or stale within max_staleness)
         assembly_tag = "briefing" if fresh else "briefing_stale"
         logger.info(
             "curator_briefing_pass",
@@ -494,17 +572,25 @@ async def curate_context(
             fresh=fresh,
             tag=assembly_tag,
         )
-        result = await _run_with_briefing(
-            session_id=session_id,
-            turn_number=turn_number,
-            user_message=user_message,
-            session_goal=session_goal,
-            briefing=briefing,
-            messages=messages,
-            client=client,
-            model=model,
-            settings=settings,
-        )
+        if _inline_pass_fn is not None:
+            # Mode-specific inline pass (e.g., two-curator assembler)
+            result = await _inline_pass_fn(
+                session_id, turn_number, user_message, session_goal,
+                briefing, messages, client, model, settings,
+            )
+        else:
+            # Default: single-bot two-pass inline with briefing injection
+            result = await _run_with_briefing(
+                session_id=session_id,
+                turn_number=turn_number,
+                user_message=user_message,
+                session_goal=session_goal,
+                briefing=briefing,
+                messages=messages,
+                client=client,
+                model=model,
+                settings=settings,
+            )
         if result is not None:
             return result
         # Briefing pass failed — fall through to full curator

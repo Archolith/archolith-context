@@ -45,6 +45,9 @@ class CuratorResult:
     # Turn numbers the curator selected to retain in the middle section.
     # None = keep all (curator did not call select_relevant_turns).
     retained_turn_numbers: list[int] | None = None
+    # How this result was assembled — "curator" | "briefing" | "briefing_stale" | "passthrough"
+    # The curator loop sets this in curate_context() dispatch.
+    assembly_mode: str = "curator"
     # Per-call tool log — every tool dispatch (success and failure)
     tool_log: list[CuratorToolCall] = field(default_factory=list)
 

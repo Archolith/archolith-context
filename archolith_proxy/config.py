@@ -168,6 +168,10 @@ class Settings(BaseSettings):
     agent_solo_min_input_tokens: int = 8000      # skip compression below this input size
     agent_solo_dump_payloads: bool = False        # dump agent-solo payloads to data/agent_solo_payloads/
 
+    # Briefing staleness threshold — how many turns before a briefing is considered
+    # too stale to use (0 = only fresh briefings, 1 = briefing from 1 turn ago ok, etc.)
+    briefing_max_staleness: int = 2
+
     # Two-pass curator — background pass (same bot, generous iteration budget)
     background_pass_enabled: bool = False
     background_pass_max_iterations: int = 12

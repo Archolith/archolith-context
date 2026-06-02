@@ -53,6 +53,10 @@ class SessionBriefing:
     # The fully assembled context block from the background pass
     context_block: str = ""
 
+    # Curation mode that produced this briefing
+    # "two_pass" = single-bot two-pass (default), "two_curator" = prepper/assembler
+    mode: str = "two_pass"
+
     # Metadata
     tool_calls_used: int = 0
     iterations_used: int = 0
