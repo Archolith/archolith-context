@@ -1,5 +1,28 @@
 # Changelog — archolith-context
 
+## 2026-06-02 — Quality Remediation Closeout Follow-Through
+
+- **`archolith_proxy/main.py`**: Fixed post-expiry cache pruning to remove stale session state instead of clearing active agent-solo entries. Cleanup now prunes both agent-solo caches and curator briefing/snapshot state after graph expiry cycles.
+- **`archolith_proxy/proxy/agent_solo.py`**: Added `prune_session_state()` to drop inactive dedupe and curator-prefix cache state in one place.
+- **`archolith_proxy/curator/state.py`**: Added `prune_session_state()` so expired sessions clear cached briefings, snapshots, and any in-flight background pass task.
+- **`archolith_proxy/curator/tools.py`**: Promoted `_build_outline` to a module-level import; `prefetch_file()` no longer does a function-body lazy import.
+- **`archolith_proxy/curator/__init__.py`**: Trimmed the public surface module below the plan’s aspirational size target while keeping `configure_curation_mode()` behavior unchanged.
+- **`.agent/architecture.md`**: Updated the project architecture doc to reflect the extracted OpenAI modules, dedicated router files, shared text utilities, trace consistency check, and `config-delta` operator surface.
+- **Tests**: Added regression coverage for stale-session cache pruning, bulk Ladybug writes, runtime config override persistence, and trace-store consistency checks.
+
+## 2026-06-01 — Two-Curator Architecture (Prepper + Assembler)
+
+- **`archolith_proxy/config.py`**: Added `curation_mode` (two_pass | two_curator), `prepper_*` model configs (model/base_url/api_key/max_iterations/debounce_ms/latency_budget_ms), and `assembler_*` model configs (model/base_url/api_key/max_iterations/latency_budget_ms). Added these to `_SNAPSHOT_EXCLUDE` for secrets.
+- **`archolith_proxy/curator/prepper.py`**: New background prepper module with `PREPPER_SYSTEM_PROMPT` (optimized for speculative context preparation) and `run_prepper()`. Uses `PREPPER_TOOLS` and independent model config. Produces `SessionBriefing` with `mode="two_curator"`.
+- **`archolith_proxy/curator/assembler.py`**: New inline assembler module with `ASSEMBLER_SYSTEM_PROMPT` (optimized for fast briefing formatting) and `run_assembler()`. Uses `ASSEMBLER_TOOLS` (minimal: select_relevant_turns + get_file_lines) and tight iteration/ latency budget.
+- **`archolith_proxy/curator/schemas.py`**: Added `PREPPER_TOOLS` (all curator tools + `score_file_relevance`), `ASSEMBLER_TOOLS` (select_relevant_turns + get_file_lines), and `SCORE_FILE_RELEVANCE_SCHEMA`.
+- **`archolith_proxy/curator/tools.py`**: Added `score_file_relevance()` — heuristic file relevance scorer for the prepper. Scores files by keyword match in path/outline and recency. Registered in `TOOL_HANDLERS`.
+- **`archolith_proxy/curator/loop.py`**: Added optional `tool_set` parameter to `_run_curator_native()` and `_run_curator_nous()` so the assembler can use a filtered tool set. Defaults to `ALL_CURATOR_TOOLS` for backward compatibility.
+- **`archolith_proxy/curator/__init__.py`**: Added `configure_curation_mode()` — reads `settings.curation_mode`, registers prepper/assembler when `"two_curator"`, unregisters otherwise. Idempotent.
+- **`archolith_proxy/main.py`**: Calls `configure_curation_mode()` in the lifespan startup. Added `curation_mode`, `prepper_*`, `assembler_*` to `TUNABLE_FIELDS` for runtime config.
+- **`archolith_proxy/static/dashboard.html`**: Added Curation Mode card to overview page showing mode, curator/prepper/assembler model names, iterations, and background pass state.
+- **`tests/test_curator/test_two_curator.py`**: 15 new tests covering registration hooks, configure_curation_mode dispatch, prepper/assembler tool sets, score_file_relevance handler, prepper no-API-key/timeout paths, and assembler no-API-key path.
+
 ## 2026-05-31 — Agent-Solo Compression, Curator Prefix Cache, Dashboard Fixes
 
 - **`archolith_proxy/openai/chat.py`**: Fixed agent-solo savings being zeroed by catch-all `set_assembly` overwrite — replaced early `set_assembly` with direct variable updates. Fixed broadcast zeroing savings for non-assembled turns. Added `cache_curator_rewrite()` call after successful curator rewrite. Added Java/Kotlin/C# regex fallback patterns to `_build_outline()` for file outline generation.

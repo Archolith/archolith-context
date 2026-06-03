@@ -711,7 +711,7 @@ class TestCollectToolCallRecords:
         """Verify RTK filter is applied to each record's result."""
         from archolith_proxy.openai.chat import _collect_tool_call_records
 
-        with patch("archolith_proxy.openai.chat.filter_single_tool_result", side_effect=lambda content, tool_name="": f"filtered_{content}"):
+        with patch("archolith_proxy.openai.helpers.filter_single_tool_result", side_effect=lambda content, tool_name="": f"filtered_{content}"):
             messages = [
                 {"role": "assistant", "tool_calls": [
                     {"id": "tc1", "function": {"name": "Read", "arguments": '{}'}},
@@ -760,6 +760,59 @@ class TestCollectToolCallRecords:
         assert len(records) == 1
         assert records[0].tool_call_id == "new1"
         assert records[0].tool_name == "Bash"
+
+
+# ---------------------------------------------------------------------------
+# TestInferFileTouchStatuses
+# ---------------------------------------------------------------------------
+
+class TestInferFileTouchStatuses:
+    def test_infers_read_and_modified_from_current_turn(self):
+        from archolith_proxy.openai.chat import _infer_file_touch_statuses
+        from archolith_proxy.models.graph_nodes import FileStatus
+
+        messages = [
+            {"role": "assistant", "tool_calls": [
+                {"id": "tc1", "function": {"name": "Read", "arguments": '{"file_path": "src/readme.md"}'}},
+                {"id": "tc2", "function": {"name": "Edit", "arguments": '{"file_path": "src/app.py"}'}},
+            ]},
+        ]
+
+        statuses, fallback = _infer_file_touch_statuses(messages)
+
+        assert statuses["src/readme.md"] == FileStatus.READ
+        assert statuses["src/app.py"] == FileStatus.MODIFIED
+        assert fallback == FileStatus.MODIFIED
+
+    def test_read_only_turn_defaults_unmatched_files_to_read(self):
+        from archolith_proxy.openai.chat import _infer_file_touch_statuses
+        from archolith_proxy.models.graph_nodes import FileStatus
+
+        messages = [
+            {"role": "assistant", "tool_calls": [
+                {"id": "tc1", "function": {"name": "Grep", "arguments": '{"pattern": "TODO"}'}},
+            ]},
+        ]
+
+        statuses, fallback = _infer_file_touch_statuses(messages)
+
+        assert statuses == {}
+        assert fallback == FileStatus.READ
+
+    def test_prefers_created_over_read_for_same_path(self):
+        from archolith_proxy.openai.chat import _infer_file_touch_statuses
+        from archolith_proxy.models.graph_nodes import FileStatus
+
+        messages = [
+            {"role": "assistant", "tool_calls": [
+                {"id": "tc1", "function": {"name": "Read", "arguments": '{"file_path": "src/new.py"}'}},
+                {"id": "tc2", "function": {"name": "create_file", "arguments": '{"file_path": "src/new.py"}'}},
+            ]},
+        ]
+
+        statuses, _fallback = _infer_file_touch_statuses(messages)
+
+        assert statuses["src/new.py"] == FileStatus.CREATED
 
 
 # ---------------------------------------------------------------------------

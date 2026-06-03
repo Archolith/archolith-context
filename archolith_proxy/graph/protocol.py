@@ -177,10 +177,22 @@ class GraphBackend(Protocol):
         """Create or update a TOUCHES edge from session to file."""
         ...
 
+    async def bulk_create_touches(
+        self, session_id: str, touches: list[dict]
+    ) -> None:
+        """Batch create/update File nodes and TOUCHES edges (single UNWIND)."""
+        ...
+
     async def create_supersedes(
         self, old_fact_id: str, new_fact_id: str
     ) -> None:
         """Link a new fact as superseding an old one."""
+        ...
+
+    async def bulk_create_supersedes(
+        self, pairs: list[tuple[str, str]]
+    ) -> None:
+        """Batch create SUPERSEDES edges (single UNWIND)."""
         ...
 
     async def get_touched_files(self, session_id: str) -> list[dict]:
@@ -197,6 +209,12 @@ class GraphBackend(Protocol):
         turn: int,
     ) -> str:
         """Store a decision node and link to session. Returns decision_id."""
+        ...
+
+    async def bulk_store_decisions(
+        self, session_id: str, decisions: list[dict], turn: int
+    ) -> list[str]:
+        """Batch create Decision nodes (single UNWIND). Returns decision_ids."""
         ...
 
     async def get_decisions(
@@ -262,10 +280,22 @@ class GraphBackend(Protocol):
         """Record a new issue for a session."""
         ...
 
+    async def bulk_create_issues(
+        self, session_id: str, issues: list[dict], turn: int
+    ) -> list[str]:
+        """Batch create Issue nodes (single UNWIND). Returns issue_ids."""
+        ...
+
     async def resolve_issues(
         self, session_id: str, summaries: list[str], resolution_ref: str, turn: int,
     ) -> None:
         """Mark open issues matching summaries as resolved."""
+        ...
+
+    async def bulk_resolve_issues(
+        self, session_id: str, summaries: list[str], resolution_ref: str, turn: int,
+    ) -> None:
+        """Batch resolve issues (single UNWIND)."""
         ...
 
     async def get_open_issues(self, session_id: str) -> list[dict]:
@@ -278,6 +308,12 @@ class GraphBackend(Protocol):
         self, session_id: str, command: str, status: str, summary: str, turn: int,
     ) -> None:
         """Record a verification result for a session."""
+        ...
+
+    async def bulk_create_verifications(
+        self, session_id: str, verifications: list[dict], turn: int
+    ) -> list[str]:
+        """Batch create Verification nodes (single UNWIND). Returns verification_ids."""
         ...
 
     async def get_last_verification(self, session_id: str) -> dict | None:

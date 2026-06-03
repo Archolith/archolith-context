@@ -4,6 +4,7 @@ Prevents runaway error loops when synthetic tools fail persistently:
 - After N consecutive failures, disable synthetic injection for a cooldown period.
 - After N total failures in a session, hard-disable for the session lifetime.
 - State is in-memory only (resets on proxy restart).
+- Bounded to max 10,000 sessions with LRU-style eviction.
 
 The circuit breaker is checked in chat.py BEFORE calling inject_synthetic_tools().
 Failures are recorded when _handle_non_streaming catches a synthetic interception
@@ -13,11 +14,15 @@ error or when _fallback_strip_synthetic is invoked (indicating the re-send faile
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
 import structlog
 
 logger = structlog.get_logger()
+
+# Maximum number of sessions to track before evicting oldest entries
+_MAX_CIRCUIT_SESSIONS = 10_000
 
 
 @dataclass
@@ -33,13 +38,21 @@ class SessionCircuitState:
 
 # ── Session state store ──────────────────────────────────────────────────────
 
-_sessions: dict[str, SessionCircuitState] = {}
+_sessions: OrderedDict[str, SessionCircuitState] = OrderedDict()
 
 
 def get_circuit_state(session_id: str) -> SessionCircuitState:
     """Get or create circuit state for a session."""
     if session_id not in _sessions:
+        # Evict oldest if at capacity
+        while len(_sessions) >= _MAX_CIRCUIT_SESSIONS:
+            oldest_key, _ = _sessions.popitem(last=False)
+            logger.debug("circuit_state_evicted", session_id=oldest_key,
+                          reason="capacity", max=_MAX_CIRCUIT_SESSIONS)
         _sessions[session_id] = SessionCircuitState()
+    elif session_id in _sessions:
+        # Move to end to maintain LRU ordering
+        _sessions.move_to_end(session_id)
     return _sessions[session_id]
 
 

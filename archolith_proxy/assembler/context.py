@@ -501,7 +501,10 @@ async def assemble_context(
 
     # Get all active facts
     try:
-        all_facts = await get_backend().get_active_facts(session_id, limit=200)
+        all_facts = await get_backend().get_active_facts(
+            session_id,
+            limit=settings.fact_pool_limit,
+        )
     except Exception as e:
         logger.warning("graph_query_failed_facts", session_id=session_id, error=str(e))
         all_facts = []

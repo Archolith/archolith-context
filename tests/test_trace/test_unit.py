@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -441,6 +442,23 @@ class TestTraceStoreDiskPersistence:
 
         jsonl_path = tmp_path / "path_with_slashes.jsonl"
         assert jsonl_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_verify_consistency_reports_orphans_and_mismatches(self):
+        store = TraceStore()
+        await store.record(TurnTrace(session_id="orphan", turn_number=2))
+        await store.record(TurnTrace(session_id="mismatch", turn_number=5))
+
+        async def _graph_turn(session_id: str) -> int:
+            return {"orphan": 0, "mismatch": 2}.get(session_id, 1)
+
+        backend = AsyncMock()
+        backend.get_turn_number = AsyncMock(side_effect=_graph_turn)
+
+        report = await store.verify_consistency(backend=backend)
+
+        assert any("orphan" in item for item in report["orphans"])
+        assert any("mismatch" in item for item in report["mismatches"])
 
 
 class TestTraceBuilderExtraction:

@@ -131,6 +131,7 @@ class TestHandleRecallToolCallFormatting:
             query_rewrite_enabled=False,
             embedding_enabled=False,
             embedding_api_key="",
+            fact_pool_limit=200,
         )
 
         with patch("archolith_proxy.config.get_settings", return_value=settings), \

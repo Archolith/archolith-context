@@ -19,7 +19,7 @@ async def test():
     )
 
     # Import and call _run_extraction directly
-    from archolith_proxy.openai.chat import _run_extraction
+    from archolith_proxy.openai.extraction import _run_extraction
 
     messages = [
         {"role": "system", "content": "You are a coding assistant."},

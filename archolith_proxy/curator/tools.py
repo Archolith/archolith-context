@@ -10,6 +10,7 @@ from __future__ import annotations
 import structlog
 
 from archolith_proxy.graph.backend import get_backend
+from archolith_proxy.shared.text_utils import _build_outline
 
 logger = structlog.get_logger()
 
@@ -124,7 +125,7 @@ async def search_facts_semantic(
     from archolith_proxy.config import get_settings
     settings = get_settings()
 
-    facts = await get_backend().get_active_facts(session_id, limit=200)
+    facts = await get_backend().get_active_facts(session_id, limit=settings.fact_pool_limit)
     if not facts:
         return "(no facts stored for this session)"
 
@@ -300,6 +301,81 @@ async def select_relevant_turns(
     return f"Recorded: retaining turns {nums} (relevance order, most relevant first)."
 
 
+async def score_file_relevance(session_id: str, query: str = "", **kwargs) -> str:
+    """Score all cached files by relevance to a query — prepper-only tool.
+
+    Returns a ranked list of files with relevance scores and reasoning.
+    Uses heuristic scoring: filename match, outline keyword match, recent activity.
+    """
+    if not query:
+        return "(no query specified — use score_file_relevance(query='describe what the next question will be about'))"
+
+    import re
+
+    files = await get_backend().list_cached_files(session_id)
+    if not files:
+        return "(no cached files to score)"
+
+    query_lower = query.lower()
+    query_words = set(re.findall(r"\w+", query_lower))
+
+    scored: list[tuple[float, dict]] = []
+
+    for f in files:
+        path = f.get("path", "")
+        outline = f.get("outline", "") or ""
+        last_turn = f.get("last_updated_turn", 0)
+        score = 0.0
+        reasons: list[str] = []
+
+        # Score 1: substring match in path (strong signal)
+        path_lower = path.lower()
+        for qw in query_words:
+            if len(qw) > 2 and qw in path_lower:
+                score += 2.0
+                if len(reasons) < 2:
+                    reasons.append(f"keyword '{qw}' in path")
+
+        # Score 2: outline keyword overlap
+        if outline:
+            outline_lower = outline.lower()
+            overlap = sum(1 for qw in query_words if len(qw) > 2 and qw in outline_lower)
+            if overlap > 0:
+                score += overlap * 1.5
+                if len(reasons) < 3:
+                    reasons.append(f"{overlap} keyword(s) in outline")
+
+        # Score 3: recent activity bonus
+        if last_turn and isinstance(last_turn, (int, float)) and last_turn > 0:
+            recency = min(3.0, last_turn * 0.5)
+            score += recency
+            if len(reasons) < 4 and recency > 1:
+                reasons.append(f"active at turn {int(last_turn)}")
+
+        scored.append((score, f, reasons))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Format results — include files with score > 0, plus at most 3 top files even at 0
+    lines = [f"File relevance for: {query}", "", "Score | Path | Reasons", "------|------|--------"]
+    shown = 0
+    for s, f, reasons in scored:
+        if s > 0 or shown < 3:
+            path = f.get("path", "?")
+            reason_str = "; ".join(reasons) if reasons else ("baseline" if s == 0 else "")
+            lines.append(f"{s:.1f} | {path} | {reason_str}")
+            shown += 1
+        else:
+            break
+
+    if not scored:
+        lines.append("(no files cached for this session)")
+    elif shown == 0:
+        lines.append("(no files matched the query)")
+
+    return "\n".join(lines)
+
+
 # Tool name → implementation mapping (used by loop.py for dispatch)
 async def get_file_outline(session_id: str, path: str = "", **kwargs) -> str:
     """Get the structural outline of a cached file — functions, classes, and methods
@@ -411,7 +487,6 @@ async def prefetch_file(
     line_count = len(all_lines)
     outline = ""
     try:
-        from archolith_proxy.openai.chat import _build_outline
         outline = _build_outline(content, store_path)
         if outline:
             await backend.upsert_file_outline(
@@ -527,4 +602,5 @@ TOOL_HANDLERS: dict[str, callable] = {
     "get_last_verification": get_last_verification,
     "select_relevant_turns": select_relevant_turns,
     "prefetch_file": prefetch_file,
+    "score_file_relevance": score_file_relevance,
 }

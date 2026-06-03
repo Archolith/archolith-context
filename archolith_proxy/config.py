@@ -2,10 +2,15 @@
 
 Required env vars are validated on first access. get_settings() returns
 a cached singleton — Settings() is constructed once per process.
+
+Runtime overrides from PATCH /admin/config are persisted to
+config_overrides.json and re-applied on startup, making them
+survive restarts.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -20,6 +25,10 @@ _settings: Settings | None = None
 # correctly regardless of the process working directory.
 _PROJECT_ROOT = Path(__file__).parent.parent
 _ENV_FILE = str(_PROJECT_ROOT / ".env")
+_OVERRIDES_FILE = _PROJECT_ROOT / "config_overrides.json"
+
+# In-memory snapshot of base env values (before overrides applied)
+_base_values: dict[str, object] = {}
 
 
 class Settings(BaseSettings):
@@ -178,6 +187,27 @@ class Settings(BaseSettings):
     background_pass_debounce_ms: int = 2000  # wait for extraction before running
     background_pass_latency_budget_ms: int = 30_000  # hard timeout for background pass
 
+    # Two-curator mode (prepper + assembler) — replaces the single-bot two-pass
+    # when curation_mode="two_curator". The prepper runs in the background with
+    # its own model config and tool set. The assembler runs inline with a
+    # minimal tool set and tight iteration budget.
+    curation_mode: str = "two_pass"  # "two_pass" | "two_curator"
+
+    # Prepper (background curator) — defaults to curator_model if empty
+    prepper_model: str = ""
+    prepper_base_url: str = ""
+    prepper_api_key: str = ""
+    prepper_max_iterations: int = 12
+    prepper_debounce_ms: int = 2000
+    prepper_latency_budget_ms: int = 30_000
+
+    # Assembler (fast inline formatter) — defaults to curator_model if empty
+    assembler_model: str = ""
+    assembler_base_url: str = ""
+    assembler_api_key: str = ""
+    assembler_max_iterations: int = 2
+    assembler_latency_budget_ms: int = 3000
+
     # Pricing — per-million-token rates for cost estimation on dashboard.
     # Defaults to DeepSeek V4-Flash pricing. Override for other models.
     pricing_input_per_million: float = 0.14       # $/M input tokens (cache miss)
@@ -243,16 +273,75 @@ class Settings(BaseSettings):
 
 def get_settings() -> Settings:
     """Return cached settings instance (singleton per process)."""
-    global _settings
+    global _settings, _base_values
     if _settings is None:
         _settings = Settings()
+        # Snapshot base values before applying overrides
+        _base_values = {k: getattr(_settings, k) for k in _settings.model_fields}
+        # Apply persisted overrides from config_overrides.json
+        _apply_overrides(_settings)
     return _settings
 
 
 def reset_settings() -> None:
     """Reset the cached settings — used in tests."""
-    global _settings
+    global _settings, _base_values
     _settings = None
+    _base_values = {}
+
+
+def _read_overrides() -> dict[str, object]:
+    """Read persisted runtime overrides from config_overrides.json."""
+    try:
+        if _OVERRIDES_FILE.exists():
+            return json.loads(_OVERRIDES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _write_overrides(updates: dict[str, object]) -> None:
+    """Merge the given updates into config_overrides.json and persist.
+
+    If the file can't be written, log a warning and continue with
+    in-memory-only changes.
+    """
+    import structlog
+    logger = structlog.get_logger()
+    current = _read_overrides()
+    current.update(updates)
+    try:
+        _OVERRIDES_FILE.write_text(
+            json.dumps(current, indent=2, default=str), encoding="utf-8"
+        )
+        logger.info("config_overrides_persisted", file=str(_OVERRIDES_FILE), keys=list(updates.keys()))
+    except Exception as e:
+        logger.warning("config_overrides_write_failed", error=str(e))
+
+
+def _apply_overrides(settings: Settings) -> None:
+    """Apply persisted runtime overrides to a Settings instance."""
+    overrides = _read_overrides()
+    for key, value in overrides.items():
+        if hasattr(settings, key):
+            try:
+                expected_type = type(getattr(settings, key))
+                setattr(settings, key, expected_type(value))
+            except (ValueError, TypeError):
+                pass
+
+
+def get_settings_delta() -> dict[str, dict[str, object]]:
+    """Return the difference between base env values and current settings.
+
+    Returns: {"base": {...}, "current": {...}, "overridden": [...]}
+    """
+    global _base_values
+    settings = get_settings()
+    base = _base_values
+    current = {k: getattr(settings, k) for k in settings.model_fields}
+    overridden = [k for k in current if base.get(k) != current.get(k)]
+    return {"base": base, "current": current, "overridden": overridden}
 
 
 # Fields excluded from config snapshots (secrets, connection strings, paths
@@ -262,7 +351,9 @@ _SNAPSHOT_EXCLUDE = frozenset({
     "curator_api_key", "session_neo4j_password", "memory_api_key",
     "admin_token",
     "upstream_base_url", "extractor_base_url", "embedding_base_url",
-    "curator_base_url", "session_neo4j_uri", "session_neo4j_database",
+    "curator_base_url", "prepper_base_url", "prepper_api_key",
+    "assembler_base_url", "assembler_api_key",
+    "session_neo4j_uri", "session_neo4j_database",
     "session_neo4j_user", "memory_api_url",
     "ladybug_db_path", "trace_dir", "memory_engines_json",
     "pricing_input_per_million", "pricing_input_cached_per_million",

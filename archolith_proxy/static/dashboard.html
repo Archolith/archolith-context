@@ -510,7 +510,9 @@ function buildBgPassCard(bp) {
 // ---------------------------------------------------------------------------
 async function renderOverview() {
   try {
-    const [m, traceData] = await Promise.all([api('/metrics'), api('/trace/sessions')]);
+    const [m, traceData, configData] = await Promise.all([
+      api('/metrics'), api('/trace/sessions'), api('/admin/config'),
+    ]);
 
     // If the full page isn't built yet, do initial render
     if (!overviewBuilt) {
@@ -592,6 +594,22 @@ async function renderOverview() {
             <div class="metric" data-key="cur_tools"><div class="value">${m.avg_curator_tool_calls||0}</div><div class="label">Avg Tool Calls</div></div>
           </div>
         </div>
+
+        ${configData ? `
+        <div class="card" id="curation-mode-card">
+          <div class="card-header"><h2>Curation Mode</h2></div>
+          <div class="metrics-grid" id="curation-mode-grid">
+            <div class="metric" data-key="curation_mode"><div class="value">${escapeHtml(configData.curation_mode||'two_pass')}</div><div class="label">Mode</div></div>
+            <div class="metric" data-key="cur_model"><div class="value mono">${escapeHtml(configData.curator_model||'extractor default')}</div><div class="label">Curator Model</div></div>
+            <div class="metric" data-key="cur_iters"><div class="value">${configData.curator_max_iterations||6}</div><div class="label">Max Iterations</div></div>
+            <div class="metric" data-key="bg_enabled"><div class="value ${configData.background_pass_enabled?'green':''}">${configData.background_pass_enabled?'on':'off'}</div><div class="label">Background Pass</div></div>
+            <div class="metric" data-key="prepper_model"><div class="value mono">${escapeHtml(configData.prepper_model||'(uses curator)')}</div><div class="label">Prepper Model</div></div>
+            <div class="metric" data-key="prepper_iters"><div class="value">${configData.prepper_max_iterations||12}</div><div class="label">Prepper Iterations</div></div>
+            <div class="metric" data-key="assembler_model"><div class="value mono">${escapeHtml(configData.assembler_model||'(uses curator)')}</div><div class="label">Assembler Model</div></div>
+            <div class="metric" data-key="assembler_iters"><div class="value">${configData.assembler_max_iterations||2}</div><div class="label">Assembler Iterations</div></div>
+          </div>
+        </div>
+        ` : ''}
 
         <div class="card" id="cache-card">
           <div class="card-header"><h2>File Cache</h2></div>

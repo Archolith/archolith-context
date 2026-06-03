@@ -113,3 +113,16 @@ def cancel_background_task(session_id: str) -> None:
     task = _bg_tasks.pop(session_id, None)
     if task is not None and not task.done():
         task.cancel()
+
+
+def prune_session_state(active_session_ids: set[str]) -> int:
+    """Drop curator state for sessions no longer present in the graph."""
+    stale_ids = {
+        sid for sid in (*_cache.keys(), *_briefing_cache.keys(), *_bg_tasks.keys())
+        if sid not in active_session_ids
+    }
+    for session_id in stale_ids:
+        clear_snapshot(session_id)
+        clear_briefing(session_id)
+        cancel_background_task(session_id)
+    return len(stale_ids)

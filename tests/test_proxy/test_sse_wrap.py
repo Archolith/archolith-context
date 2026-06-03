@@ -16,7 +16,7 @@ import json
 import pytest
 from starlette.responses import Response
 
-from archolith_proxy.openai.chat import _wrap_response_as_sse
+from archolith_proxy.proxy.streaming import _wrap_response_as_sse
 from archolith_proxy.proxy.circuit_breaker import (
     add_session_tokens,
     get_circuit_state,

@@ -1,8 +1,13 @@
-"""OpenAI-compatible tool schemas for the curator's 10 tools.
+"""OpenAI-compatible tool schemas for the curator's tools.
 
 Each schema follows the OpenAI function-calling format used by
 delegate_server.py ALL_TOOL_LIST. These are passed as the `tools=`
 parameter when calling the curator LLM.
+
+Three tool sets are defined:
+- ALL_CURATOR_TOOLS — full set for the default single-bot curator
+- PREPPER_TOOLS — all tools + score_file_relevance for the background prepper
+- ASSEMBLER_TOOLS — minimal set (select_relevant_turns + get_file_lines) for the inline assembler
 """
 
 from __future__ import annotations
@@ -280,4 +285,47 @@ ALL_CURATOR_TOOLS: list[dict] = [
             },
         },
     },
+]
+
+# Prepper tool set — all curator tools plus score_file_relevance
+SCORE_FILE_RELEVANCE_SCHEMA: dict = {
+    "type": "function",
+    "function": {
+        "name": "score_file_relevance",
+        "description": (
+            "Score all cached files by relevance to a given query. Returns a ranked list "
+            "of files with relevance scores and reasons. Use this to identify which files "
+            "the next question is likely to need, so you can pre-fetch their outlines and "
+            "key sections. Saves multiple list_session_files + get_file_outline calls."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "The likely next question or topic — what the developer's next turn "
+                        "is expected to be about. Natural language description."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+PREPPER_TOOLS: list[dict] = [*ALL_CURATOR_TOOLS, SCORE_FILE_RELEVANCE_SCHEMA]
+
+# Assembler tool set — minimal: just select_relevant_turns + get_file_lines
+def _find_tool(name: str, tools: list[dict]) -> dict | None:
+    """Find a tool schema by name in a tool list."""
+    for t in tools:
+        if t.get("function", {}).get("name") == name:
+            return t
+    return None
+
+_ASSEMBLER_TOOL_NAMES = {"select_relevant_turns", "get_file_lines"}
+ASSEMBLER_TOOLS: list[dict] = [
+    t for t in ALL_CURATOR_TOOLS
+    if t.get("function", {}).get("name") in _ASSEMBLER_TOOL_NAMES
 ]

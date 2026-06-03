@@ -6,6 +6,7 @@ import pytest
 
 from archolith_proxy.proxy.locks import (
     get_session_lock,
+    is_extraction_pending,
     wait_for_prior_extraction,
     cleanup_session_lock,
     cleanup_stale_locks,
@@ -58,6 +59,21 @@ class TestWaitForPriorExtraction:
         try:
             result = await wait_for_prior_extraction("timeout-session", timeout_s=0.1)
             assert result is False
+        finally:
+            lock.release()
+
+
+class TestIsExtractionPending:
+    @pytest.mark.asyncio
+    async def test_false_when_no_lock_held(self):
+        assert is_extraction_pending("pending-false-session") is False
+
+    @pytest.mark.asyncio
+    async def test_true_when_lock_held(self):
+        lock = get_session_lock("pending-true-session")
+        await lock.acquire()
+        try:
+            assert is_extraction_pending("pending-true-session") is True
         finally:
             lock.release()
 

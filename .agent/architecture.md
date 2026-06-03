@@ -137,12 +137,13 @@ Harness → POST /v1/chat/completions → Proxy
 
 ## Component Breakdown
 
-### Proxy Layer (`archolith_proxy/proxy/`)
-- FastAPI app mimicking OpenAI `/v1/chat/completions`
-- SSE streaming pass-through
+### Proxy Layer (`archolith_proxy/proxy/`, `archolith_proxy/openai/`, `archolith_proxy/routers/`)
+- FastAPI app factory in `main.py` with extracted operator routers for admin, sessions, metrics, memory admin, and live streaming
+- OpenAI-facing request handling split across `openai/chat.py`, `streaming.py`, `non_streaming.py`, `extraction.py`, `file_cache.py`, and `helpers.py`
+- SSE streaming pass-through and retry handling
 - Session identification (fingerprint from system prompt + first user message)
 - Request rewriting (linear → graph-assembled)
-- Response capture (for post-hoc extraction)
+- Response capture (for post-hoc extraction) plus trace-store consistency checks during startup when trace persistence is enabled
 
 ### Context Assembler (`archolith_proxy/assembler/`)
 - Queries session graph for relevant facts given current user intent
@@ -156,7 +157,7 @@ The primary assembly path when `CURATOR_ENABLED=true`. A tool-calling LLM that
 builds the context block for each turn by actively querying the session's
 knowledge store.
 
-**Entry point:** `curate_context()` in `curator/__init__.py`
+**Entry point:** `curate_context()` in `curator/pipeline.py` and re-exported from `curator/__init__.py`
 - Gated by: `CURATOR_ENABLED`, `FILE_CACHE_ENABLED`, cold-start turn count
 - Model/URL/key resolved from `CURATOR_*` settings → fall back to extractor settings
 - Hard latency cap: `asyncio.wait_for(loop, timeout=CURATOR_LATENCY_BUDGET_MS/1000)`
@@ -164,7 +165,7 @@ knowledge store.
 
 **Two-pass mode** (when `BACKGROUND_PASS_ENABLED=true`):
 
-1. **Background pass** (`run_background_pass()` in `curator/__init__.py`):
+1. **Background pass** (`run_background_pass()` in `curator/pipeline.py`):
    - Triggered after each upstream response in `_run_extraction()`
    - Runs a full curator loop with up to `BACKGROUND_PASS_MAX_ITERATIONS` (default 12) tool calls
    - Captures a `SessionBriefing` from the result: file contents, outlines, key facts, decisions
@@ -172,7 +173,7 @@ knowledge store.
    - Gated by `BACKGROUND_PASS_LATENCY_BUDGET_MS` (default 30s) — `asyncio.wait_for` timeout; on timeout, logs and returns silently
    - Debounced by `BACKGROUND_PASS_DEBOUNCE_MS` (default 2s) — skips if a pass ran too recently
 
-2. **Inline pass** (`_run_with_briefing()` in `curator/__init__.py`):
+2. **Inline pass** (`_run_with_briefing()` in `curator/pipeline.py`):
    - If a fresh briefing exists (`source_turn >= turn_number - 2`), the curator runs with only 2 iterations
    - The briefing is formatted into the system prompt as pre-fetched context (file contents, outlines, key facts)
    - Falls through to standard full curator run if briefing is missing or stale
@@ -231,6 +232,17 @@ class CuratorResult:
 - Use `search_facts` for keyword lookups; use `search_facts_semantic` when terminology may differ
 - 3–6 tool calls per run; hard latency cap via `CURATOR_LATENCY_BUDGET_MS`
 - Output format: `=== SESSION GOAL ===`, `=== CURRENT STATE ===`, `=== OPEN ISSUES ===`, `=== LAST VERIFICATION ===`, `=== RELEVANT CODE ===`, `=== KEY FACTS ===`, `=== DECISIONS ===`
+
+### Shared Utilities (`archolith_proxy/shared/`)
+
+- `shared/text_utils.py` is the cross-layer utility home for `_build_outline()`, `_normalize()`, `_tokenize()`, and `jaccard_similarity()`
+- This breaks the earlier `curator -> openai.chat` and `graph -> extractor.dedup` dependency leaks
+
+### Operator Surfaces
+
+- `GET /admin/config` and `PATCH /admin/config` expose runtime-tunable settings
+- `GET /admin/config-delta` shows the persisted override delta relative to base env settings
+- Runtime override persistence uses `config_overrides.json` at the project root and reloads on startup
 
 ### Agent-Solo Compression (`archolith_proxy/proxy/agent_solo.py`)
 

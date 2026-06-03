@@ -732,7 +732,7 @@ class TestTokenAwareAssembly:
             with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
                  patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
-                 patch("archolith_proxy.curator.curate_context", side_effect=fake_curate), \
+                 patch("archolith_proxy.openai.chat.curate_context", side_effect=fake_curate), \
                  patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
 
@@ -827,7 +827,7 @@ class TestTokenAwareAssembly:
             with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
                  patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
-                 patch("archolith_proxy.curator.curate_context", side_effect=fake_curate), \
+                 patch("archolith_proxy.openai.chat.curate_context", side_effect=fake_curate), \
                  patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
 
@@ -932,7 +932,7 @@ class TestTokenAwareAssembly:
             with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
                  patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
-                 patch("archolith_proxy.curator.curate_context", side_effect=fake_curate), \
+                 patch("archolith_proxy.openai.chat.curate_context", side_effect=fake_curate), \
                  patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
                  patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
 

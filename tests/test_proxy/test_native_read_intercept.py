@@ -563,7 +563,7 @@ class TestNativeReadIntercept:
         mock_backend = AsyncMock()
         mock_backend.delete_file_content = AsyncMock(return_value=True)
 
-        with patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend):
+        with patch("archolith_proxy.openai.file_cache.get_backend", return_value=mock_backend):
             await _invalidate_file_cache("test-session", ["config.py"], 5)
 
         mock_backend.delete_file_content.assert_called_once_with("test-session", "config.py")

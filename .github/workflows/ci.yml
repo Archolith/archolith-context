@@ -28,5 +28,8 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Check file sizes
+        run: bash scripts/check_file_sizes.sh
+
       - name: Test
         run: uv run pytest --tb=short -q

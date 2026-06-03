@@ -15,6 +15,7 @@ import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from archolith_proxy.config import get_settings
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
 from archolith_proxy.proxy.session import (
     clear_benchmark_session_id,
@@ -356,7 +357,10 @@ async def qa_extract(request: Request) -> dict:
             from archolith_proxy.extractor.dedup import deduplicate_facts
             from archolith_proxy.graph.backend import get_backend
 
-            existing_facts = await get_backend().get_active_facts(session_id, limit=200)
+            existing_facts = await get_backend().get_active_facts(
+                session_id,
+                limit=get_settings().fact_pool_limit,
+            )
             before_count = len(result.facts)
             kept_facts = deduplicate_facts(result.facts, existing_facts)
             skipped_count = before_count - len(kept_facts)

@@ -36,6 +36,7 @@ class TraceBuilder:
 
     def __init__(self) -> None:
         self._data: dict = {}
+        self._request_start: float | None = None  # monotonic clock at request entry
 
     def set_request(
         self,
@@ -56,6 +57,26 @@ class TraceBuilder:
         self._data["message_count"] = message_count
         self._data["user_turn_count"] = user_turn_count
         self._data["is_user_turn"] = is_user_turn
+
+    def set_request_start(self, monotonic_start: float, wall_clock: float) -> None:
+        """Record the monotonic clock at request entry for total latency calculation."""
+        self._request_start = monotonic_start
+        self._data["request_timestamp"] = wall_clock
+
+    def set_rtk_latency(self, rtk_ms: float) -> None:
+        """Record time spent in archolith-rtk (per-request filter + agent-solo compression)."""
+        self._data["rtk_latency_ms"] = self._data.get("rtk_latency_ms", 0.0) + rtk_ms
+
+    def finalize_timing(self, monotonic_now: float) -> None:
+        """Compute total_latency_ms and proxy_overhead_ms from stored start time.
+
+        Call this just before storing the trace, after upstream_latency_ms is set.
+        """
+        if self._request_start is not None:
+            total = (monotonic_now - self._request_start) * 1000
+            upstream = self._data.get("upstream_latency_ms", 0.0)
+            self._data["total_latency_ms"] = round(total, 1)
+            self._data["proxy_overhead_ms"] = round(max(0, total - upstream), 1)
 
     def set_original_messages(
         self,

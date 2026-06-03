@@ -25,7 +25,7 @@ import structlog
 
 from archolith_proxy.curator.prompts import CURATOR_SYSTEM_PROMPT, build_curator_user_prompt
 from archolith_proxy.curator.result import CuratorFailure, CuratorResult, CuratorToolCall
-from archolith_proxy.curator.schemas import ALL_CURATOR_TOOLS
+from archolith_proxy.curator.schemas import ALL_CURATOR_TOOLS, PREPPER_TOOLS, ASSEMBLER_TOOLS
 from archolith_proxy.curator.tools import TOOL_HANDLERS
 
 logger = structlog.get_logger()
@@ -159,6 +159,7 @@ async def _run_curator_native(
     max_iterations: int,
     system_prompt: str,
     model: str,
+    tool_set: list[dict] | None = None,
 ) -> tuple[CuratorResult | None, list[CuratorToolCall], str]:
     """Curator loop using native OpenAI-compatible tool calling.
 
@@ -166,10 +167,14 @@ async def _run_curator_native(
     - No working_dir, checkpoint, read_only, file_context
     - session_id passed to all tool dispatches
     - Tracks curated_paths and tool_calls_used
+    - Accepts optional tool_set parameter for filtered tool sets
+      (e.g., ASSEMBLER_TOOLS for the inline assembler).
+      Defaults to ALL_CURATOR_TOOLS for backward compatibility.
     - Returns (CuratorResult, tool_log, "") on success,
       or (None, tool_log, failure_reason) on error/timeout/max iterations
     """
-    allowed_tools = {s["function"]["name"] for s in ALL_CURATOR_TOOLS}
+    tools = tool_set if tool_set is not None else ALL_CURATOR_TOOLS
+    allowed_tools = {s["function"]["name"] for s in tools}
 
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
@@ -195,7 +200,7 @@ async def _run_curator_native(
                 base_delay=1.0,
                 model=model,
                 messages=messages,
-                tools=ALL_CURATOR_TOOLS,
+                tools=tools,
                 tool_choice="auto",
                 temperature=0.2,
             )
@@ -418,14 +423,16 @@ async def _run_curator_nous(
     max_iterations: int,
     system_prompt: str,
     model: str,
+    tool_set: list[dict] | None = None,
 ) -> CuratorResult | None:
     """Curator loop using Nous-style XML tool calling.
 
     Same adaptation pattern as _run_curator_native but for models
     that do not support native function calling.
     """
-    allowed_tools = {s["function"]["name"] for s in ALL_CURATOR_TOOLS}
-    nous_system = build_nous_system_prompt(system_prompt, ALL_CURATOR_TOOLS)
+    tools = tool_set if tool_set is not None else ALL_CURATOR_TOOLS
+    allowed_tools = {s["function"]["name"] for s in tools}
+    nous_system = build_nous_system_prompt(system_prompt, tools)
 
     messages: list[dict] = [
         {"role": "system", "content": nous_system},

@@ -360,6 +360,43 @@ class TraceStore:
     def session_count(self) -> int:
         return len(self._by_session)
 
+    @property
+    def by_session(self) -> dict[str, list[TurnTrace]]:
+        """Return a read-only view of the session→turns mapping."""
+        return dict(self._by_session)
+
+    async def verify_consistency(self, backend=None) -> dict[str, list[str]]:
+        """Verify that trace-stored session metadata matches graph metadata.
+
+        Compares trace-stored session_id+turn_number pairs against the graph.
+        Returns {"orphans": [...], "mismatches": [...]}.
+        This is a startup consistency check (Option C from the plan).
+        """
+        if backend is None:
+            from archolith_proxy.graph.backend import get_backend
+            backend = get_backend()
+        orphans = []
+        mismatches = []
+        for session_id, turns in self._by_session.items():
+            if session_id == "__no_session__":
+                continue
+            try:
+                graph_turn = await backend.get_turn_number(session_id)
+                max_trace_turn = max(t.turn_number for t in turns) if turns else 0
+                if graph_turn == 0 and max_trace_turn > 0:
+                    orphans.append(f"{session_id}: traces have turns up to {max_trace_turn}, graph has none")
+                elif graph_turn > 0 and max_trace_turn > graph_turn + 1:
+                    mismatches.append(
+                        f"{session_id}: graph turn={graph_turn}, max trace turn={max_trace_turn}"
+                    )
+            except Exception:
+                pass  # Graph might not be available at startup
+        if orphans:
+            logger.warning("trace_consistency_orphans", count=len(orphans))
+        if mismatches:
+            logger.warning("trace_consistency_mismatches", count=len(mismatches))
+        return {"orphans": orphans, "mismatches": mismatches}
+
 
 # Module-level singleton
 _instance: TraceStore | None = None

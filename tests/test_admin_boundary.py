@@ -5,13 +5,16 @@ Covers:
 - 401 rejection with invalid token when ADMIN_TOKEN is set
 - 200 acceptance with valid X-Admin-Token header
 - 200 acceptance with valid Authorization: Bearer header
+- Runtime config override persistence on the admin config endpoints
 """
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from archolith_proxy.config import reset_settings
+from archolith_proxy import config as config_module
+from archolith_proxy.config import get_settings, reset_settings
 
 
 class TestAdminTokenOpen:
@@ -111,3 +114,40 @@ class TestAdminTokenEnforced:
                 headers={"X-Admin-Token": "secret-test-token"},
             )
             assert resp.status_code == 200
+
+
+class TestAdminConfigPersistence:
+    """Runtime config updates should persist to config_overrides.json."""
+
+    def setup_method(self):
+        from archolith_proxy.graph.backend import reset_backend
+
+        reset_backend()
+        reset_settings()
+
+    @pytest.mark.asyncio
+    async def test_patch_persists_override_and_reports_delta(self, client, tmp_path: Path):
+        override_file = tmp_path / "config_overrides.json"
+
+        with patch.object(config_module, "_OVERRIDES_FILE", override_file):
+            reset_settings()
+
+            resp = await client.patch(
+                "/admin/config",
+                json={"context_token_budget": 12345},
+            )
+
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["updated"]["context_token_budget"] == 12345
+            assert "persist" in body["warning"].lower()
+            assert override_file.exists()
+
+            delta_resp = await client.get("/admin/config-delta")
+            assert delta_resp.status_code == 200
+            delta = delta_resp.json()
+            assert "context_token_budget" in delta["overridden"]
+            assert delta["current"]["context_token_budget"] == 12345
+
+            reset_settings()
+            assert get_settings().context_token_budget == 12345

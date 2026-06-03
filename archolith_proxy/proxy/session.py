@@ -1,6 +1,6 @@
 """Session fingerprinting + session resolution.
 
-Primary: X-Session-ID header (explicit, stable).
+Primary: X-Session-ID or x-session-affinity header (explicit, stable).
 Fallback: SHA-256(sanitized_system_prompt + first_user_message)[:16].
 
 System prompt sanitization strips timestamps, dates, and other dynamic
@@ -259,8 +259,12 @@ async def resolve_session(
     # Tool-call continuations (last msg role = "tool") are same-turn retries.
     is_new_user_turn = bool(messages) and messages[-1].get("role") == "user"
 
-    # Primary: explicit X-Session-ID header
-    session_id = headers.get("x-session-id") or headers.get("X-Session-ID")
+    # Primary: explicit X-Session-ID header or OpenCode's x-session-affinity
+    session_id = (
+        headers.get("x-session-id")
+        or headers.get("X-Session-ID")
+        or headers.get("x-session-affinity")
+    )
     if session_id:
         existing = await get_backend().find_session_by_id(session_id)
         if existing:

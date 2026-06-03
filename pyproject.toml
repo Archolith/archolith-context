@@ -61,3 +61,21 @@ pythonpath = ["archolith_proxy"]
 [tool.ruff]
 target-version = "py312"
 line-length = 120
+
+# ── File Size Budgets ──────────────────────────────────────────────────
+# Governance targets to prevent god file re-accumulation.
+#
+# Boundary              Target    Hard Limit
+# ─────────────────────  ───────   ─────────
+# Business logic files   ≤300 LOC  ≤500 LOC
+# Test files             ≤800 LOC  ≤1,200 LOC
+# Config files           ≤100 LOC  ≤200 LOC
+# __init__.py            ≤30 LOC   ≤100 LOC
+#
+# Enforced by `check_file_sizes.sh` in CI — see `.github/workflows/ci.yml`.
+[tool.archolith.size-limits]
+hard-limit-py = 500
+hard-limit-test = 1200
+hard-limit-config = 200
+hard-limit-init = 100
+exclude-dirs = [".venv", ".benchmarks", ".pytest_cache", "__pycache__"]

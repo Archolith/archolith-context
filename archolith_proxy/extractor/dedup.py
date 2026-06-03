@@ -2,48 +2,25 @@
 
 Uses Jaccard token overlap on normalized content. A new fact is skipped
 if its similarity to any existing active fact exceeds the threshold.
+
+Utility functions (_normalize, _tokenize, jaccard_similarity) are imported
+from shared so the graph layer can depend on shared instead of extractor.
 """
 
 from __future__ import annotations
 
-import re
 import structlog
+
+from archolith_proxy.shared.text_utils import (
+    _normalize,  # noqa: F401 — re-exported for backward compat
+    _tokenize,  # noqa: F401 — re-exported for backward compat
+    jaccard_similarity,  # noqa: F401 — re-exported for backward compat
+)
 
 logger = structlog.get_logger()
 
 # Default similarity threshold — skip if Jaccard > this value
 DEFAULT_SIMILARITY_THRESHOLD = 0.85
-
-
-def _normalize(text: str) -> str:
-    """Normalize fact content for comparison: lowercase, strip punctuation, collapse whitespace."""
-    text = text.lower().strip()
-    # Remove surrounding quotes
-    text = text.strip("\"'")
-    # Collapse whitespace
-    text = re.sub(r"\s+", " ", text)
-    # Strip trailing punctuation
-    text = re.sub(r"[.!?;:]+$", "", text)
-    return text
-
-
-def _tokenize(text: str) -> set[str]:
-    """Split normalized text into a set of word tokens."""
-    return set(_normalize(text).split())
-
-
-def jaccard_similarity(a: str, b: str) -> float:
-    """Compute Jaccard similarity between two fact strings.
-
-    Returns a value between 0.0 (no overlap) and 1.0 (identical token sets).
-    """
-    tokens_a = _tokenize(a)
-    tokens_b = _tokenize(b)
-    if not tokens_a or not tokens_b:
-        return 0.0
-    intersection = tokens_a & tokens_b
-    union = tokens_a | tokens_b
-    return len(intersection) / len(union)
 
 
 def is_duplicate(

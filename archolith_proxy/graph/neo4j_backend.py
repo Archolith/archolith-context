@@ -177,10 +177,20 @@ class Neo4jBackend:
     ) -> None:
         await _edges.create_touches(session_id, file_path, status, turn)
 
+    async def bulk_create_touches(
+        self, session_id: str, touches: list[dict]
+    ) -> None:
+        raise NotImplementedError("Bulk operations require LadybugDB backend; set GRAPH_BACKEND=ladybug")
+
     async def create_supersedes(
         self, old_fact_id: str, new_fact_id: str
     ) -> None:
         await _edges.create_supersedes(old_fact_id, new_fact_id)
+
+    async def bulk_create_supersedes(
+        self, pairs: list[tuple[str, str]]
+    ) -> None:
+        raise NotImplementedError("Bulk operations require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def get_touched_files(self, session_id: str) -> list[dict]:
         return await _edges.get_touched_files(session_id)
@@ -201,63 +211,93 @@ class Neo4jBackend:
             turn=turn,
         )
 
+    async def bulk_store_decisions(
+        self, session_id: str, decisions: list[dict], turn: int
+    ) -> list[str]:
+        raise NotImplementedError("Bulk operations require LadybugDB backend; set GRAPH_BACKEND=ladybug")
+
     async def get_decisions(
         self, session_id: str, include_superseded: bool = False
     ) -> list[dict]:
         return await _decisions.get_decisions(session_id, include_superseded)
 
-    # ── File Content Cache (LadybugDB-only in MVP — stubs for Neo4j) ───
+    # ── File Content Cache (LadybugDB-only in MVP — raise for Neo4j) ───
 
     async def upsert_file_content(
         self, session_id: str, path: str, content: str, sha256: str, turn: int,
     ) -> None:
-        return None
+        raise NotImplementedError("FileContent features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def get_file_content(self, session_id: str, path: str) -> dict | None:
-        return None
+        raise NotImplementedError("FileContent features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def get_file_lines(
         self, session_id: str, path: str, start: int, end: int,
     ) -> str | None:
-        return None
+        raise NotImplementedError("FileContent features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def list_cached_files(self, session_id: str) -> list[dict]:
-        return []
+        raise NotImplementedError("FileContent features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def delete_file_content(self, session_id: str, path: str) -> bool:
-        return False
+        raise NotImplementedError("FileContent features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     # ── Checkpoint / Issues / Verifications (LadybugDB-only in MVP) ───
 
     async def upsert_checkpoint(
         self, session_id: str, summary: str, next_step: str, confidence: float, turn: int,
     ) -> None:
-        return None
+        raise NotImplementedError("Checkpoint/Issue/Verification features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def get_checkpoint(self, session_id: str) -> dict | None:
-        return None
+        raise NotImplementedError("Checkpoint/Issue/Verification features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def create_issue(
         self, session_id: str, summary: str, status: str,
         related_file: str, related_command: str, turn: int,
     ) -> None:
-        return None
+        raise NotImplementedError("Checkpoint/Issue/Verification features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
+
+    async def bulk_create_issues(
+        self, session_id: str, issues: list[dict], turn: int
+    ) -> list[str]:
+        raise NotImplementedError("Checkpoint/Issue/Verification features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def resolve_issues(
         self, session_id: str, summaries: list[str], resolution_ref: str, turn: int,
     ) -> None:
-        return None
+        raise NotImplementedError("Checkpoint/Issue/Verification features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
+
+    async def bulk_resolve_issues(
+        self, session_id: str, summaries: list[str], resolution_ref: str, turn: int,
+    ) -> None:
+        raise NotImplementedError("Checkpoint/Issue/Verification features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def get_open_issues(self, session_id: str) -> list[dict]:
-        return []
+        raise NotImplementedError("Checkpoint/Issue/Verification features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def create_verification(
         self, session_id: str, command: str, status: str, summary: str, turn: int,
     ) -> None:
-        return None
+        raise NotImplementedError("Checkpoint/Issue/Verification features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
+
+    async def bulk_create_verifications(
+        self, session_id: str, verifications: list[dict], turn: int
+    ) -> list[str]:
+        raise NotImplementedError("Checkpoint/Issue/Verification features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     async def get_last_verification(self, session_id: str) -> dict | None:
-        return None
+        raise NotImplementedError("Checkpoint/Issue/Verification features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
+
+    # ── File Outline (LadybugDB-only in MVP) ───────────────────────────
+
+    async def upsert_file_outline(
+        self, session_id: str, path: str, outline: str, turn: int,
+    ) -> None:
+        raise NotImplementedError("FileOutline features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
+
+    async def get_file_outline(self, session_id: str, path: str) -> str | None:
+        raise NotImplementedError("FileOutline features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
     # ── Cleanup / TTL ──────────────────────────────────────────────────
 
@@ -270,7 +310,7 @@ class Neo4jBackend:
 
 # Verify the adapter implements the protocol at import time
 def _verify_protocol() -> None:
-    if not isinstance(Neo4jBackend, GraphBackend):
+    if not isinstance(Neo4jBackend(), GraphBackend):
         logger.warning(
             "neo4j_backend_protocol_mismatch",
             note="Neo4jBackend does not satisfy GraphBackend protocol",

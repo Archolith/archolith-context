@@ -1,36 +1,54 @@
-""" /v1/chat/completions endpoint — proxy with session resolution, context assembly, and extraction."""
+"""Chat completions endpoint — main orchestrator for OpenAI-compatible proxy.
+
+Routes requests through session resolution, context assembly (curator),
+streaming/non-streaming dispatch, and async extraction.
+
+Heavy logic is delegated to sub-modules: helpers, streaming, non_streaming,
+extraction, file_cache.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import json
 import time
 
 import httpx
 import structlog
-from fastapi import APIRouter, Request
-from starlette.background import BackgroundTasks
-from starlette.responses import Response, StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from archolith_proxy.assembler.context import assemble_context
 from archolith_proxy.config import get_settings
-from archolith_proxy.extractor.client import extract_facts, extract_facts_per_tool
+from archolith_proxy.curator.pipeline import curate_context, run_background_pass
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
-from archolith_proxy.metrics import get_metrics, record_assembly_mode, record_metric
-from archolith_proxy.models.graph_nodes import FactType, FileStatus
-from archolith_proxy.openai.errors import make_error_response
+from archolith_proxy.metrics import get_metrics, record_metric
+from archolith_proxy.models.dtos import TurnTrace
 from archolith_proxy.openai.schemas import ChatCompletionRequest
-from archolith_proxy.proxy.rewrite import estimate_input_tokens, inject_no_dsml_hint, rewrite_messages, strip_reasoning
-from archolith_proxy.proxy.session import resolve_session
-from archolith_proxy.proxy.live import (
-    broadcast_request, broadcast_assembly, broadcast_response,
-    broadcast_extraction, broadcast_session_event, broadcast_recall,
+from archolith_proxy.openai.helpers import (
+    _build_call_map,
+    _collect_recent_tool_results,
+    _collect_tool_call_records,
+    _extract_file_reads,
+    _extract_finish_reason,
+    _extract_response_text,
+    _extract_tool_path,
+    _extract_user_message,
+    _infer_file_touch_statuses,
+    _normalize_message_content,
+    _prefer_stronger_file_status,
 )
-from archolith_proxy.proxy.session import get_benchmark_passthrough_session_id
-from archolith_proxy.proxy.streaming import ResponseCapture, stream_with_capture, stream_with_recall_detection, _assemble_streaming_response, _wrap_response_as_sse, yield_as_sse
-from archolith_proxy.proxy.upstream import RETRYABLE_STATUS_CODES, upstream_request_with_retry
-from archolith_proxy.rtk import filter_request_body, filter_single_tool_result
+from archolith_proxy.openai.extraction import _run_extraction, _build_outline
+from archolith_proxy.openai.file_cache import (
+    _extract_file_writes,
+    _invalidate_file_cache,
+    _invalidate_written_files,
+    _upsert_file_cache,
+)
+from archolith_proxy.openai.non_streaming import _handle_non_streaming
+from archolith_proxy.openai.streaming import _handle_streaming
+from archolith_proxy.openai.errors import make_error_response, UpstreamError
+from archolith_proxy.proxy.live import broadcast_request, broadcast_session_event
+from archolith_proxy.proxy.session import resolve_session
+from archolith_proxy.proxy.upstream import upstream_request_with_retry
 from archolith_proxy.trace.builder import TraceBuilder
 from archolith_proxy.trace.store import get_trace_store
 
@@ -39,209 +57,131 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
-def _normalize_message_content(content: object) -> str:
-    """Flatten OpenAI-style message content into plain text."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            text = _normalize_message_content(item)
-            if text:
-                parts.append(text)
-        return "\n".join(parts)
-    if isinstance(content, dict):
-        text = content.get("text")
-        if isinstance(text, str):
-            return text
-        nested = content.get("content")
-        if nested is not None:
-            return _normalize_message_content(nested)
-    return ""
+# ── Passthrough helpers ─────────────────────────────────────────────────
 
 
-def _build_call_map(messages: list[dict]) -> dict[str, tuple[str, dict]]:
-    """Build tool_call_id → (tool_name, args) lookup from all assistant messages.
-
-    Shared utility used by _extract_file_reads, _extract_file_writes,
-    and _collect_tool_call_records to avoid duplicating the call_map
-    construction pattern.
-    """
-    call_map: dict[str, tuple[str, dict]] = {}
-    for msg in messages:
-        if msg.get("role") != "assistant":
-            continue
-        for tc in (msg.get("tool_calls") or []):
-            try:
-                args = json.loads(tc["function"]["arguments"])
-            except (KeyError, json.JSONDecodeError):
-                args = {}
-            call_map[tc.get("id", "")] = (tc["function"]["name"], args)
-    return call_map
+def _estimate_input_tokens(messages: list[dict]) -> int:
+    """Rough token estimate for input messages."""
+    return sum(len(json.dumps(m)) // 4 for m in messages)
 
 
-def _collect_tool_call_records(messages: list[dict]) -> list:
-    """Build ToolCallRecord list from the CURRENT TURN's tool calls only.
+async def _handle_passthrough_stream(
+    request: Request, body: dict, req: ChatCompletionRequest,
+    trace_builder: TraceBuilder, background_tasks: BackgroundTasks,
+    settings, request_start: float,
+) -> Response:
+    """Handle streaming passthrough (no context management)."""
+    from archolith_proxy.proxy.streaming import ResponseCapture
 
-    "Current turn" = tool messages paired with the most recent assistant message
-    that has tool_calls. Scoped to this turn to avoid re-processing tool calls
-    from previous turns (which have already been extracted and stored).
+    clean_model = req.model[: -len("-passthrough")]
+    body["model"] = clean_model
+    upstream_url = f"{settings.upstream_api_url}/chat/completions"
+    upstream_headers = {
+        "Authorization": f"Bearer {settings.upstream_api_key}",
+        "Content-Type": "application/json",
+    }
+    if req.stream:
+        body.setdefault("stream_options", {})["include_usage"] = True
+    request_body = json.dumps(body).encode("utf-8")
+    t0 = time.monotonic()
+    http_client = request.app.state.http_client
+    pt_capture = ResponseCapture()
 
-    Applies RTK Layer 1 filter — the messages array passed to extraction is the
-    ORIGINAL (pre-rewrite) array; the outbound RTK filter runs on a copy in
-    filter_request_body() and does not mutate the source array.
-    """
-    from archolith_proxy.extractor.base import ToolCallRecord
-
-    # Find the most recent assistant message with tool_calls — that defines the current turn.
-    # Older turns' tool results have already been extracted in prior calls.
-    last_assistant: dict | None = None
-    for msg in reversed(messages):
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            last_assistant = msg
-            break
-
-    if not last_assistant:
-        return []
-
-    # Build id → (name, args) from the current-turn assistant message only
-    current_turn_map: dict[str, tuple[str, dict]] = {}
-    for tc in (last_assistant.get("tool_calls") or []):
+    async def _passthrough_stream():
         try:
-            args = json.loads(tc["function"]["arguments"])
-        except (KeyError, json.JSONDecodeError):
-            args = {}
-        current_turn_map[tc.get("id", "")] = (tc["function"]["name"], args)
+            async with http_client.stream(
+                "POST", upstream_url, headers=upstream_headers,
+                content=request_body,
+                timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0),
+            ) as resp:
+                async for chunk in resp.aiter_bytes():
+                    for line in chunk.decode("utf-8", errors="replace").split("\n"):
+                        line = line.strip()
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            pt_capture.add_chunk(line[6:])
+                    yield chunk
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            logger.warning("passthrough_stream_error", error=str(exc))
 
-    records = []
-    for msg in messages:
-        if msg.get("role") != "tool":
-            continue
-        tc_id = msg.get("tool_call_id", "")
-        if tc_id not in current_turn_map:
-            continue
-        tool_name, args = current_turn_map[tc_id]
-        content = _normalize_message_content(msg.get("content", ""))
-        # Apply RTK Layer 1 filter — same as _collect_recent_tool_results()
-        content = filter_single_tool_result(content, tool_name=tool_name)
-        records.append(ToolCallRecord(
-            tool_call_id=tc_id,
-            tool_name=tool_name,
-            args=args,
-            result=content,
-        ))
-    return records  # all results from current turn, no cap — extractors size-limit individually
+    latency_ms = (time.monotonic() - t0) * 1000
 
+    async def _finalize_passthrough_trace():
+        trace_builder.set_response(
+            status=200, latency_ms=latency_ms,
+            output_tokens=pt_capture.output_tokens,
+            response_summary="(passthrough streaming)",
+            cache_hit_tokens=pt_capture.cache_hit_tokens,
+            cache_miss_tokens=pt_capture.cache_miss_tokens,
+        )
+        trace_builder.finalize_timing(time.monotonic())
+        try:
+            await get_trace_store().record(trace_builder.build())
+        except Exception:
+            pass
 
-def _extract_response_text(response_data: dict) -> str:
-    """Extract assistant text from a non-streaming chat completion response."""
-    choices = response_data.get("choices", [])
-    if not choices:
-        return ""
-    message = choices[0].get("message", {})
-    return _normalize_message_content(message.get("content"))
-
-
-def _extract_finish_reason(response_data: dict) -> str | None:
-    """Extract finish_reason from the first choice of a non-streaming response."""
-    choices = response_data.get("choices", [])
-    if not choices:
-        return None
-    return choices[0].get("finish_reason")
-
-
-def _extract_file_reads(messages: list[dict]) -> list[dict]:
-    """Pair file-read tool calls with their results via tool_call_id.
-
-    Iterates the messages array to build a lookup from assistant tool_calls,
-    then matches tool result messages by tool_call_id. Only returns pairs
-    where the tool is NOT a compressible tool (i.e., it's a file-read tool)
-    and content is a non-empty string.
-
-    Returns list of {path, content, tool_call_id, tool_name}.
-    """
-    from archolith_proxy.proxy.rewrite import _is_compressible_tool
-
-    call_map = _build_call_map(messages)
-
-    # Debug: log message structure when call_map is empty to diagnose extraction misses
-    role_counts = {}
-    for m in messages:
-        r = m.get("role", "unknown")
-        role_counts[r] = role_counts.get(r, 0) + 1
-    tool_msg_ids = [m.get("tool_call_id", "") for m in messages if m.get("role") == "tool"]
-    sample_args = [(name, list(args.keys())) for name, args in list(call_map.values())[:4]]
-    logger.info(
-        "file_cache_extract_debug",
-        total_messages=len(messages),
-        role_counts=role_counts,
-        call_map_size=len(call_map),
-        tool_result_count=len(tool_msg_ids),
-        sample_call_names=list({v[0] for v in call_map.values()})[:8],
-        sample_tool_ids_match=[tid for tid in tool_msg_ids[:4] if tid in call_map],
-        sample_args=sample_args,
+    background_tasks.add_task(_finalize_passthrough_trace)
+    return StreamingResponse(
+        _passthrough_stream(), status_code=200,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        background=background_tasks,
     )
 
-    # Match tool results to calls
-    results = []
-    for msg in messages:
-        if msg.get("role") != "tool":
-            continue
-        tc_id = msg.get("tool_call_id", "")
-        if tc_id not in call_map:
-            continue
-        name, args = call_map[tc_id]
-        if _is_compressible_tool(name):
-            continue  # search/grep/web — not file content
-        content = _normalize_message_content(msg.get("content", ""))
-        if not content.strip():
-            continue
-        path = (
-            args.get("path") or args.get("file_path")
-            or args.get("filePath") or args.get("filename")
-            or args.get("target_file") or ""
+
+async def _handle_passthrough_non_stream(
+    request: Request, body: dict, req: ChatCompletionRequest,
+    trace_builder: TraceBuilder, background_tasks: BackgroundTasks,
+    settings, request_start: float,
+) -> Response:
+    """Handle non-streaming passthrough."""
+    clean_model = req.model[: -len("-passthrough")]
+    body["model"] = clean_model
+    upstream_url = f"{settings.upstream_api_url}/chat/completions"
+    upstream_headers = {
+        "Authorization": f"Bearer {settings.upstream_api_key}",
+        "Content-Type": "application/json",
+    }
+    request_body = json.dumps(body).encode("utf-8")
+    t0 = time.monotonic()
+    try:
+        resp = await upstream_request_with_retry(
+            client=request.app.state.http_client, url=upstream_url,
+            headers=upstream_headers, content=request_body,
+            max_retries=settings.upstream_max_retries,
+            backoff_base=settings.upstream_retry_backoff_base_s,
         )
-        if not path:
-            continue
-        results.append({
-            "path": path, "content": content,
-            "tool_call_id": tc_id, "tool_name": name,
-        })
-    return results
+    except httpx.TimeoutException:
+        return make_error_response(504, "Upstream request timed out", "upstream_timeout", code="timeout")
+    except httpx.ConnectError as e:
+        return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
+
+    latency_ms = (time.monotonic() - t0) * 1000
+    response_data = resp.json() if resp.status_code == 200 else {}
+    usage = response_data.get("usage", {})
+    output_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
+    trace_builder.set_response(
+        status=resp.status_code, latency_ms=latency_ms,
+        output_tokens=output_tokens,
+        response_summary=_extract_response_text(response_data)[:500],
+        cache_hit_tokens=usage.get("prompt_cache_hit_tokens", 0) or 0,
+        cache_miss_tokens=usage.get("prompt_cache_miss_tokens", 0) or 0,
+    )
+    trace_builder.finalize_timing(time.monotonic())
+
+    async def _finalize_trace():
+        try:
+            await get_trace_store().record(trace_builder.build())
+        except Exception:
+            pass
+
+    background_tasks.add_task(_finalize_trace)
+    return Response(
+        content=resp.content, status_code=resp.status_code,
+        media_type="application/json", background=background_tasks,
+    )
 
 
-def _collect_recent_tool_results(messages: list[dict], max_chars: int = 4000) -> str | None:
-    """Serialize the newest tool results first within the extraction budget."""
-    recent_entries: list[str] = []
-    used = 0
-
-    for msg in reversed(messages):
-        if msg.get("role") != "tool":
-            continue
-
-        content = _normalize_message_content(msg.get("content")).strip()
-        if not content:
-            continue
-
-        tool_name = msg.get("name", "unknown_tool")
-        # Apply RTK Layer 1 filter before packing into the extraction budget —
-        # strips noise/boilerplate so the extractor LLM sees signal, not lint.
-        content = filter_single_tool_result(content, tool_name=tool_name)
-        entry = f"Tool [{tool_name}]:\n{content}"
-        remaining = max_chars - used
-        if remaining <= 0:
-            break
-        if len(entry) > remaining:
-            entry = entry[:remaining]
-        recent_entries.append(entry)
-        used += len(entry)
-
-    if not recent_entries:
-        return None
-
-    recent_entries.reverse()
-    return "\n\n".join(recent_entries)
-
+# ── Main entry point ────────────────────────────────────────────────────
 
 
 @router.post("/chat/completions")
@@ -249,170 +189,59 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     """Accept OpenAI chat completion requests, forward to upstream,
     resolve session, assemble context, and trigger async fact extraction."""
     settings = get_settings()
+    request_start = time.monotonic()
 
-    # Start trace builder for observability
     trace_builder = TraceBuilder()
+    trace_builder.set_request_start(request_start, time.time())
 
-    # Parse request body
     try:
         body = await request.json()
     except Exception:
         return make_error_response(400, "Invalid JSON in request body", "invalid_request_error")
 
-    # Validate against schema
     try:
         req = ChatCompletionRequest(**body)
     except Exception as e:
         return make_error_response(400, f"Invalid request: {e}", "invalid_request_error")
 
     if not req.messages:
-        return make_error_response(
-            400, "Messages array must not be empty", "invalid_request_error", param="messages"
-        )
+        return make_error_response(400, "Messages array must not be empty", "invalid_request_error", param="messages")
 
-    # Passthrough mode — model name ends with "-passthrough" suffix.
-    # Strip the suffix, forward unchanged, record trace (tokens + latency), skip
-    # all context management (assembly, injection, extraction, graph writes).
-    # Used for accurate baseline benchmarking through the same infrastructure.
+    # ── Passthrough mode ──
     _PASSTHROUGH_SUFFIX = "-passthrough"
     is_passthrough = req.model.endswith(_PASSTHROUGH_SUFFIX)
     if is_passthrough:
+        from archolith_proxy.proxy.session import get_benchmark_passthrough_session_id
+
         clean_model = req.model[: -len(_PASSTHROUGH_SUFFIX)]
         body["model"] = clean_model
-        upstream_url = f"{settings.upstream_api_url}/chat/completions"
-        upstream_headers = {
-            "Authorization": f"Bearer {settings.upstream_api_key}",
-            "Content-Type": "application/json",
-        }
-        input_tokens = estimate_input_tokens(body.get("messages", []))
-        # Resolve passthrough session ID from benchmark override (enables trace lookup by known ID)
+        input_tokens = _estimate_input_tokens(body.get("messages", []))
         passthrough_session_id = get_benchmark_passthrough_session_id()
         trace_builder.set_request(
-            session_id=passthrough_session_id,
-            turn_number=0,
-            model=clean_model,
-            stream=req.stream,
-            input_tokens=input_tokens,
+            session_id=passthrough_session_id, turn_number=0, model=clean_model,
+            stream=req.stream, input_tokens=input_tokens,
             message_count=len(body.get("messages", [])),
             user_turn_count=sum(1 for m in body.get("messages", []) if m.get("role") == "user"),
         )
         trace_builder.set_original_messages(body.get("messages", []))
         trace_builder.set_assembly(
-            mode="passthrough",
-            reason="passthrough model",
-            latency_ms=0.0,
-            facts_selected=[],
-            files_selected=[],
-            decisions_selected=[],
-            rewritten_tokens=0,
-            savings_tokens=0,
-            savings_ratio=0.0,
-            compression_ratio=1.0,
+            mode="passthrough", reason="passthrough model", latency_ms=0.0,
+            facts_selected=[], files_selected=[], decisions_selected=[],
+            rewritten_tokens=0, savings_tokens=0, savings_ratio=0.0, compression_ratio=1.0,
         )
-        # Ensure DeepSeek returns usage data in streaming responses
         if req.stream:
-            body.setdefault("stream_options", {})["include_usage"] = True
-        request_body = json.dumps(body).encode("utf-8")
-        t0 = time.monotonic()
-        if req.stream:
-            # Streaming passthrough — must keep the httpx stream context alive while
-            # yielding chunks. upstream_request_with_retry buffers the full body via
-            # client.post(), making aiter_bytes() a no-op on the already-consumed stream.
-            # Use client.stream() directly and own the context manager inside the generator.
-            http_client = request.app.state.http_client
-            pt_capture = ResponseCapture()
-
-            async def _passthrough_stream():
-                try:
-                    async with http_client.stream(
-                        "POST",
-                        upstream_url,
-                        headers=upstream_headers,
-                        content=request_body,
-                        timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0),
-                    ) as resp:
-                        async for chunk in resp.aiter_bytes():
-                            # Feed chunks to capture for usage extraction
-                            for line in chunk.decode("utf-8", errors="replace").split("\n"):
-                                line = line.strip()
-                                if line.startswith("data: ") and line != "data: [DONE]":
-                                    pt_capture.add_chunk(line[6:])
-                            yield chunk
-                except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                    logger.warning("passthrough_stream_error", error=str(exc))
-
-            latency_ms = (time.monotonic() - t0) * 1000
-
-            async def _finalize_passthrough_trace():
-                trace_builder.set_response(
-                    status=200,
-                    latency_ms=latency_ms,
-                    output_tokens=pt_capture.output_tokens,
-                    response_summary="(passthrough streaming)",
-                    cache_hit_tokens=pt_capture.cache_hit_tokens,
-                    cache_miss_tokens=pt_capture.cache_miss_tokens,
-                )
-                try:
-                    trace = trace_builder.build()
-                    await get_trace_store().record(trace)
-                except Exception:
-                    logger.warning("passthrough_trace_store_failed", exc_info=True)
-
-            background_tasks.add_task(_finalize_passthrough_trace)
-            return StreamingResponse(
-                _passthrough_stream(),
-                status_code=200,
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-                background=background_tasks,
+            return await _handle_passthrough_stream(
+                request, body, req, trace_builder, background_tasks, settings, request_start,
             )
-        try:
-            resp = await upstream_request_with_retry(
-                client=request.app.state.http_client,
-                url=upstream_url,
-                headers=upstream_headers,
-                content=request_body,
-                max_retries=settings.upstream_max_retries,
-                backoff_base=settings.upstream_retry_backoff_base_s,
-            )
-        except httpx.TimeoutException:
-            return make_error_response(504, "Upstream request timed out", "upstream_timeout", code="timeout")
-        except httpx.ConnectError as e:
-            return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
-        latency_ms = (time.monotonic() - t0) * 1000
-        # Non-streaming passthrough — record token counts from response
-        if True:
-            response_data = resp.json() if resp.status_code == 200 else {}
-            usage = response_data.get("usage", {})
-            output_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
-            trace_builder.set_response(
-                status=resp.status_code,
-                latency_ms=latency_ms,
-                output_tokens=output_tokens,
-                response_summary=_extract_response_text(response_data)[:500],
-                cache_hit_tokens=usage.get("prompt_cache_hit_tokens", 0) or 0,
-                cache_miss_tokens=usage.get("prompt_cache_miss_tokens", 0) or 0,
-            )
-            async def _finalize_passthrough_trace_ns():
-                try:
-                    trace = trace_builder.build()
-                    await get_trace_store().record(trace)
-                except Exception:
-                    logger.warning("passthrough_trace_store_failed_ns", exc_info=True)
-            background_tasks.add_task(_finalize_passthrough_trace_ns)
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                media_type="application/json",
-                background=background_tasks,
-            )
+        return await _handle_passthrough_non_stream(
+            request, body, req, trace_builder, background_tasks, settings, request_start,
+        )
 
-    # Session resolution (graceful — skip if Neo4j not ready)
+    # ── Session resolution ──
     session_id = None
     turn_number = 0
     graph_ready = is_graph_ready()
 
-    # Guard: if lifespan didn't initialize http_client, return 503
     if not hasattr(request.app.state, "http_client"):
         return make_error_response(503, "Proxy not initialized — lifespan did not complete", "server_error")
 
@@ -422,526 +251,144 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             messages_raw = body.get("messages", [])
             session_id, is_new = await resolve_session(headers, messages_raw)
             turn_number = await get_backend().get_turn_number(session_id)
-            logger.debug("session_resolved", session_id=session_id, turn=turn_number, is_new=is_new)
 
-            # Cancel any in-flight background curator pass — a new turn means
-            # the briefing it's building is already stale.
             from archolith_proxy.curator.state import cancel_background_task
             cancel_background_task(session_id)
 
-            # Set initial session goal + extract harness env on new sessions
             if is_new:
                 first_user_msg = ""
                 for msg in messages_raw:
                     if msg.get("role") == "user":
                         content = msg.get("content", "")
                         if isinstance(content, list):
-                            content = " ".join(
-                                p.get("text", "") for p in content if isinstance(p, dict)
-                            )
+                            content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
                         first_user_msg = content[:200]
                         break
                 if first_user_msg:
-                    # Truncate to a single-sentence goal
                     goal = first_user_msg.split("\n")[0].strip()[:120]
                     try:
                         await get_backend().update_goal(session_id, goal)
-                        logger.info("session_goal_set_initial", session_id=session_id, goal=goal[:80])
                         await broadcast_session_event(session_id, "session_created", goal=goal)
-                    except Exception as e:
-                        logger.warning("session_goal_set_failed", session_id=session_id, error=str(e))
+                    except Exception:
+                        pass
 
-                # Extract harness environment metadata from system prompt
                 from archolith_proxy.proxy.session import extract_harness_env
                 harness_env = extract_harness_env(messages_raw)
                 if harness_env:
-                    trace_store = get_trace_store()
-                    trace_store.set_session_metadata(session_id, "harness_env", harness_env)
-                    logger.info(
-                        "harness_env_extracted",
-                        session_id=session_id,
-                        harness=harness_env.get("harness", "unknown"),
-                        workspace=harness_env.get("workspace_root_folder", ""),
-                    )
+                    get_trace_store().set_session_metadata(session_id, "harness_env", harness_env)
 
-                # Snapshot proxy feature flags so session grading can
-                # reconstruct which features were active at session start.
                 from archolith_proxy.config import snapshot_config
-                get_trace_store().set_session_metadata(
-                    session_id, "proxy_config", snapshot_config(),
-                )
+                get_trace_store().set_session_metadata(session_id, "proxy_config", snapshot_config())
 
-            # Bind session context for request-level logging middleware
-            structlog.contextvars.bind_contextvars(
-                session_id=session_id,
-                turn_number=turn_number,
-            )
+            structlog.contextvars.bind_contextvars(session_id=session_id, turn_number=turn_number)
         except Exception as e:
             logger.warning("session_resolution_failed", error=str(e))
             record_metric("neo4j_errors", 1)
 
-    # Fetch current session goal for extraction context
+    # ── Session goal for extraction ──
     session_goal = None
     if session_id and graph_ready:
         try:
             session_data = await get_backend().find_session_by_id(session_id)
             session_goal = session_data.get("goal") if session_data else None
         except Exception:
-            pass  # Non-critical — extraction will proceed without goal context
+            pass
 
-    # Context assembly — rewrite messages if graph has enough data
+    # ── Context assembly ──
     assembled = None
     assembly_mode = "passthrough"
+    assembly_reason = ""
     assembly_latency_ms = 0.0
     rewritten_tokens = 0
     savings = 0
     savings_ratio = 0.0
     messages = body.get("messages", [])
-    input_tokens = estimate_input_tokens(messages)
+    input_tokens = _estimate_input_tokens(messages)
     record_metric("total_input_tokens_seen", input_tokens)
     user_turn_count = sum(1 for m in messages if m.get("role") == "user")
-
-    # Detect agent-solo turns: last message is "tool" (tool-call continuation)
-    # vs user turns: last message is "user" (new user input).
-    # Agent-solo turns are rapid-fire API calls within the same user turn
-    # (e.g., OpenCode doing Read → Edit → Read cycles). Assembly should only
-    # fire on user turns — agent-solo turns get passthrough since the graph
-    # context hasn't meaningfully changed since the last user-turn assembly.
     is_user_turn = bool(messages) and messages[-1].get("role") == "user"
 
-    # Per-session token budget — stop context management when exceeded.
-    # Only count user-turn tokens: agent-solo turns pass through unmodified
-    # and shouldn't consume the curation budget.
     session_over_budget = False
     if session_id and settings.max_input_tokens_per_session > 0:
         from archolith_proxy.proxy.circuit_breaker import add_session_tokens, is_session_over_budget
         if is_user_turn:
             add_session_tokens(session_id, input_tokens)
         session_over_budget = is_session_over_budget(session_id, settings.max_input_tokens_per_session)
-        if session_over_budget:
-            logger.warning(
-                "session_over_token_budget",
-                session_id=session_id,
-                input_tokens=input_tokens,
-                budget=settings.max_input_tokens_per_session,
-                action=settings.session_token_budget_action,
+        if session_over_budget and settings.session_token_budget_action == "reject":
+            raise UpstreamError(
+                f"Session {session_id} exceeded token budget "
+                f"({settings.max_input_tokens_per_session:,} tokens)"
             )
-            if settings.session_token_budget_action == "reject":
-                from archolith_proxy.openai.errors import UpstreamError
-                raise UpstreamError(
-                    f"Session {session_id} exceeded token budget "
-                    f"({settings.max_input_tokens_per_session:,} tokens)"
-                )
 
-    # Trace: record request arrival
     trace_builder.set_request(
-        session_id=session_id,
-        turn_number=turn_number,
-        model=req.model,
-        stream=req.stream,
-        input_tokens=input_tokens,
-        message_count=len(messages),
-        user_turn_count=user_turn_count,
+        session_id=session_id, turn_number=turn_number, model=req.model,
+        stream=req.stream, input_tokens=input_tokens,
+        message_count=len(messages), user_turn_count=user_turn_count,
         is_user_turn=is_user_turn,
     )
-    trace_builder.set_original_messages(
-        body.get("messages", []), is_user_turn=is_user_turn,
-    )
+    trace_builder.set_original_messages(body.get("messages", []), is_user_turn=is_user_turn)
 
-    # Live stream: broadcast incoming request
     await broadcast_request(
-        session_id=session_id, turn_number=turn_number,
-        model=req.model, message_count=len(body.get("messages", [])),
-        stream=req.stream, input_tokens=input_tokens,
+        session_id=session_id, turn_number=turn_number, model=req.model,
+        message_count=len(body.get("messages", [])), stream=req.stream,
+        input_tokens=input_tokens,
     )
 
-    # Agent-solo turn gating: skip full curator assembly on tool-call
-    # continuations but optionally apply mechanical compression (shrink,
-    # dedup, middle compress) to reduce token cost without an LLM call.
+    # ── Agent-solo gating ──
     is_agent_solo = session_id and graph_ready and not session_over_budget and not is_user_turn
     if is_agent_solo:
-        assembly_mode = "agent_solo"
+        if settings.agent_solo_shrink_enabled or settings.agent_solo_dedup_enabled or settings.agent_solo_compress_middle_enabled:
+            from archolith_proxy.assembler.solo import apply_agent_solo_compression
+            messages, savings_input, _compression_log = await apply_agent_solo_compression(
+                messages=messages, session_id=session_id, settings=settings,
+            )
+            savings += savings_input
+            rewritten_tokens += savings_input
+            assembly_mode = "agent_solo"
+            assembly_reason = "agent_solo_compression"
 
-        # Optional payload dump for offline benchmarking
-        if settings.agent_solo_dump_payloads:
-            try:
-                import json as _json
-                from pathlib import Path as _Path
-                dump_dir = _Path(settings.trace_dir or "data") / "agent_solo_payloads"
-                dump_dir.mkdir(parents=True, exist_ok=True)
-                dump_path = dump_dir / f"{session_id}_t{turn_number}.json"
-                with open(dump_path, "w", encoding="utf-8") as _f:
-                    _json.dump(body.get("messages", []), _f)
-                logger.debug("agent_solo_payload_dumped", path=str(dump_path))
-            except Exception:
-                logger.warning("agent_solo_dump_failed", exc_info=True)
-
-        any_solo_strategy = (
-            settings.agent_solo_shrink_enabled
-            or settings.agent_solo_dedup_enabled
-            or settings.agent_solo_compress_middle_enabled
+    # ── Curator assembly (user turns) ──
+    if session_id and graph_ready and not session_over_budget and is_user_turn:
+        t0 = time.monotonic()
+        assembled = await curate_context(
+            session_id=session_id, turn_number=turn_number,
+            user_message=_extract_user_message(messages),
+            session_goal=session_goal, http_client=request.app.state.http_client,
+            messages=messages,
         )
-        if any_solo_strategy:
-            from archolith_proxy.proxy.agent_solo import compress_agent_solo
-            solo_messages = body.get("messages", [])
-            solo_messages, solo_stats = compress_agent_solo(
-                solo_messages,
-                session_id=session_id,
-                input_tokens=input_tokens,
-                shrink_enabled=settings.agent_solo_shrink_enabled,
-                dedup_enabled=settings.agent_solo_dedup_enabled,
-                compress_middle_enabled=settings.agent_solo_compress_middle_enabled,
-                shrink_max_tokens=settings.agent_solo_shrink_max_tokens,
-                min_input_tokens=settings.agent_solo_min_input_tokens,
-                coherence_tail_size=settings.coherence_tail_size,
-                max_tail_messages=settings.max_tail_messages,
-            )
-            if solo_stats["total_chars_saved"] > 0:
-                body["messages"] = solo_messages
-                assembly_mode = "agent_solo_compressed"
-                # Estimate token savings (~4 chars per token)
-                est_savings = solo_stats["total_chars_saved"] // 4
-                savings = est_savings
-                rewritten_tokens = max(0, input_tokens - est_savings)
-                savings_ratio = savings / input_tokens if input_tokens > 0 else 0.0
-                trace_builder.set_solo_stats(solo_stats)
-                logger.info(
-                    "agent_solo_compressed",
-                    session_id=session_id,
-                    turn=turn_number,
-                    strategies=solo_stats["strategies_applied"],
-                    chars_saved=solo_stats["total_chars_saved"],
-                    est_tokens_saved=est_savings,
-                )
-            else:
-                logger.debug(
-                    "agent_solo_passthrough",
-                    session_id=session_id,
-                    turn=turn_number,
-                    input_tokens=input_tokens,
-                    skip_reason=solo_stats.get("skipped_reason"),
-                )
-        else:
-            logger.debug(
-                "agent_solo_passthrough",
-                session_id=session_id,
-                turn=turn_number,
-                input_tokens=input_tokens,
-                user_turns=user_turn_count,
-            )
+        if assembled:
+            assembly_mode = "curator"
+            assembly_reason = "curator_context"
+            assembly_latency_ms = (time.monotonic() - t0) * 1000
+            assembled_tokens = assembled.token_estimate or 0
+            savings = max(0, input_tokens - assembled_tokens)
+            rewritten_tokens = input_tokens - savings
+            savings_ratio = round(savings / input_tokens, 4) if input_tokens > 0 else 0.0
+            record_metric("curator_calls", 1)
 
-    if session_id and graph_ready and not session_over_budget and not is_agent_solo:
-        try:
-            # Wait for prior turn's extraction to commit before reading graph state
-            from archolith_proxy.proxy.locks import wait_for_prior_extraction
-            await wait_for_prior_extraction(session_id, timeout_s=5.0)
+    # ── Inject assembled context and proxy tools ──
+    if assembled and assembly_mode == "curator":
+        from archolith_proxy.proxy.rewrite import rewrite_messages
+        messages = rewrite_messages(
+            messages, assembled,
+            coherence_tail_size=settings.coherence_tail_size,
+            max_tail_messages=settings.max_tail_messages,
+        )
+        body["messages"] = messages
 
-            # Extract the current user message for embedding-based retrieval
-            user_message = None
-            for msg in reversed(body.get("messages", [])):
-                if msg.get("role") == "user":
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        content = " ".join(
-                            p.get("text", "") for p in content if isinstance(p, dict)
-                        )
-                    user_message = content[:4000]
-                    break
-
-            assembly_start = time.monotonic()
-
-            # Try curator first (LLM-driven context manager)
-            if settings.curator_enabled:
-                try:
-                    from archolith_proxy.curator import curate_context
-                    from archolith_proxy.curator.state import get_briefing, is_briefing_fresh
-                    record_metric("curator_calls", 1)
-                    # Check if the briefing path will be used (for assembly_mode tagging)
-                    _pre_briefing = get_briefing(session_id)
-                    _pre_fresh = is_briefing_fresh(session_id, turn_number)
-                    assembled = await curate_context(
-                        session_id=session_id,
-                        turn_number=turn_number,
-                        user_message=user_message or "",
-                        session_goal=session_goal,
-                        http_client=request.app.state.http_client,
-                        messages=body.get("messages", []),
-                    )
-                    if assembled:
-                        # Tag assembly mode: briefing vs full curator
-                        _briefing_kwargs: dict = {}
-                        if _pre_briefing and (_pre_fresh or _pre_briefing.source_turn >= turn_number - 2):
-                            assembly_mode = "briefing" if _pre_fresh else "briefing_stale"
-                            from archolith_proxy.curator.briefing import format_briefing_for_prompt
-                            _briefing_text = format_briefing_for_prompt(_pre_briefing)
-                            _briefing_kwargs = {
-                                "briefing_source_turn": _pre_briefing.source_turn,
-                                "briefing_chars": len(_briefing_text),
-                                "briefing_files": len(_pre_briefing.files),
-                            }
-                        else:
-                            assembly_mode = "curator"
-                        trace_builder.set_curator_info(
-                            retained_turns=assembled.retained_turn_numbers,
-                            context_block=(assembled.system_message or {}).get("content"),
-                            tool_log=assembled.curator_tool_log,
-                            **_briefing_kwargs,
-                        )
-                    else:
-                        # Curator was attempted but failed — capture what it tried
-                        from archolith_proxy.curator import get_last_attempt
-                        attempt = get_last_attempt(session_id)
-                        if attempt:
-                            trace_builder.set_curator_info(
-                                tool_log=attempt.get("tool_log", []),
-                                failure_reason=attempt.get("failure_reason", ""),
-                            )
-                except Exception:
-                    logger.warning("curator_error", session_id=session_id, exc_info=True)
-
-            # Graph-only assembler fallback — disabled.
-            # The heuristic assembler inflates payloads on agentic sessions
-            # (adds graph context overhead without turn selection, and
-            # Read/Edit/Write/Bash results are non-compressible). When the
-            # curator fails or is disabled, passthrough is less harmful than
-            # graph-only assembly. Re-enable once graph-only does turn
-            # selection or has a compressibility gate.
-            # if assembled is None:
-            #     assembled = await assemble_context(
-            #         session_id=session_id,
-            #         turn_number=turn_number,
-            #         input_token_estimate=input_tokens,
-            #         user_message=user_message,
-            #         http_client=request.app.state.http_client if settings.embedding_enabled else None,
-            #         messages=body.get("messages", []),
-            #     )
-            assembly_latency_ms = (time.monotonic() - assembly_start) * 1000
-
-            if assembled:
-                original_count = len(body.get("messages", []))
-                original_messages = body["messages"][:]  # Save for compaction re-rewrite
-                body["messages"] = rewrite_messages(
-                    body.get("messages", []),
-                    assembled,
-                    settings.coherence_tail_size,
-                    max_tail_messages=settings.max_tail_messages,
-                    max_rewritten_tokens=settings.max_rewritten_tokens,
-                )
-                rewritten_count = len(body["messages"])
-                if assembly_mode != "curator":
-                    assembly_mode = "graph"
-
-                # Estimate token savings
-                rewritten_tokens = estimate_input_tokens(body["messages"])
-                savings = max(0, input_tokens - rewritten_tokens)
-
-                # Negative-savings guard: if rewriting inflated the payload
-                # (graph context overhead > compression savings), always revert.
-                if rewritten_tokens > input_tokens:
-                    logger.info(
-                        "assembly_reverted_inflation",
-                        session_id=session_id,
-                        turn=turn_number,
-                        input_tokens=input_tokens,
-                        rewritten_tokens=rewritten_tokens,
-                        inflation=rewritten_tokens - input_tokens,
-                    )
-                    body["messages"] = original_messages
-                    rewritten_count = original_count
-                    rewritten_tokens = input_tokens
-                    savings = 0
-                    savings_ratio = 0.0
-                    assembly_mode = "skipped_inflation"
-                # Savings-ratio gate: revert to passthrough if rewriting
-                # doesn't save meaningful tokens. Short/moderate conversations
-                # lose more continuity than they gain in compression.
-                elif input_tokens < settings.assembly_min_input_tokens:
-                    savings_ratio = savings / max(input_tokens, 1)
-                    # Conversation is small enough to fit entirely — passthrough
-                    logger.info(
-                        "assembly_skipped_low_tokens",
-                        session_id=session_id,
-                        turn=turn_number,
-                        input_tokens=input_tokens,
-                        min_tokens=settings.assembly_min_input_tokens,
-                        savings_ratio=round(savings_ratio, 3),
-                    )
-                    body["messages"] = original_messages
-                    rewritten_count = original_count
-                    rewritten_tokens = input_tokens
-                    savings = 0
-                    savings_ratio = 0.0
-                    assembly_mode = "skipped_low_tokens"
-                else:
-                    savings_ratio = savings / max(input_tokens, 1)
-                    if savings_ratio < settings.assembly_min_savings_ratio:
-                        # Rewriting barely saves anything — keep full history
-                        logger.info(
-                            "assembly_skipped_low_savings",
-                            session_id=session_id,
-                            turn=turn_number,
-                            savings_ratio=round(savings_ratio, 3),
-                            min_ratio=settings.assembly_min_savings_ratio,
-                            savings_tokens=savings,
-                            input_tokens=input_tokens,
-                        )
-                        body["messages"] = original_messages
-                        rewritten_count = original_count
-                        rewritten_tokens = input_tokens
-                        savings = 0
-                        savings_ratio = 0.0
-                        assembly_mode = "skipped_low_savings"
-                    else:
-                        # Savings justify rewriting — proceed with compaction check
-
-                        # Context-overflow compaction: if rewritten payload still exceeds
-                        # budget, try LLM compaction of the graph context block
-                        if (
-                            settings.compaction_enabled
-                            and rewritten_tokens > settings.context_token_budget
-                            and assembled
-                        ):
-                            try:
-                                from archolith_proxy.assembler.compaction import compact_context
-
-                                graph_content = assembled.system_message.get("content", "")
-                                target_tokens = settings.context_token_budget // 2
-                                compacted = await compact_context(
-                                    request.app.state.http_client,
-                                    context_block=graph_content,
-                                    target_tokens=target_tokens,
-                                )
-                                if compacted:
-                                    # Replace graph context with compacted version
-                                    assembled.system_message["content"] = compacted
-                                    if assembled.graph_context:
-                                        assembled.graph_context[0] = {
-                                            **assembled.graph_context[0],
-                                            "content": compacted,
-                                        }
-                                    else:
-                                        assembled.graph_context = [{"role": "system", "content": compacted}]
-                                    # Re-rewrite with compacted context
-                                    body["messages"] = rewrite_messages(
-                                        original_messages,
-                                        assembled,
-                                        settings.coherence_tail_size,
-                                        max_tail_messages=settings.max_tail_messages,
-                                        max_rewritten_tokens=settings.max_rewritten_tokens,
-                                    )
-                                    rewritten_count = len(body["messages"])
-                                    rewritten_tokens = estimate_input_tokens(body["messages"])
-                                    savings = max(0, input_tokens - rewritten_tokens)
-                                    savings_ratio = savings / max(input_tokens, 1)
-                                    logger.info(
-                                        "context_compaction_applied",
-                                        session_id=session_id,
-                                        turn=turn_number,
-                                        rewritten_tokens=rewritten_tokens,
-                                        budget=settings.context_token_budget,
-                                    )
-                                    record_metric("compaction_applied", 1)
-                            except Exception as e:
-                                logger.warning(
-                                    "context_compaction_failed",
-                                    session_id=session_id,
-                                    turn=turn_number,
-                                    error=str(e),
-                                )
-                                # Compaction failed — keep the oversized assembled context
-                                # (better than passthrough, which would send full history)
-
-                        record_metric("token_savings_estimated", savings)
-
-                        # Cache curator rewrite for agent-solo prefix persistence
-                        from archolith_proxy.proxy.agent_solo import cache_curator_rewrite
-                        cache_curator_rewrite(
-                            session_id,
-                            original_messages,
-                            body["messages"],
-                        )
-
-                        logger.info(
-                            "messages_rewritten",
-                            session_id=session_id,
-                            turn=turn_number,
-                            original_messages=original_count,
-                            rewritten_messages=rewritten_count,
-                            facts_injected=assembled.facts_retrieved,
-                            token_estimate=assembled.token_estimate,
-                            savings_tokens=savings,
-                            assembly_latency_ms=round(assembly_latency_ms, 1),
-                        )
-
-                        # P99 budget check — log warning but use the assembled context
-                        # (assembly already completed, discarding would waste the work)
-                        if assembly_latency_ms > settings.assembly_latency_budget_ms:
-                            logger.warning(
-                                "assembly_latency_exceeded_budget",
-                                latency_ms=round(assembly_latency_ms, 1),
-                                budget_ms=settings.assembly_latency_budget_ms,
-                            )
-
-                # Trace: capture the actual outbound messages after savings gates.
-                trace_builder.set_rewritten_messages(body.get("messages", []))
-            else:
-                # assembled is None — distinguish cold start from curator failure.
-                # Cold start: user turns below threshold (curator gate returned early).
-                # Curator failure: curator was called but returned None (timeout, error, fallback).
-                if user_turn_count < settings.cold_start_turns:
-                    assembly_mode = "cold_start"
-                else:
-                    assembly_mode = "passthrough"
-        except Exception as e:
-            logger.warning("context_assembly_failed", session_id=session_id, error=str(e), exc_info=True)
-            assembly_mode = "fallback"
-            trace_builder.set_fallback_reason(str(e)[:200])
-            record_metric("neo4j_errors", 1)
-            # Fall through to passthrough — assembly failure must not block requests
-
-    # Trace: record assembly result
-    trace_builder.set_assembly(
-        mode=assembly_mode,
-        reason="session not ready" if not (session_id and graph_ready) else "",
-        latency_ms=assembly_latency_ms,
-        facts_selected=[{"content": m.get("content", "")[:100]} for m in (assembled.graph_context if assembled else [])],
-        files_selected=assembled.files_selected if assembled else [],
-        decisions_selected=assembled.decisions_selected if assembled else [],
-        rewritten_tokens=rewritten_tokens,
-        savings_tokens=savings,
-        savings_ratio=savings_ratio,
-        compression_ratio=assembled.compression_ratio if assembled else 1.0,
+    # ── Inject no-DSML hint for DeepSeek ──
+    from archolith_proxy.proxy.rewrite import inject_no_dsml_hint
+    body["messages"] = inject_no_dsml_hint(
+        body.get("messages", []),
+        model=req.model,
+        has_tools=bool(body.get("tools")),
     )
 
-    record_assembly_mode(assembly_mode)
+    # ── RTK filtering ──
+    from archolith_proxy.rtk import filter_request_body
+    body = filter_request_body(body, enabled=settings.rtk_enabled)
 
-    # Live stream: broadcast assembly result
-    await broadcast_assembly(
-        session_id=session_id, turn_number=turn_number,
-        mode=assembly_mode,
-        facts_injected=assembled.facts_retrieved if assembled else 0,
-        token_savings=savings,
-        latency_ms=assembly_latency_ms,
-    )
-
-    # Bind assembly_mode for request-level logging middleware
-    structlog.contextvars.bind_contextvars(assembly_mode=assembly_mode)
-
-    # Build upstream request
-    upstream_url = f"{settings.upstream_api_url}/chat/completions"
-    upstream_headers = {
-        "Authorization": f"Bearer {settings.upstream_api_key}",
-        "Content-Type": "application/json",
-    }
-
-    # Inject session recall tool if enabled and session is active
-    recall_injected = False
-    if settings.session_recall_tool_enabled and session_id:
-        from archolith_proxy.proxy.tool_injection import inject_recall_tool
-        body = inject_recall_tool(body)
-        recall_injected = True
-
-    # Inject synthetic session-summary tools (recall_session_work, recall_files_read)
+    # ── Inject synthetic session-summary tools ──
     synthetic_injected = False
     if settings.synthetic_tools_enabled and session_id:
         from archolith_proxy.proxy.circuit_breaker import is_synthetic_allowed
@@ -950,1546 +397,65 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             body = inject_synthetic_tools(body)
             synthetic_injected = True
         else:
-            record_metric("synthetic_injections_skipped")
-            logger.info("synthetic_tools_circuit_open", session_id=session_id)
+            record_metric("synthetic_injections_skipped", 1)
 
-    # Inject no-DSML hint for DeepSeek models without tools.
-    # DeepSeek infers tool-enabled sessions from context and emits DSML markup.
-    # An explicit plain-text instruction suppresses the initial emission
-    # (strip_dsml_artifacts in rewrite.py handles propagation from retained turns).
-    body["messages"] = inject_no_dsml_hint(
-        body.get("messages", []),
-        model=req.model,
-        has_tools=bool(body.get("tools")),
-    )
+    # ── Inject session recall tool ──
+    if settings.session_recall_tool_enabled and session_id:
+        from archolith_proxy.proxy.tool_injection import inject_recall_tool
+        body = inject_recall_tool(body)
 
-    body = filter_request_body(body, enabled=settings.rtk_enabled)
-    # Ensure DeepSeek returns usage data (incl. cache breakdown) in streaming responses
+    # ── Build upstream request and dispatch ──
+    request_body = json.dumps(body).encode("utf-8")
+    upstream_url = f"{settings.upstream_api_url}/chat/completions"
+    upstream_headers = {
+        "Authorization": f"Bearer {settings.upstream_api_key}",
+        "Content-Type": "application/json",
+    }
+
     if req.stream:
         body.setdefault("stream_options", {})["include_usage"] = True
-    request_body = json.dumps(body).encode("utf-8")
-
-    if req.stream and synthetic_injected:
-        # Synthetic tool interception requires seeing the full response before forwarding.
-        # Force non-streaming to upstream, let _handle_non_streaming intercept synthetic
-        # tool calls, then convert the final JSON response to SSE so the streaming client
-        # (opencode) gets the format it expects.
-        body["stream"] = False
-        body.pop("stream_options", None)  # stream_options is only valid with stream=true
         request_body = json.dumps(body).encode("utf-8")
-        ns_resp = await _handle_non_streaming(
-            request, background_tasks, upstream_url, upstream_headers, request_body,
+
+    # Synthetic tools force non-streaming: intercept full response, then convert to SSE
+    if req.stream and synthetic_injected:
+        body["stream"] = False
+        body.pop("stream_options", None)
+        request_body = json.dumps(body).encode("utf-8")
+        from archolith_proxy.proxy.streaming import _wrap_response_as_sse
+
+        result = await _handle_non_streaming(
+            request=request, background_tasks=background_tasks,
+            url=upstream_url, headers=upstream_headers, body=request_body,
             session_id=session_id, turn_number=turn_number,
-            messages=body.get("messages", []), recall_injected=recall_injected,
+            messages=body.get("messages", []),
+            recall_injected=bool(settings.session_recall_tool_enabled and session_id),
             synthetic_injected=True,
             session_goal=session_goal,
             trace_builder=trace_builder,
         )
-        return _wrap_response_as_sse(ns_resp)
+        return _wrap_response_as_sse(result)
 
     if req.stream:
         return await _handle_streaming(
-            request, background_tasks, upstream_url, upstream_headers, request_body,
+            request=request, background_tasks=background_tasks,
+            url=upstream_url, headers=upstream_headers, body=request_body,
             session_id=session_id, turn_number=turn_number,
-            messages=body.get("messages", []), recall_injected=recall_injected,
+            messages=body.get("messages", []),
+            recall_injected=bool(settings.session_recall_tool_enabled and session_id),
             synthetic_injected=synthetic_injected,
             session_goal=session_goal,
             trace_builder=trace_builder,
         )
     else:
         return await _handle_non_streaming(
-            request, background_tasks, upstream_url, upstream_headers, request_body,
+            request=request, background_tasks=background_tasks,
+            url=upstream_url, headers=upstream_headers, body=request_body,
             session_id=session_id, turn_number=turn_number,
-            messages=body.get("messages", []), recall_injected=recall_injected,
+            messages=body.get("messages", []),
+            recall_injected=bool(settings.session_recall_tool_enabled and session_id),
             synthetic_injected=synthetic_injected,
             session_goal=session_goal,
             trace_builder=trace_builder,
         )
 
 
-async def _handle_streaming(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    url: str,
-    headers: dict,
-    body: bytes,
-    session_id: str | None = None,
-    turn_number: int = 0,
-    messages: list[dict] | None = None,
-    recall_injected: bool = False,
-    synthetic_injected: bool = False,
-    session_goal: str | None = None,
-    trace_builder: TraceBuilder | None = None,
-) -> StreamingResponse:
-    """Stream SSE chunks from upstream with response capture and extraction.
-
-    Three-phase architecture:
-    1. Connection-level retry: open client.stream(), check status code.
-       If 429/5xx or connection error, close and retry with backoff.
-       This happens BEFORE any chunks reach the client.
-    2. True SSE passthrough: once status is 200, relay aiter_lines()
-       directly to the client in real-time. No buffering — the client
-       sees tokens as they arrive from upstream. ResponseCapture runs
-       in parallel to accumulate chunks for post-hoc extraction.
-    2b. If recall tool is injected: buffer-and-decide — detect if the
-       model calls __archolith_recall in the stream, intercept,
-       execute recall, re-send non-streaming, then convert the second
-       response to SSE format and relay to client.
-
-    Limitation: once SSE chunks start flowing to the client (phase 2),
-    retry is impossible — the client has already consumed partial output.
-    Mid-stream errors result in a broken stream.
-    """
-    settings = get_settings()
-    capture_holder = {"capture": None, "recall_intercepted": False}
-
-    async def stream_generator():
-        # --- Phase 1: Connection-level retry ---
-        # Open the stream, check status code, retry if transient error.
-        # The stream context manager gives us headers (status code) before
-        # we start reading the body, so we can decide to retry without
-        # buffering any content.
-        max_retries = settings.upstream_max_retries
-        backoff_base = settings.upstream_retry_backoff_base_s
-        upstream_resp = None
-        stream_ctx = None  # Track the open stream context for cleanup
-
-        for attempt in range(max_retries):
-            # Close previous attempt's context if it exists
-            if stream_ctx is not None:
-                try:
-                    await stream_ctx.__aexit__(None, None, None)
-                except Exception:
-                    pass
-                stream_ctx = None
-
-            try:
-                stream_ctx = request.app.state.http_client.stream(
-                    "POST", url, headers=headers, content=body,
-                )
-                resp = await stream_ctx.__aenter__()
-
-                # Check status before committing to stream
-                if resp.status_code in RETRYABLE_STATUS_CODES:
-                    # Read the small error body so we can close cleanly
-                    await resp.aread()
-                    # Close this attempt — context will be re-opened on next iteration
-                    try:
-                        await stream_ctx.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                    stream_ctx = None
-
-                    if attempt < max_retries - 1:
-                        delay = backoff_base * (2 ** attempt)
-                        logger.warning(
-                            "streaming_connection_retry",
-                            status=resp.status_code,
-                            attempt=attempt + 1,
-                            max_retries=max_retries,
-                            delay_s=delay,
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        # Final attempt failed — yield error SSE event to client
-                        record_metric("upstream_errors", 1)
-                        error = json.dumps(
-                            {"error": {"message": f"Upstream returned {resp.status_code} after {max_retries} retries", "type": "upstream_error"}}
-                        )
-                        yield f"data: {error}\n\n"
-                        return
-
-                # Non-retryable error (e.g. 400, 401) — relay and stop
-                if resp.status_code >= 400:
-                    record_metric("upstream_errors", 1)
-                    error_body = await resp.aread()
-                    try:
-                        await stream_ctx.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                    stream_ctx = None
-                    yield f"data: {error_body.decode()}\n\n"
-                    return
-
-                # Good response (2xx) — keep the stream open for phase 2
-                upstream_resp = resp
-
-                # Trace: record upstream response (streaming)
-                if trace_builder:
-                    trace_builder.set_response(
-                        status=resp.status_code,
-                        latency_ms=0.0,
-                        output_tokens=None,
-                        response_summary="",
-                    )
-                break
-
-            except (httpx.TimeoutException, httpx.ConnectError) as e:
-                # Context was never entered or already cleaned up
-                stream_ctx = None
-
-                if attempt < max_retries - 1:
-                    delay = backoff_base * (2 ** attempt)
-                    logger.warning(
-                        "streaming_connection_retry",
-                        attempt=attempt + 1,
-                        max_retries=max_retries,
-                        delay_s=delay,
-                        error=str(e),
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                else:
-                    record_metric("upstream_errors", 1)
-                    error = json.dumps(
-                        {"error": {"message": f"Upstream connection failed after {max_retries} retries: {e}", "type": "upstream_error"}}
-                    )
-                    yield f"data: {error}\n\n"
-                    return
-        else:
-            record_metric("upstream_errors", 1)
-            error = json.dumps(
-                {"error": {"message": "All streaming connection attempts exhausted", "type": "upstream_error"}}
-            )
-            yield f"data: {error}\n\n"
-            return
-
-        # --- Phase 2: SSE passthrough with optional recall detection ---
-        capture = None
-        recall_intercepted = False
-        try:
-            if recall_injected and session_id:
-                # Buffer-and-decide mode: detect recall tool calls in stream
-                from archolith_proxy.proxy.tool_injection import (
-                    RECALL_TOOL_NAME,
-                    find_recall_tool_call,
-                    handle_recall_tool_call,
-                    build_tool_result_message,
-                    strip_recall_from_response,
-                    strip_recall_tool,
-                )
-
-                recall_result_obj = None
-                async for line, result, cap in stream_with_recall_detection(upstream_resp, RECALL_TOOL_NAME):
-                    if result is not None and result.is_recall:
-                        recall_result_obj = result
-                        break
-                    if cap is not None:
-                        # Stream ended without recall — passthrough completed
-                        capture = cap
-                        continue
-                    if line:
-                        yield line + "\n\n"
-
-                if recall_result_obj is not None:
-                    # --- Recall interception in streaming ---
-                    recall_intercepted = True
-                    logger.info(
-                        "streaming_recall_tool_call_intercepted",
-                        session_id=session_id, turn=turn_number,
-                    )
-                    get_metrics()["recall_tool_calls"] = get_metrics().get("recall_tool_calls", 0) + 1
-
-                    # Extract the complete tool call from the accumulator
-                    tool_calls = recall_result_obj.accumulator.tool_calls
-                    recall_tc = None
-                    for tc in tool_calls:
-                        if tc.get("function", {}).get("name") == RECALL_TOOL_NAME:
-                            recall_tc = tc
-                            break
-
-                    if not recall_tc:
-                        logger.warning("streaming_recall_tool_call_not_found", session_id=session_id)
-                        for bl in recall_result_obj.buffered_lines:
-                            yield bl + "\n\n"
-                        capture = recall_result_obj.capture
-                    else:
-                        # Parse the question from the tool call
-                        func = recall_tc.get("function", {})
-                        try:
-                            args = json.loads(func.get("arguments", "{}"))
-                            question = args.get("question", "")
-                        except json.JSONDecodeError:
-                            question = ""
-
-                        if not question:
-                            logger.warning("streaming_recall_empty_question", session_id=session_id)
-                            for bl in recall_result_obj.buffered_lines:
-                                yield bl + "\n\n"
-                            capture = recall_result_obj.capture
-                        else:
-                            # Execute the recall query
-                            recall_text = await handle_recall_tool_call(
-                                http_client=request.app.state.http_client,
-                                session_id=session_id,
-                                question=question,
-                                turn_number=turn_number,
-                            )
-
-                            # Live stream: broadcast recall event
-                            await broadcast_recall(
-                                session_id=session_id, turn_number=turn_number,
-                                question=question, facts_returned=0,
-                            )
-                            if trace_builder:
-                                trace_builder.set_recall(used=True, question=question, facts_returned=0)
-
-                            # Assemble the model message from the buffered stream
-                            first_response = _assemble_streaming_response(
-                                recall_result_obj.capture._chunks,
-                                recall_result_obj.accumulator,
-                            )
-                            model_message = first_response.get("choices", [{}])[0].get("message", {})
-
-                            # Build the re-send message array — keep the recall
-                            # tool_call in the assistant message so the tool result
-                            # has a matching tool_call_id (OpenAI requires this).
-                            resend_messages = list(messages or [])
-                            resend_model_msg = dict(model_message)
-                            resend_messages.append(resend_model_msg)
-                            resend_messages.append(
-                                build_tool_result_message(recall_tc.get("id", "recall_0"), recall_text)
-                            )
-
-                            # Strip the recall tool from the tools array for the re-send
-                            body_dict = json.loads(body)
-                            strip_recall_tool(body_dict)
-
-                            # Re-send as non-streaming for reliable interception
-                            resend_payload = filter_request_body({
-                                **body_dict,
-                                "stream": False,
-                                "messages": resend_messages,
-                            }, enabled=settings.rtk_enabled)
-                            resend_body = json.dumps(resend_payload).encode("utf-8")
-
-                            try:
-                                second_resp = await upstream_request_with_retry(
-                                    client=request.app.state.http_client,
-                                    url=url,
-                                    headers=headers,
-                                    content=resend_body,
-                                )
-                            except (httpx.TimeoutException, httpx.ConnectError) as e:
-                                record_metric("upstream_errors", 1)
-                                error = json.dumps(
-                                    {"error": {"message": f"Upstream error during streaming recall re-send: {e}", "type": "upstream_error"}}
-                                )
-                                yield f"data: {error}\n\n"
-                                return
-
-                            if second_resp.status_code >= 400:
-                                record_metric("upstream_errors", 1)
-                                error_body = second_resp.text
-                                yield f"data: {error_body}\n\n"
-                                return
-
-                            # Check if the second response ALSO calls recall
-                            second_data = second_resp.json()
-                            second_recall_tc = find_recall_tool_call(second_data)
-
-                            if second_recall_tc:
-                                # Handle one more recall (max 2 per turn to prevent loops)
-                                logger.info("streaming_recall_second_call", session_id=session_id, turn=turn_number)
-                                get_metrics()["recall_tool_calls"] = get_metrics().get("recall_tool_calls", 0) + 1
-
-                                second_func = second_recall_tc.get("function", {})
-                                try:
-                                    second_args = json.loads(second_func.get("arguments", "{}"))
-                                    second_question = second_args.get("question", "")
-                                except json.JSONDecodeError:
-                                    second_question = ""
-
-                                if second_question:
-                                    second_recall_text = await handle_recall_tool_call(
-                                        http_client=request.app.state.http_client,
-                                        session_id=session_id,
-                                        question=second_question,
-                                        turn_number=turn_number,
-                                    )
-
-                                    # Live stream: broadcast second recall event
-                                    await broadcast_recall(
-                                        session_id=session_id, turn_number=turn_number,
-                                        question=second_question, facts_returned=0,
-                                    )
-                                    if trace_builder:
-                                        trace_builder.set_recall(used=True, question=question, facts_returned=0)
-
-                                    # Keep assistant tool_calls intact for the
-                                    # same reason as the first round.
-                                    second_model_msg = second_data["choices"][0]["message"]
-                                    third_messages = list(resend_messages)
-                                    third_model_msg = dict(second_model_msg)
-                                    third_messages.append(third_model_msg)
-                                    third_messages.append(build_tool_result_message(
-                                        second_recall_tc.get("id", "recall_1"), second_recall_text,
-                                    ))
-
-                                    third_payload = filter_request_body({
-                                        **body_dict,
-                                        "stream": False,
-                                        "messages": third_messages,
-                                    }, enabled=settings.rtk_enabled)
-                                    third_body = json.dumps(third_payload).encode("utf-8")
-
-                                    try:
-                                        third_resp = await upstream_request_with_retry(
-                                            client=request.app.state.http_client,
-                                                    url=url,
-                                            headers=headers,
-                                            content=third_body,
-                                        )
-                                        if third_resp.status_code < 400:
-                                            second_data = third_resp.json()
-                                        else:
-                                            record_metric("upstream_errors", 1)
-                                    except (httpx.TimeoutException, httpx.ConnectError):
-                                        record_metric("upstream_errors", 1)
-
-                            # Strip recall tool from the final response
-                            strip_recall_from_response(second_data)
-
-                            # Convert the non-streaming response to SSE format and yield
-                            async for sse_chunk in yield_as_sse(second_data):
-                                yield sse_chunk
-
-                            # Set up capture from the final response for extraction
-                            # The re-send was non-streaming, so use set_non_streaming_response
-                            # which handles message.content (not delta.content) correctly.
-                            capture = ResponseCapture()
-                            capture.set_non_streaming_response(second_data)
-
-            else:
-                # Standard passthrough — no recall detection needed
-                async for line, cap in stream_with_capture(upstream_resp):
-                    if cap is not None:
-                        capture = cap
-                        continue
-                    if line:
-                        yield line + "\n\n"
-
-        except Exception as e:
-            record_metric("upstream_errors", 1)
-            logger.error("streaming_error", error=str(e), exc_info=True)
-            error = json.dumps(
-                {"error": {"message": f"Internal proxy error: {e}", "type": "server_error"}}
-            )
-            yield f"data: {error}\n\n"
-        finally:
-            # Always close the stream context
-            if stream_ctx is not None:
-                try:
-                    await stream_ctx.__aexit__(None, None, None)
-                except Exception:
-                    pass
-
-        capture_holder["capture"] = capture
-        capture_holder["recall_intercepted"] = recall_intercepted
-
-    # Live stream: broadcast response event (streaming — runs after stream completes)
-    async def _broadcast_streaming_response():
-        cap = capture_holder.get("capture")
-        out_tokens = cap.output_tokens if cap else None
-        await broadcast_response(
-            session_id=session_id, turn_number=turn_number,
-            status=200, latency_ms=0.0, output_tokens=out_tokens,
-        )
-    background_tasks.add_task(_broadcast_streaming_response)
-
-    async def _finalize_streaming_trace_and_extraction():
-        cap = capture_holder.get("capture")
-        response_text = cap.get_full_text() if cap else ""
-        stream_output_tokens = cap.output_tokens if cap else None
-        _is_user_turn = bool(messages) and messages[-1].get("role") == "user"
-
-        if trace_builder:
-            trace_builder.set_response(
-                status=200,
-                latency_ms=0.0,
-                output_tokens=stream_output_tokens,
-                response_summary=response_text,
-                cache_hit_tokens=cap.cache_hit_tokens if cap else 0,
-                cache_miss_tokens=cap.cache_miss_tokens if cap else 0,
-            )
-
-        if session_id and response_text:
-            try:
-                await _run_extraction(
-                    client=request.app.state.extractor_client,
-                    session_id=session_id,
-                    turn_number=turn_number,
-                    messages=messages or [],
-                    response_text=response_text,
-                    truncated=cap.truncated if cap else False,
-                    session_goal=session_goal,
-                    trace_builder=trace_builder,
-                    promotion_service=getattr(request.app.state, "promotion_service", None),
-                    is_user_turn=_is_user_turn,
-                    response_finish_reason=cap.finish_reason if cap else None,
-                )
-            except Exception:
-                logger.warning("streaming_extraction_finalize_failed", exc_info=True)
-
-        if trace_builder:
-            try:
-                trace = trace_builder.build()
-                await get_trace_store().record(trace)
-            except Exception:
-                logger.warning("trace_store_failed_streaming", exc_info=True)
-
-    background_tasks.add_task(_finalize_streaming_trace_and_extraction)
-
-    return StreamingResponse(
-        stream_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-        background=background_tasks,
-    )
-
-
-
-async def _handle_non_streaming(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    url: str,
-    headers: dict,
-    body: bytes,
-    session_id: str | None = None,
-    turn_number: int = 0,
-    messages: list[dict] | None = None,
-    recall_injected: bool = False,
-    synthetic_injected: bool = False,
-    session_goal: str | None = None,
-    trace_builder: TraceBuilder | None = None,
-) -> Response:
-    """Handle non-streaming request with retry, recall interception, and extraction."""
-    settings = get_settings()
-
-    try:
-        resp = await upstream_request_with_retry(
-            client=request.app.state.http_client,
-            url=url,
-            headers=headers,
-            content=body,
-            max_retries=settings.upstream_max_retries,
-            backoff_base=settings.upstream_retry_backoff_base_s,
-        )
-    except httpx.TimeoutException:
-        record_metric("upstream_errors", 1)
-        return make_error_response(504, "Upstream request timed out", "upstream_timeout", code="timeout")
-    except httpx.ConnectError as e:
-        record_metric("upstream_errors", 1)
-        return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
-
-    # Log upstream error responses for diagnosis (before any further processing)
-    if resp.status_code >= 400:
-        logger.warning(
-            "upstream_error_response",
-            status_code=resp.status_code,
-            response_body=resp.text[:2000],
-            session_id=session_id,
-            synthetic_injected=synthetic_injected,
-            request_preview=body[:500].decode("utf-8", errors="replace") if isinstance(body, bytes) else str(body)[:500],
-        )
-
-    # Predictive gate inputs for background curator pass
-    _ns_is_user_turn = bool(messages) and messages[-1].get("role") == "user"
-
-    # Check for recall tool call interception via the shared helper.
-    # This handles up to 2 recall rounds consistently with the streaming path.
-    recall_result = None
-    final_data = None
-    response_text = ""
-    if recall_injected and session_id:
-        try:
-            from archolith_proxy.proxy.recall import handle_non_streaming_recall
-
-            recall_result = await handle_non_streaming_recall(
-                resp=resp,
-                http_client=request.app.state.http_client,
-                url=url,
-                headers=headers,
-                body=body,
-                session_id=session_id,
-                turn_number=turn_number,
-                original_messages=messages or [],
-                max_retries=settings.upstream_max_retries,
-                backoff_base=settings.upstream_retry_backoff_base_s,
-            )
-
-            if recall_result.recall_used and recall_result.final_data is not None:
-                final_data = recall_result.final_data
-
-                # Broadcast recall events for each round
-                for q, fc in zip(recall_result.recall_questions, recall_result.facts_returned_counts):
-                    await broadcast_recall(
-                        session_id=session_id, turn_number=turn_number,
-                        question=q, facts_returned=fc,
-                    )
-
-                # Set trace recall info (use the first question for the trace)
-                if trace_builder and recall_result.recall_questions:
-                    trace_builder.set_recall(
-                        used=True,
-                        question=recall_result.recall_questions[0],
-                        facts_returned=recall_result.facts_returned_counts[0] if recall_result.facts_returned_counts else 0,
-                    )
-
-                # Trace: update response to reflect the actual final response
-                if trace_builder:
-                    trace_builder.set_response(
-                        status=resp.status_code,
-                        latency_ms=0.0,
-                        output_tokens=None,
-                        response_summary=_extract_response_text(final_data),
-                    )
-
-                # Schedule extraction for the final response
-                response_text = _extract_response_text(final_data)
-
-                if session_id and response_text:
-                    # Determine the messages that led to the final response
-                    # (the recall re-send added tool result messages)
-                    extraction_messages = messages or []
-                    background_tasks.add_task(
-                        _run_extraction,
-                        client=request.app.state.extractor_client,
-                        session_id=session_id,
-                        turn_number=turn_number,
-                        messages=extraction_messages,
-                        response_text=response_text,
-                        session_goal=session_goal,
-                        trace_builder=trace_builder,
-                        promotion_service=getattr(request.app.state, "promotion_service", None),
-                        is_user_turn=_ns_is_user_turn,
-                        response_finish_reason=_extract_finish_reason(final_data),
-                    )
-        except Exception as e:
-            logger.warning("recall_interception_failed", session_id=session_id, error=str(e), exc_info=True)
-            # Fall through to use original response
-
-    # Handle synthetic tool calls (recall_session_work, recall_files_read).
-    # Only runs if recall did not already produce a final_data (avoid double-processing).
-    synthetic_result = None
-    if synthetic_injected and session_id and final_data is None:
-        try:
-            from archolith_proxy.proxy.synthetic_tools import handle_non_streaming_synthetic
-
-            synthetic_result = await handle_non_streaming_synthetic(
-                resp=resp,
-                http_client=request.app.state.http_client,
-                url=url,
-                headers=headers,
-                body=body,
-                session_id=session_id,
-                turn_number=turn_number,
-                original_messages=messages or [],
-                max_retries=settings.upstream_max_retries,
-                backoff_base=settings.upstream_retry_backoff_base_s,
-            )
-
-            if synthetic_result.synthetic_used and synthetic_result.final_data is not None:
-                final_data = synthetic_result.final_data
-
-                # Circuit breaker: record success or failure
-                from archolith_proxy.proxy.circuit_breaker import record_synthetic_success, record_synthetic_failure
-                if synthetic_result.fallback_used:
-                    # Re-send failed; fallback strip was applied
-                    record_synthetic_failure(
-                        session_id,
-                        max_consecutive=settings.synthetic_circuit_max_consecutive,
-                        cooldown_seconds=settings.synthetic_circuit_cooldown_s,
-                        max_total=settings.synthetic_circuit_max_total,
-                    )
-                else:
-                    record_synthetic_success(session_id)
-
-                # Schedule extraction for the final re-sent response
-                if trace_builder:
-                    trace_builder.set_response(
-                        status=resp.status_code,
-                        latency_ms=0.0,
-                        output_tokens=None,
-                        response_summary=_extract_response_text(final_data),
-                    )
-
-                response_text = _extract_response_text(final_data)
-                if session_id and response_text:
-                    background_tasks.add_task(
-                        _run_extraction,
-                        client=request.app.state.extractor_client,
-                        session_id=session_id,
-                        turn_number=turn_number,
-                        messages=messages or [],
-                        response_text=response_text,
-                        session_goal=session_goal,
-                        trace_builder=trace_builder,
-                        promotion_service=getattr(request.app.state, "promotion_service", None),
-                        is_user_turn=_ns_is_user_turn,
-                        response_finish_reason=_extract_finish_reason(final_data),
-                    )
-
-        except Exception as e:
-            logger.warning("synthetic_interception_failed", session_id=session_id, error=str(e), exc_info=True)
-            # Circuit breaker: record failure
-            from archolith_proxy.proxy.circuit_breaker import record_synthetic_failure
-            record_synthetic_failure(
-                session_id,
-                max_consecutive=settings.synthetic_circuit_max_consecutive,
-                cooldown_seconds=settings.synthetic_circuit_cooldown_s,
-                max_total=settings.synthetic_circuit_max_total,
-            )
-            # Fall through to use original response
-
-    # Handle native Read tool call interception (transparent cache serving).
-    # Only runs if neither recall nor synthetic produced a final_data.
-    native_intercept_result = None
-    if synthetic_injected and session_id and final_data is None:
-        try:
-            from archolith_proxy.proxy.tool_intercept import handle_native_read_intercept
-
-            native_intercept_result = await handle_native_read_intercept(
-                resp=resp,
-                http_client=request.app.state.http_client,
-                url=url,
-                headers=headers,
-                body=body,
-                session_id=session_id,
-                turn_number=turn_number,
-                original_messages=messages or [],
-            )
-
-            if native_intercept_result.intercepted and native_intercept_result.final_data is not None:
-                final_data = native_intercept_result.final_data
-
-                if trace_builder:
-                    trace_builder.set_response(
-                        status=resp.status_code,
-                        latency_ms=0.0,
-                        output_tokens=None,
-                        response_summary=_extract_response_text(final_data),
-                    )
-
-                response_text = _extract_response_text(final_data)
-                if session_id and response_text:
-                    background_tasks.add_task(
-                        _run_extraction,
-                        client=request.app.state.extractor_client,
-                        session_id=session_id,
-                        turn_number=turn_number,
-                        messages=messages or [],
-                        response_text=response_text,
-                        session_goal=session_goal,
-                        trace_builder=trace_builder,
-                        promotion_service=getattr(request.app.state, "promotion_service", None),
-                        is_user_turn=_ns_is_user_turn,
-                        response_finish_reason=_extract_finish_reason(final_data),
-                    )
-
-        except Exception as e:
-            logger.warning("native_read_interception_failed", session_id=session_id, error=str(e), exc_info=True)
-            # Fall through to use original response
-
-    # Live stream: broadcast response event (non-streaming — always, for both recall and normal)
-    await broadcast_response(
-        session_id=session_id, turn_number=turn_number,
-        status=resp.status_code, latency_ms=0.0, output_tokens=None,
-    )
-
-    # Schedule extraction for the original response if no interception was used
-    _interception_used = (
-        (recall_result and recall_result.recall_used and final_data is not None)
-        or (synthetic_result and synthetic_result.synthetic_used and final_data is not None)
-        or (native_intercept_result and native_intercept_result.intercepted and final_data is not None)
-    )
-    if session_id and not _interception_used:
-        try:
-            data = resp.json()
-            response_text = _extract_response_text(data)
-            _ns_finish = _extract_finish_reason(data)
-
-            if response_text:
-                background_tasks.add_task(
-                    _run_extraction,
-                    client=request.app.state.extractor_client,
-                    session_id=session_id,
-                    turn_number=turn_number,
-                    messages=messages or [],
-                    response_text=response_text,
-                    session_goal=session_goal,
-                    trace_builder=trace_builder,
-                    promotion_service=getattr(request.app.state, "promotion_service", None),
-                    is_user_turn=_ns_is_user_turn,
-                    response_finish_reason=_ns_finish,
-                )
-        except Exception as e:
-            logger.warning("non_streaming_extraction_setup_failed", error=str(e))
-
-    # Trace: record upstream response (non-streaming) — always stored
-    if trace_builder:
-        if not _interception_used:
-            # Normal path: trace the original response with usage data
-            try:
-                ns_data = resp.json() if resp.status_code == 200 else {}
-            except Exception:
-                ns_data = {}
-            ns_usage = ns_data.get("usage", {})
-            trace_builder.set_response(
-                status=resp.status_code,
-                latency_ms=0.0,
-                output_tokens=ns_usage.get("completion_tokens") or ns_usage.get("output_tokens"),
-                response_summary=response_text,
-                cache_hit_tokens=ns_usage.get("prompt_cache_hit_tokens", 0) or 0,
-                cache_miss_tokens=ns_usage.get("prompt_cache_miss_tokens", 0) or 0,
-            )
-
-    # Build and return the response
-    if final_data is not None:
-        # Recall/synthetic path: return the final data from interception
-        # Strip internal proxy tools from the response so the client never sees them
-        try:
-            from archolith_proxy.proxy.tool_injection import strip_recall_from_response
-            strip_recall_from_response(final_data)
-        except Exception:
-            pass
-        try:
-            from archolith_proxy.proxy.synthetic_tools import strip_synthetic_from_response
-            strip_synthetic_from_response(final_data)
-        except Exception:
-            pass
-
-        # Store trace as background task (recall path)
-        if trace_builder:
-            async def _store_trace_recall():
-                try:
-                    trace = trace_builder.build()
-                    await get_trace_store().record(trace)
-                except Exception:
-                    logger.warning("trace_store_failed_recall", exc_info=True)
-            background_tasks.add_task(_store_trace_recall)
-
-        return Response(
-            content=json.dumps(final_data).encode(),
-            status_code=resp.status_code,
-            media_type="application/json",
-            background=background_tasks,
-        )
-
-    # Normal path (no recall)
-    # Strip recall tool from the final response if it was injected
-    if recall_injected:
-        try:
-            from archolith_proxy.proxy.tool_injection import strip_recall_from_response
-            data = resp.json()
-            strip_recall_from_response(data)
-
-            # Trace: store turn trace as background task (normal path)
-            if trace_builder:
-                async def _store_trace_non_stream():
-                    try:
-                        trace = trace_builder.build()
-                        await get_trace_store().record(trace)
-                    except Exception:
-                        logger.warning("trace_store_failed_non_stream", exc_info=True)
-                background_tasks.add_task(_store_trace_non_stream)
-
-            return Response(
-                content=json.dumps(data).encode(),
-                status_code=resp.status_code,
-                media_type="application/json",
-                background=background_tasks,
-            )
-        except Exception:
-            pass  # Fall back to original response
-
-    # Trace: store turn trace as background task (fallback passthrough)
-    if trace_builder:
-        async def _store_trace_non_stream():
-            try:
-                trace = trace_builder.build()
-                await get_trace_store().record(trace)
-            except Exception:
-                logger.warning("trace_store_failed_non_stream", exc_info=True)
-        background_tasks.add_task(_store_trace_non_stream)
-
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type="application/json",
-        background=background_tasks,
-    )
-
-
-def _build_outline(content: str, path: str) -> str:
-    """Build a compact structural outline of a source file.
-
-    Returns a newline-separated list of 'line N: <kind> <name>' entries
-    sorted by line number.  Returns empty string when no symbols are found
-    or when parsing fails.
-
-    Python files: parsed via stdlib ``ast`` for accurate results.
-    All others: regex-based pattern matching (function, class, const).
-    """
-    symbols: list[tuple[int, str]] = []
-
-    if path.endswith(".py"):
-        try:
-            import ast as _ast
-            tree = _ast.parse(content)
-            for node in _ast.walk(tree):
-                if isinstance(node, _ast.AsyncFunctionDef):
-                    symbols.append((node.lineno, f"async def {node.name}"))
-                elif isinstance(node, _ast.FunctionDef):
-                    symbols.append((node.lineno, f"def {node.name}"))
-                elif isinstance(node, _ast.ClassDef):
-                    symbols.append((node.lineno, f"class {node.name}"))
-        except Exception:
-            pass  # Fall through to regex on SyntaxError or any other failure
-
-    if not symbols and path.endswith(".java"):
-        try:
-            import javalang
-            tree = javalang.parse.parse(content)
-            for _, node in tree.filter(javalang.tree.TypeDeclaration):
-                if node.position:
-                    kind = type(node).__name__.replace("Declaration", "").lower()
-                    symbols.append((node.position.line, f"{kind} {node.name}"))
-            for _, node in tree.filter(javalang.tree.ConstructorDeclaration):
-                if node.position:
-                    symbols.append((node.position.line, f"constructor {node.name}"))
-            for _, node in tree.filter(javalang.tree.MethodDeclaration):
-                if node.position:
-                    mods = " ".join(sorted(node.modifiers)) if node.modifiers else ""
-                    ret = node.return_type.name if node.return_type else "void"
-                    label = f"{mods} {ret} {node.name}".strip()
-                    symbols.append((node.position.line, label))
-        except Exception:
-            pass  # Fall through to regex
-
-    if not symbols:
-        import re
-        _PATTERNS = [
-            # JS / TS
-            (re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)"), "function"),
-            (re.compile(r"^\s*(?:export\s+(?:default\s+)?)?class\s+(\w+)"), "class"),
-            (re.compile(r"^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\("), "const"),
-            # Python
-            (re.compile(r"^\s*def\s+(\w+)"), "def"),
-            (re.compile(r"^\s*class\s+(\w+)"), "class"),
-            # Java / Kotlin / C# — method/constructor signatures
-            (re.compile(r"^\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native|default)\s+)*(?:[\w<>\[\]?,\s]+)\s+(\w+)\s*\("), "method"),
-            (re.compile(r"^\s*(?:public\s+|private\s+|protected\s+)?(?:class|interface|enum|record)\s+(\w+)"), "class"),
-        ]
-        for i, line in enumerate(content.split("\n"), 1):
-            for pattern, kind in _PATTERNS:
-                m = pattern.match(line)
-                if m:
-                    symbols.append((i, f"{kind} {m.group(1)}"))
-                    break
-
-    if not symbols:
-        return ""
-
-    symbols.sort(key=lambda x: x[0])
-    return "\n".join(f"line {ln}: {sym}" for ln, sym in symbols)
-
-
-async def _upsert_file_cache(session_id: str, file_reads: list[dict], turn: int) -> None:
-    """Store file-read content into the graph backend's file content cache.
-
-    Skips files exceeding the configured max byte size. Uses sha256
-    deduplication — if the file's content hasn't changed, no DB write
-    is needed (common case on re-reads of unmodified files).
-    """
-    settings = get_settings()
-    backend = get_backend()
-    for fr in file_reads:
-        content = fr["content"]
-        if len(content.encode()) > settings.file_cache_max_file_bytes:
-            logger.debug("file_cache_skipped_too_large", path=fr["path"], session_id=session_id)
-            continue
-        sha256 = hashlib.sha256(content.encode()).hexdigest()
-        try:
-            await backend.upsert_file_content(
-                session_id=session_id, path=fr["path"],
-                content=content, sha256=sha256, turn=turn,
-            )
-        except Exception:
-            logger.warning("file_cache_upsert_failed", path=fr["path"], session_id=session_id, exc_info=True)
-            continue
-
-        # Build and store structural outline alongside content.
-        # Fail-open: a missing or empty outline is non-fatal.
-        outline = _build_outline(content, fr["path"])
-        if outline:
-            try:
-                await backend.upsert_file_outline(
-                    session_id=session_id, path=fr["path"],
-                    outline=outline, turn=turn,
-                )
-            except Exception:
-                logger.debug("file_outline_upsert_failed", path=fr["path"], session_id=session_id)
-
-
-def _extract_file_writes(messages: list[dict]) -> list[dict]:
-    """Extract file content from Write/create_file tool call arguments.
-
-    Unlike _extract_file_reads (which reads content from tool *results*),
-    this reads content from tool call *arguments* — Write tools carry the new
-    file content in their input, not their output ("file written successfully").
-
-    Scoped to the most recent assistant message only: older Write calls have
-    already been superseded and their content should not overwrite fresher reads.
-
-    Handles: Write, write, write_file, create_file, create.
-    Skips: Edit — requires applying a patch to cached content (done separately).
-
-    Returns list of {path, content, tool_call_id, tool_name}.
-    """
-    FULL_WRITE_TOOLS = frozenset({"Write", "write", "write_file", "create_file", "create"})
-    results = []
-
-    # Only the most recent assistant message — older writes are stale
-    last_assistant: dict | None = None
-    for msg in messages:
-        if msg.get("role") == "assistant":
-            last_assistant = msg
-    if not last_assistant:
-        return results
-
-    for tc in (last_assistant.get("tool_calls") or []):
-        try:
-            name = tc["function"]["name"]
-            if name not in FULL_WRITE_TOOLS:
-                continue
-            args = json.loads(tc["function"]["arguments"])
-            path = (
-                args.get("file_path") or args.get("path")
-                or args.get("filePath") or args.get("filename")
-                or args.get("target_file") or ""
-            )
-            content = args.get("content") or args.get("file_content") or ""
-            if path and content:
-                results.append({
-                    "path": path,
-                    "content": content,
-                    "tool_call_id": tc.get("id", ""),
-                    "tool_name": name,
-                })
-        except (KeyError, json.JSONDecodeError):
-            continue
-    return results
-
-
-def _invalidate_written_files(messages: list[dict]) -> list[str]:
-    """Return paths of files written/edited in this turn's tool calls."""
-    WRITE_TOOLS = frozenset({"Write", "Edit", "write", "edit", "write_file", "edit_file", "create_file", "create"})
-    paths: list[str] = []
-    # Build lookup: tool_call_id → (name, args)
-    call_map: dict[str, tuple[str, dict]] = {}
-    for msg in messages:
-        if msg.get("role") == "assistant":
-            for tc in (msg.get("tool_calls") or []):
-                try:
-                    args = json.loads(tc["function"]["arguments"])
-                except (KeyError, json.JSONDecodeError):
-                    args = {}
-                call_map[tc["id"]] = (tc["function"]["name"], args)
-    for name, args in call_map.values():
-        if name in WRITE_TOOLS:
-            path = (
-                args.get("file_path") or args.get("path")
-                or args.get("filePath") or args.get("filename")
-                or args.get("target_file") or ""
-            )
-            if path:
-                paths.append(path)
-    return paths
-
-
-async def _invalidate_file_cache(
-    session_id: str, paths: list[str], turn_number: int,
-) -> None:
-    """Remove stale cache entries for files written/edited this turn."""
-    from archolith_proxy.metrics import record_metric
-
-    backend = get_backend()
-    for path in paths:
-        try:
-            deleted = await backend.delete_file_content(session_id, path)
-            if deleted:
-                record_metric("file_cache_invalidations", 1)
-                logger.info(
-                    "file_cache_invalidated",
-                    session_id=session_id, path=path, turn=turn_number,
-                )
-        except Exception:
-            logger.warning(
-                "file_cache_invalidate_failed",
-                session_id=session_id, path=path, exc_info=True,
-            )
-
-
-async def _run_extraction(
-    client,
-    session_id: str,
-    turn_number: int,
-    messages: list[dict],
-    response_text: str,
-    truncated: bool = False,
-    session_goal: str | None = None,
-    trace_builder: TraceBuilder | None = None,
-    promotion_service: object | None = None,
-    is_user_turn: bool = True,
-    response_finish_reason: str | None = None,
-) -> None:
-    """Run fact extraction and store results in graph. Best-effort, non-blocking.
-
-    Holds a per-session lock during graph writes so that subsequent assembly
-    reads see committed state. After extraction, computes batch embeddings
-    for all facts and stores them with their vectors. If embedding fails,
-    facts are stored without embeddings (assembler falls back to recency-only
-    retrieval).
-
-    When promotion_service is provided and settings.promotion_enabled is True,
-    eligible facts are promoted to the configured durable memory engine after
-    successful storage.
-
-    After extraction completes, triggers the background curator pass (if enabled)
-    so the next inline pass has a pre-built SessionBriefing. The background pass
-    is only triggered on user turns where the response finished with text (not
-    tool calls), since that's when the user is reading/thinking and there's
-    idle time before the next request.
-    """
-    from archolith_proxy.proxy.locks import get_session_lock
-
-    lock = get_session_lock(session_id)
-    # Try to acquire with timeout — don't block forever if another extraction is stuck
-    acquired = False
-    try:
-        await asyncio.wait_for(lock.acquire(), timeout=10.0)
-        acquired = True
-    except asyncio.TimeoutError:
-        logger.warning("extraction_lock_acquire_timeout", session_id=session_id, turn=turn_number)
-        # Proceed without lock — stale data risk, but better than blocking forever
-
-    try:
-        # Extract user message (last user message in the request)
-        user_message = ""
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                user_message = _normalize_message_content(msg.get("content"))
-                break
-
-        response_text = _normalize_message_content(response_text)
-        if not user_message and not response_text:
-            return
-
-        # Strip reasoning blocks from the response before extraction
-        response_text = strip_reasoning(response_text)
-
-        # Capture file reads before flattening — pairs tool calls with results
-        # using tool_call_id so the content cache gets structured file content.
-        fc_settings = get_settings()
-        if fc_settings.file_cache_enabled:
-            try:
-                # Invalidate cache entries for files written/edited this turn
-                # BEFORE upserting new reads (writes invalidate stale reads)
-                written_paths = _invalidate_written_files(messages)
-                if written_paths:
-                    await _invalidate_file_cache(session_id, written_paths, turn_number)
-
-                file_reads = _extract_file_reads(messages)
-                logger.info(
-                    "file_cache_extract_result",
-                    session_id=session_id,
-                    turn=turn_number,
-                    found=len(file_reads),
-                    paths=[fr["path"] for fr in file_reads],
-                )
-                if file_reads:
-                    await _upsert_file_cache(session_id, file_reads, turn_number)
-                    logger.info(
-                        "file_cache_upserted",
-                        session_id=session_id,
-                        turn=turn_number,
-                        count=len(file_reads),
-                        paths=[fr["path"] for fr in file_reads],
-                    )
-
-                # Cache written file content directly from tool arguments.
-                # Write tools carry the new content in their arguments, not their
-                # result ("file written successfully"). This populates the cache
-                # immediately so the curator can serve the fresh content without
-                # waiting for the agent to re-read the file.
-                file_writes = _extract_file_writes(messages)
-                if file_writes:
-                    await _upsert_file_cache(session_id, file_writes, turn_number)
-                    logger.info(
-                        "file_cache_writes_captured",
-                        session_id=session_id,
-                        turn=turn_number,
-                        count=len(file_writes),
-                        paths=[fw["path"] for fw in file_writes],
-                    )
-            except Exception:
-                logger.warning("file_cache_capture_failed", session_id=session_id, turn=turn_number, exc_info=True)
-
-        # Serialize the newest tool results first so the current turn survives truncation.
-        extraction_settings = get_settings()
-        extraction_start = time.monotonic()
-
-        if extraction_settings.per_tool_extraction_enabled:
-            # Per-tool extraction: fan out to specialized extractors
-            from archolith_proxy.extractor.registry import get_registry as _get_extractor_registry
-
-            tool_records = _collect_tool_call_records(messages)
-            result = await extract_facts_per_tool(
-                http_client=client,
-                turn_number=turn_number,
-                user_message=user_message[:4000],
-                assistant_response=response_text[:8000],
-                tool_records=tool_records,
-                session_goal=session_goal,
-                registry=_get_extractor_registry(),
-            )
-        else:
-            # Legacy single-call extraction
-            tool_results = _collect_recent_tool_results(messages, max_chars=4000)
-            result = await extract_facts(
-                http_client=client,
-                turn_number=turn_number,
-                user_message=user_message[:4000],
-                assistant_response=response_text[:8000],
-                tool_results=tool_results,
-                session_goal=session_goal,
-            )
-        extraction_latency_ms = (time.monotonic() - extraction_start) * 1000
-
-        # Update session goal if extractor provided one
-        if result and result.session_goal:
-            try:
-                await get_backend().update_goal(session_id, result.session_goal)
-                logger.info("session_goal_updated", session_id=session_id, goal=result.session_goal[:80])
-                await broadcast_session_event(session_id, "goal_updated", goal=result.session_goal)
-            except Exception as e:
-                logger.warning("session_goal_update_failed", session_id=session_id, error=str(e))
-
-        if result is None:
-            record_metric("extraction_failures", 1)
-            logger.warning("extraction_result_missing", session_id=session_id, turn=turn_number)
-            if trace_builder:
-                trace_builder.set_extraction(extraction_latency_ms=extraction_latency_ms)
-            return
-
-        if not result.facts:
-            logger.info("extraction_empty", session_id=session_id, turn=turn_number)
-            record_metric("extraction_empties", 1)
-            if trace_builder:
-                trace_builder.set_extraction(extraction_latency_ms=extraction_latency_ms)
-            return
-
-        # Deduplicate: fetch existing active facts and filter duplicates
-        from archolith_proxy.extractor.dedup import deduplicate_facts as _deduplicate_facts
-        _fact_limit = get_settings().fact_pool_limit
-        existing_facts = await get_backend().get_active_facts(session_id, limit=_fact_limit)
-        if len(existing_facts) >= _fact_limit:
-            logger.warning(
-                "fact_pool_at_capacity",
-                session_id=session_id,
-                turn=turn_number,
-                limit=_fact_limit,
-                msg="dedup may miss older facts beyond the pool limit",
-            )
-        unique_facts = _deduplicate_facts(result.facts, existing_facts)
-        if len(unique_facts) < len(result.facts):
-            logger.info(
-                "extraction_dedup_applied",
-                session_id=session_id,
-                turn=turn_number,
-                original=len(result.facts),
-                after_dedup=len(unique_facts),
-                duplicates_removed=len(result.facts) - len(unique_facts),
-            )
-
-        # Batch compute embeddings for deduplicated facts only
-        fact_contents = [fact.get("content", "") for fact in unique_facts]
-        embeddings = await _compute_fact_embeddings(client, fact_contents)
-
-        # Store deduplicated facts with their embeddings via batch call
-        enriched_facts = []
-        for i, fact in enumerate(unique_facts):
-            fact_type_str = fact.get("fact_type", "observation")
-            try:
-                fact_type = FactType(fact_type_str)
-            except ValueError:
-                fact_type = FactType.OBSERVATION
-            enriched_facts.append({
-                "content": fact.get("content", ""),
-                "fact_type": fact_type.value,
-                "confidence": fact.get("confidence", 0.5),
-                "embedding": embeddings[i] if i < len(embeddings) else None,
-            })
-        # Capture new fact IDs for SUPERSEDES edge creation after invalidation
-        new_fact_ids = await get_backend().store_facts_batch(
-            session_id=session_id,
-            facts=enriched_facts,
-            source_turn=turn_number,
-        )
-
-        # Store file touches
-        for file_path in result.files_touched:
-            status = FileStatus.MODIFIED  # Default — extraction doesn't always distinguish
-            await get_backend().create_touches(session_id, file_path, status, turn_number)
-
-        # Store decisions
-        for decision in result.decisions:
-            await get_backend().store_decision(
-                session_id=session_id,
-                summary=decision.get("summary", ""),
-                rationale=decision.get("rationale"),
-                turn=turn_number,
-            )
-
-        # Store checkpoint (single record per session — overwrites on each turn)
-        if result.checkpoint:
-            try:
-                await get_backend().upsert_checkpoint(
-                    session_id=session_id,
-                    summary=result.checkpoint.get("summary", ""),
-                    next_step=result.checkpoint.get("next_step", ""),
-                    confidence=result.checkpoint.get("confidence", 0.5),
-                    turn=turn_number,
-                )
-            except Exception as e:
-                logger.warning("checkpoint_store_failed", session_id=session_id, error=str(e))
-
-        # Store issues — create new open ones, resolve closed ones
-        if result.issues:
-            open_issues = [i for i in result.issues if i.get("status") != "resolved"]
-            resolved_issues = [i for i in result.issues if i.get("status") == "resolved"]
-            for issue in open_issues:
-                try:
-                    await get_backend().create_issue(
-                        session_id=session_id,
-                        summary=issue.get("summary", ""),
-                        status="open",
-                        related_file=issue.get("related_file", ""),
-                        related_command=issue.get("related_command", ""),
-                        turn=turn_number,
-                    )
-                except Exception as e:
-                    logger.warning("issue_store_failed", session_id=session_id, error=str(e))
-            if resolved_issues:
-                try:
-                    summaries = [i.get("summary", "") for i in resolved_issues if i.get("summary")]
-                    if summaries:
-                        await get_backend().resolve_issues(
-                            session_id, summaries,
-                            f"resolved at turn {turn_number}", turn_number,
-                        )
-                except Exception as e:
-                    logger.warning("issue_resolve_failed", session_id=session_id, error=str(e))
-
-        # Store verifications
-        for v in result.verifications:
-            try:
-                await get_backend().create_verification(
-                    session_id=session_id,
-                    command=v.get("command", ""),
-                    status=v.get("status", "fail"),
-                    summary=v.get("summary", ""),
-                    turn=turn_number,
-                )
-            except Exception as e:
-                logger.warning("verification_store_failed", session_id=session_id, error=str(e))
-
-        # Invalidate superseded facts — match description strings to actual fact IDs
-        invalidations_matched_count = 0
-        if result.invalidated_fact_ids:
-            matched_ids = await get_backend().find_matching_fact_ids(
-                session_id, result.invalidated_fact_ids
-            )
-            invalidations_matched_count = len(matched_ids)
-            if matched_ids:
-                count = await get_backend().invalidate_facts(matched_ids)
-                if count:
-                    logger.info(
-                        "facts_invalidated",
-                        count=count,
-                        session_id=session_id,
-                        turn=turn_number,
-                        descriptions=len(result.invalidated_fact_ids),
-                        matched_ids=len(matched_ids),
-                    )
-
-                    # Create SUPERSEDES edges from each new fact to each
-                    # invalidated fact so /trace/graph/{sid}/invalidations
-                    # has real chain data for the explorer.
-                    for new_fid in new_fact_ids:
-                        for old_fid in matched_ids:
-                            try:
-                                await get_backend().create_supersedes(old_fid, new_fid)
-                            except Exception as e:
-                                logger.warning(
-                                    "supersedes_edge_failed",
-                                    old_id=old_fid, new_id=new_fid, error=str(e),
-                                )
-                    logger.debug(
-                        "supersedes_edges_created",
-                        session_id=session_id,
-                        new_facts=len(new_fact_ids),
-                        invalidated=len(matched_ids),
-                        edges=len(new_fact_ids) * len(matched_ids),
-                    )
-
-        # Log active fact count for monitoring
-        active_count = await get_backend().get_active_fact_count(session_id)
-        embedding_count = sum(1 for e in embeddings if e is not None)
-        record_metric("extraction_successes", 1)
-        logger.info(
-            "extraction_stored",
-            session_id=session_id,
-            turn=turn_number,
-            facts_stored=len(unique_facts),
-            embeddings_computed=embedding_count,
-            active_fact_count=active_count,
-            extraction_latency_ms=round(extraction_latency_ms, 1),
-            warning="high_active_count" if active_count > 200 else None,
-        )
-
-        # Live stream: broadcast extraction result
-        await broadcast_extraction(
-            session_id=session_id, turn_number=turn_number,
-            facts_stored=len(unique_facts),
-            session_goal=result.session_goal,
-            latency_ms=extraction_latency_ms,
-        )
-
-        if trace_builder:
-            duplicates_skipped = len(result.facts) - len(unique_facts)
-            trace_builder.set_extraction(
-                facts_stored=len(unique_facts),
-                duplicates_skipped=duplicates_skipped,
-                invalidations_attempted=len(result.invalidated_fact_ids) if result.invalidated_fact_ids else 0,
-                invalidations_matched=invalidations_matched_count,
-                extraction_latency_ms=extraction_latency_ms,
-                extracted_facts=[{"content": f.get("content", "")[:200], "type": f.get("fact_type", "observation")} for f in unique_facts],
-            )
-
-        # --- Promotion: push eligible facts to durable memory engine ---
-        if promotion_service is not None:
-            try:
-                from archolith_proxy.memory.models import PromotionRecord
-                from archolith_proxy.memory.promotion import PromotionService
-
-                svc = promotion_service  # type: PromotionService
-                settings = get_settings()
-
-                if settings.promotion_enabled:
-                    eligible_records = []
-                    for fact in unique_facts:
-                        fact_type = fact.get("fact_type", "observation")
-                        confidence = fact.get("confidence", 0.5)
-                        if svc.should_promote(
-                            fact_type=fact_type,
-                            confidence=confidence,
-                            tags=fact.get("tags", []),
-                        ):
-                            record = PromotionRecord(
-                                session_id=session_id,
-                                source_turn=turn_number,
-                                fact_type=fact_type,
-                                content=fact.get("content", ""),
-                                confidence=confidence,
-                                session_goal=session_goal,
-                                touched_files=result.files_touched if hasattr(result, "files_touched") else [],
-                                promotion_reason="auto_extracted",
-                                tags=fact.get("tags", []),
-                            )
-                            eligible_records.append(record)
-
-                    if eligible_records:
-                        promo_results = await svc.promote_batch(
-                            eligible_records,
-                            dry_run=settings.promotion_dry_run,
-                        )
-                        succeeded = sum(1 for r in promo_results if r.outcome.value == "success")
-                        skipped = sum(1 for r in promo_results if r.outcome.value == "skipped")
-                        failed = sum(1 for r in promo_results if r.outcome.value == "failed")
-                        logger.info(
-                            "promotion_completed",
-                            session_id=session_id,
-                            turn=turn_number,
-                            eligible=len(eligible_records),
-                            succeeded=succeeded,
-                            skipped=skipped,
-                            failed=failed,
-                        )
-            except Exception as e:
-                logger.warning("promotion_task_failed", session_id=session_id, turn=turn_number, error=str(e), exc_info=True)
-
-    except Exception as e:
-        record_metric("extraction_failures", 1)
-        logger.warning("extraction_task_failed", session_id=session_id, turn=turn_number, error=str(e), exc_info=True)
-    finally:
-        if acquired:
-            lock.release()
-
-    # --- Trigger background curator pass (two-pass mode) ---
-    # Runs after extraction completes so the graph has fresh data.
-    # Fire-and-forget as an asyncio.Task — never blocks the response.
-    # Predictive gate: only fire on user turns where the response ended with
-    # text (finish_reason != "tool_calls"). Tool-call responses mean the agent
-    # will immediately continue with an agent-solo turn, leaving no idle window.
-    if not is_user_turn or response_finish_reason == "tool_calls":
-        return
-
-    try:
-        _bg_settings = get_settings()
-        if _bg_settings.background_pass_enabled and _bg_settings.curator_enabled and session_id:
-            # Extract the last user message for the background pass prompt
-            _bg_user_msg = ""
-            for msg in reversed(messages):
-                if msg.get("role") == "user":
-                    _bg_user_msg = _normalize_message_content(msg.get("content"))
-                    break
-            if _bg_user_msg:
-                from archolith_proxy.curator import run_background_pass
-                from archolith_proxy.curator.state import swap_background_task
-                _bg_task = asyncio.create_task(
-                    run_background_pass(
-                        session_id=session_id,
-                        turn_number=turn_number,
-                        user_message=_bg_user_msg[:4000],
-                        session_goal=session_goal,
-                        messages=messages,
-                    )
-                )
-                swap_background_task(session_id, _bg_task)
-                logger.debug("background_pass_triggered", session_id=session_id, turn=turn_number)
-    except Exception:
-        logger.debug("background_pass_trigger_failed", session_id=session_id, exc_info=True)
-
-
-
-async def _compute_fact_embeddings(
-    client: httpx.AsyncClient,
-    texts: list[str],
-) -> list[list[float] | None]:
-    """Compute batch embeddings for extracted fact texts.
-
-    Falls back to [None, ...] if the embedding API is unavailable.
-    """
-    try:
-        from archolith_proxy.extractor.embeddings import compute_embeddings_batch
-        return await compute_embeddings_batch(client, texts)
-    except Exception as e:
-        logger.warning("embedding_computation_failed", error=str(e))
-        return [None] * len(texts)

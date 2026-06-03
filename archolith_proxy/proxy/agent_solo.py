@@ -182,6 +182,17 @@ def clear_session_hashes(session_id: str) -> None:
     _curator_caches.pop(session_id, None)
 
 
+def prune_session_state(active_session_ids: set[str]) -> int:
+    """Drop dedupe and curator-prefix cache state for inactive sessions."""
+    stale_ids = {
+        sid for sid in (*_session_trackers.keys(), *_curator_caches.keys())
+        if sid not in active_session_ids
+    }
+    for session_id in stale_ids:
+        clear_session_hashes(session_id)
+    return len(stale_ids)
+
+
 # ---------------------------------------------------------------------------
 # Main compression entry point
 # ---------------------------------------------------------------------------

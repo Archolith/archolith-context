@@ -235,3 +235,61 @@ async def test_supersedes_chain(backend):
     assert len(chain) >= 1
     assert chain[0]["superseding_fact"]["fact_id"] == new_id
     assert chain[0]["superseded_fact"]["fact_id"] == old_id
+
+
+@pytest.mark.asyncio
+async def test_bulk_touch_and_decision_operations(backend):
+    """Bulk UNWIND operations should update files and decisions in one backend."""
+    await backend.create_session("sess-011")
+
+    await backend.bulk_create_touches(
+        "sess-011",
+        [
+            {"file_path": "src/main.py", "status": "modified", "turn": 2},
+            {"file_path": "src/readme.md", "status": "read", "turn": 3},
+        ],
+    )
+    files = await backend.get_touched_files("sess-011")
+    assert {f["path"] for f in files} >= {"src/main.py", "src/readme.md"}
+
+    decision_ids = await backend.bulk_store_decisions(
+        "sess-011",
+        [
+            {"summary": "Keep ladybug as default", "rationale": "embedded backend"},
+            {"summary": "Use shared text utils", "rationale": "break cross-layer deps"},
+        ],
+        turn=4,
+    )
+    assert len(decision_ids) == 2
+    decisions = await backend.get_decisions("sess-011")
+    assert len(decisions) == 2
+
+
+@pytest.mark.asyncio
+async def test_bulk_issue_verification_and_supersedes_operations(backend):
+    """Bulk issue, verification, and supersedes helpers should persist rows."""
+    await backend.create_session("sess-012")
+
+    old_id = await backend.store_fact("sess-012", "Use old flow", "decision", 1)
+    new_id = await backend.store_fact("sess-012", "Use new flow", "decision", 2)
+    await backend.bulk_create_supersedes([(old_id, new_id)])
+    chain = await backend.get_supersession_chain("sess-012")
+    assert len(chain) == 1
+
+    issue_ids = await backend.bulk_create_issues(
+        "sess-012",
+        [{"summary": "Cache drift", "status": "open", "related_file": "main.py", "related_command": "pytest"}],
+        turn=3,
+    )
+    verification_ids = await backend.bulk_create_verifications(
+        "sess-012",
+        [{"command": "pytest tests/ -q", "status": "pass", "summary": "green"}],
+        turn=4,
+    )
+
+    assert len(issue_ids) == 1
+    assert len(verification_ids) == 1
+    assert len(await backend.get_open_issues("sess-012")) == 1
+    last_verification = await backend.get_last_verification("sess-012")
+    assert last_verification is not None
+    assert last_verification["status"] == "pass"

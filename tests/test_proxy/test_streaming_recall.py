@@ -630,8 +630,7 @@ class TestStreamingRecallInterception:
                      patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
                      patch("archolith_proxy.openai.chat.get_backend") as mock_get_backend, \
                      patch("archolith_proxy.proxy.tool_injection.handle_recall_tool_call", new_callable=AsyncMock) as mock_recall, \
-                     patch("archolith_proxy.proxy.locks.wait_for_prior_extraction", new_callable=AsyncMock), \
-                     patch("archolith_proxy.openai.chat.assemble_context", new_callable=AsyncMock, return_value=None):
+                     patch("archolith_proxy.proxy.locks.wait_for_prior_extraction", new_callable=AsyncMock):
 
                     mock_backend = AsyncMock()
                     mock_backend.get_turn_number.return_value = 1

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import time
 import types
@@ -64,11 +65,15 @@ from archolith_proxy.curator.briefing import (  # noqa: E402
 )
 from archolith_proxy.curator.result import CuratorResult, CuratorToolCall  # noqa: E402
 from archolith_proxy.curator.state import (  # noqa: E402
+    CuratorSnapshot,
     cache_briefing,
+    cache_snapshot,
     get_briefing,
     is_briefing_fresh,
     clear_briefing,
+    prune_session_state,
     _briefing_cache,
+    _cache,
 )
 
 # Force-import _extract_section and _build_briefing_from_result after
@@ -155,6 +160,7 @@ class TestPreFetchedFile:
 class TestBriefingCache:
     def setup_method(self):
         _briefing_cache.clear()
+        _cache.clear()
 
     def test_cache_and_retrieve(self):
         b = SessionBriefing(session_id="s1", source_turn=5)
@@ -199,6 +205,36 @@ class TestBriefingCache:
         cache_briefing("s1", b1)
         cache_briefing("s1", b2)
         assert get_briefing("s1") is b2
+
+    def test_prune_session_state_removes_inactive_entries(self):
+        cache_snapshot(
+            "active",
+            CuratorSnapshot(
+                curated_paths=("a.py",),
+                retained_turn_numbers=None,
+                context_summary="active",
+                tool_calls_used=1,
+                turn_number=1,
+            ),
+        )
+        cache_snapshot(
+            "stale",
+            CuratorSnapshot(
+                curated_paths=("b.py",),
+                retained_turn_numbers=None,
+                context_summary="stale",
+                tool_calls_used=1,
+                turn_number=1,
+            ),
+        )
+        cache_briefing("stale", SessionBriefing(session_id="stale", source_turn=1))
+
+        pruned = prune_session_state({"active"})
+
+        assert pruned == 1
+        assert "active" in _cache
+        assert "stale" not in _cache
+        assert "stale" not in _briefing_cache
 
 
 # ---------------------------------------------------------------------------
@@ -469,7 +505,7 @@ class TestBackgroundPassPipeline:
             ],
         )
 
-        with patch("archolith_proxy.curator._run_curator_native",
+        with patch("archolith_proxy.curator.loop._run_curator_native",
                     new_callable=AsyncMock) as mock_loop:
             mock_loop.return_value = (mock_result, mock_result.tool_log, "")
             with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
@@ -525,7 +561,7 @@ class TestBackgroundPassPipeline:
             await asyncio.sleep(5)  # exceeds 100ms budget
             return (None, [], "")
 
-        with patch("archolith_proxy.curator._run_curator_native",
+        with patch("archolith_proxy.curator.loop._run_curator_native",
                     new_callable=AsyncMock, side_effect=_slow_curator):
             with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
                 await run_background_pass(
@@ -549,7 +585,7 @@ class TestBackgroundPassPipeline:
         )
         from archolith_proxy.curator import run_background_pass
 
-        with patch("archolith_proxy.curator._run_curator_native",
+        with patch("archolith_proxy.curator.loop._run_curator_native",
                     new_callable=AsyncMock) as mock_loop:
             mock_loop.return_value = (None, [], "empty_response")
             with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
@@ -624,7 +660,7 @@ class TestInlineBriefingPipeline:
             tool_log=[],
         )
 
-        with patch("archolith_proxy.curator._run_curator_native",
+        with patch("archolith_proxy.curator.loop._run_curator_native",
                     new_callable=AsyncMock) as mock_loop:
             mock_loop.return_value = (inline_result, [], "")
             with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
@@ -689,7 +725,7 @@ class TestInlineBriefingPipeline:
                 # Second call: full curator fallback
                 return (full_result, [], "")
 
-        with patch("archolith_proxy.curator._run_curator_native",
+        with patch("archolith_proxy.curator.loop._run_curator_native",
                     new_callable=AsyncMock, side_effect=_mock_curator):
             with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
                 result = await curate_context(
@@ -729,7 +765,7 @@ class TestInlineBriefingPipeline:
             tool_log=[],
         )
 
-        with patch("archolith_proxy.curator._run_curator_native",
+        with patch("archolith_proxy.curator.loop._run_curator_native",
                     new_callable=AsyncMock) as mock_loop:
             mock_loop.return_value = (full_result, [], "")
             with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
@@ -1003,7 +1039,7 @@ class TestBackgroundPassDispatch:
             ],
         )
 
-        with patch("archolith_proxy.curator._run_curator_native",
+        with patch("archolith_proxy.curator.loop._run_curator_native",
                     new_callable=AsyncMock) as mock_loop:
             mock_loop.return_value = (mock_result, mock_result.tool_log, "")
             with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
@@ -1072,7 +1108,7 @@ class TestInlinePassDispatch:
         register_curation_mode(inline_pass_fn=my_inline_fn)
 
         # Mock the full curator path so the fallback doesn't actually run
-        with patch("archolith_proxy.curator._run_curator_native",
+        with patch("archolith_proxy.curator.loop._run_curator_native",
                     new_callable=AsyncMock) as mock_loop:
             result = await curate_context(
                 session_id="s1", turn_number=6,
@@ -1118,7 +1154,7 @@ class TestInlinePassDispatch:
 
         register_curation_mode(inline_pass_fn=my_inline_fn)
 
-        with patch("archolith_proxy.curator._run_curator_native",
+        with patch("archolith_proxy.curator.loop._run_curator_native",
                     new_callable=AsyncMock) as mock_loop:
             result = await curate_context(
                 session_id="s1", turn_number=6,
@@ -1161,7 +1197,7 @@ class TestInlinePassDispatch:
             tool_log=[],
         )
 
-        with patch("archolith_proxy.curator._run_curator_native",
+        with patch("archolith_proxy.curator.loop._run_curator_native",
                     new_callable=AsyncMock) as mock_loop:
             mock_loop.return_value = (inline_result, [], "")
             with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):

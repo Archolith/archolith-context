@@ -109,7 +109,7 @@ class TestNeo4jChaos:
 
         # Mock the graph modules to simulate Neo4j failure
         with patch("archolith_proxy.proxy.session.resolve_session", new_callable=AsyncMock) as mock_resolve, \
-             patch("archolith_proxy.openai.chat.assemble_context", new_callable=AsyncMock) as mock_assemble:
+             patch("archolith_proxy.assembler.context.assemble_context", new_callable=AsyncMock) as mock_assemble:
 
             mock_resolve.side_effect = Exception("Neo4j connection refused")
             mock_assemble.return_value = None
@@ -144,7 +144,7 @@ class TestExtractionChaos:
 
         mock_transport = httpx.MockTransport(mock_handler)
 
-        with patch("archolith_proxy.openai.chat.extract_facts", new_callable=AsyncMock) as mock_extract:
+        with              patch("archolith_proxy.openai.extraction.extract_facts", new_callable=AsyncMock) as mock_extract:
             mock_extract.side_effect = Exception("Extraction API returned 500")
 
             async with app.router.lifespan_context(app):
@@ -478,8 +478,8 @@ class TestTraceAccounting:
              patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
              patch("archolith_proxy.openai.chat.get_backend") as mock_get_backend, \
              patch("archolith_proxy.proxy.locks.wait_for_prior_extraction", new_callable=AsyncMock), \
-             patch("archolith_proxy.openai.chat.assemble_context", new_callable=AsyncMock, return_value=assembled), \
-             patch("archolith_proxy.openai.chat.extract_facts", new_callable=AsyncMock, return_value=None):
+             patch("archolith_proxy.assembler.context.assemble_context", new_callable=AsyncMock, return_value=assembled), \
+             patch("archolith_proxy.openai.extraction.extract_facts", new_callable=AsyncMock, return_value=None):
 
             mock_backend = AsyncMock()
             mock_backend.get_turn_number.return_value = 3
@@ -720,7 +720,7 @@ class TestExtractionPipeline:
     @pytest.mark.asyncio
     async def test_run_extraction_prefers_recent_tool_results(self):
         """The extractor should keep newest tool outputs within the prompt budget."""
-        from archolith_proxy.openai.chat import _run_extraction
+        from archolith_proxy.openai.extraction import _run_extraction
 
         captured: dict[str, str | None] = {}
 
@@ -753,9 +753,9 @@ class TestExtractionPipeline:
             },
         ]
 
-        with patch("archolith_proxy.openai.chat.extract_facts", side_effect=fake_extract_facts), \
+        with patch("archolith_proxy.openai.extraction.extract_facts", side_effect=fake_extract_facts), \
              patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
-             patch("archolith_proxy.openai.chat._compute_fact_embeddings", new=AsyncMock(return_value=[[0.1, 0.2, 0.3]])):
+             patch("archolith_proxy.openai.extraction._compute_fact_embeddings", new=AsyncMock(return_value=[[0.1, 0.2, 0.3]])):
             await _run_extraction(
                 client=AsyncMock(),
                 session_id="session-extract",
@@ -771,7 +771,7 @@ class TestExtractionPipeline:
     @pytest.mark.asyncio
     async def test_run_extraction_empty_counts_as_empty_not_success(self):
         """Zero-fact parses should not increment extraction_successes."""
-        from archolith_proxy.openai.chat import _run_extraction
+        from archolith_proxy.openai.extraction import _run_extraction
 
         metrics = get_metrics()
         old_successes = metrics["extraction_successes"]
@@ -783,7 +783,7 @@ class TestExtractionPipeline:
 
         try:
             with patch(
-                "archolith_proxy.openai.chat.extract_facts",
+                "archolith_proxy.openai.extraction.extract_facts",
                 new=AsyncMock(
                     return_value=ExtractionResult(
                         facts=[],
@@ -793,7 +793,7 @@ class TestExtractionPipeline:
                         turn_number=3,
                     )
                 ),
-            ), patch("archolith_proxy.openai.chat.get_backend", return_value=AsyncMock()):
+            ), patch("archolith_proxy.openai.extraction.get_backend", return_value=AsyncMock()):
                 await _run_extraction(
                     client=AsyncMock(),
                     session_id="session-empty",
@@ -843,9 +843,10 @@ class TestExtractionPipeline:
         with patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
              patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
              patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
-             patch("archolith_proxy.openai.chat.assemble_context", new_callable=AsyncMock, return_value=None), \
+             patch("archolith_proxy.assembler.context.assemble_context", new_callable=AsyncMock, return_value=None), \
              patch("archolith_proxy.proxy.locks.wait_for_prior_extraction", new_callable=AsyncMock), \
-             patch("archolith_proxy.openai.chat._run_extraction", side_effect=fake_run_extraction):
+             patch("archolith_proxy.openai.non_streaming._run_extraction", side_effect=fake_run_extraction), \
+             patch("archolith_proxy.openai.streaming._run_extraction", side_effect=fake_run_extraction):
             mock_resolve.return_value = ("session-stream-trace", False)
 
             async with app.router.lifespan_context(app):

@@ -1,10 +1,10 @@
 """Per-session asyncio.Lock management for extraction ordering.
 
 Turn N+1's assembly can read stale graph state if turn N's background
-extraction hasn't committed yet. Session locks ensure that:
+extraction hasn't committed yet. Session locks now serve two purposes:
 
-1. Before assembly, the handler waits for the prior extraction to finish
-   (with a timeout fallback so requests don't hang indefinitely).
+1. Assembly can cheaply probe whether prior extraction is still pending
+   and surface that freshness risk in trace/logs without blocking.
 2. During extraction, the lock is held to prevent concurrent writes to
    the same session's graph data.
 
@@ -29,6 +29,11 @@ def get_session_lock(session_id: str) -> asyncio.Lock:
     if session_id not in _session_locks:
         _session_locks[session_id] = asyncio.Lock()
     return _session_locks[session_id]
+
+
+def is_extraction_pending(session_id: str) -> bool:
+    """Return True when a prior extraction still holds the session lock."""
+    return get_session_lock(session_id).locked()
 
 
 async def wait_for_prior_extraction(session_id: str, timeout_s: float = 5.0) -> bool:

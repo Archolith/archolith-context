@@ -3,32 +3,36 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
 
 import httpx
 import structlog
-from fastapi import BackgroundTasks, Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from archolith_proxy.admin import require_admin_token
 from archolith_proxy.config import get_settings
 from archolith_proxy.graph.backend import close_backend, get_backend, init_backend, is_graph_ready
 from archolith_proxy.graph.neo4j_backend import Neo4jBackend
-from archolith_proxy.metrics import get_metrics, record_metric, record_start_time
 from archolith_proxy.logging_config import configure_logging
+from archolith_proxy.metrics import get_metrics, record_metric, record_start_time
 from archolith_proxy.openai.router import router as openai_router
+from archolith_proxy.routers.admin_router import router as admin_router
+from archolith_proxy.routers.live_router import router as live_router
+from archolith_proxy.routers.memory_admin_router import router as memory_admin_router
+from archolith_proxy.routers.metrics_router import router as metrics_router
+from archolith_proxy.routers.sessions_router import router as sessions_router
 from archolith_proxy.trace.router import router as trace_router
 from archolith_proxy.trace.store import get_trace_store
-from archolith_proxy.admin import require_admin_token
 
 # Configure structured JSON logging before first use
 configure_logging()
 
 logger = structlog.get_logger()
-
-
 
 
 def _load_memory_engines(settings, registry) -> None:
@@ -37,7 +41,6 @@ def _load_memory_engines(settings, registry) -> None:
 
     from archolith_proxy.memory.models import MemoryEngineConfig
 
-    # If MEMORY_ENGINES_JSON is set, parse and register each engine
     if settings.memory_engines_json:
         try:
             engines_raw = json.loads(settings.memory_engines_json)
@@ -51,20 +54,18 @@ def _load_memory_engines(settings, registry) -> None:
             logger.info("memory_engines_loaded", count=registry.engine_count)
         except json.JSONDecodeError as e:
             logger.warning("memory_engines_json_parse_error", error=str(e))
-    else:
-        # Fallback: auto-register archolith-memory from legacy settings if promotion is enabled
-        if settings.memory_api_url:
-            registry.register(
-                MemoryEngineConfig(
-                    id="archolith-memory",
-                    type="archolith_memory",
-                    enabled=True,
-                    priority=10,
-                    base_url=settings.memory_api_url,
-                    api_key_env="MEMORY_API_KEY",
-                )
+    elif settings.memory_api_url:
+        registry.register(
+            MemoryEngineConfig(
+                id="archolith-memory",
+                type="archolith_memory",
+                enabled=True,
+                priority=10,
+                base_url=settings.memory_api_url,
+                api_key_env="MEMORY_API_KEY",
             )
-            logger.info("memory_engine_auto_registered", engine_id="archolith-memory", base_url=settings.memory_api_url)
+        )
+        logger.info("memory_engine_auto_registered", engine_id="archolith-memory", base_url=settings.memory_api_url)
 
 
 async def _init_neo4j_with_retry(settings, max_retries: int = 3, backoff_base: float = 1.0) -> bool:
@@ -76,7 +77,7 @@ async def _init_neo4j_with_retry(settings, max_retries: int = 3, backoff_base: f
             return True
         except Exception as e:
             if attempt < max_retries - 1:
-                delay = backoff_base * (2 ** attempt)
+                delay = backoff_base * (2**attempt)
                 logger.warning(
                     "neo4j_init_retry",
                     attempt=attempt + 1,
@@ -97,18 +98,37 @@ async def _init_neo4j_with_retry(settings, max_retries: int = 3, backoff_base: f
 
 
 async def _background_cleanup_loop() -> None:
-    """Hourly background task: expire sessions, delete expired, prune locks."""
+    """Hourly background task: expire sessions, delete expired, prune locks,
+    evict stale curator and circuit-breaker caches."""
     while True:
         try:
-            await asyncio.sleep(3600)  # Every hour
+            await asyncio.sleep(3600)
             if is_graph_ready():
                 backend = get_backend()
                 expired = await backend.expire_sessions()
                 if expired:
                     deleted = await backend.delete_expired_sessions()
                     logger.info("background_cleanup_cycle", expired=expired, deleted=deleted)
-            # Prune stale session locks
+
+                    try:
+                        active = await backend.list_active_sessions()
+                        active_ids = {s.get("session_id") for s in active if s.get("session_id")}
+                        from archolith_proxy.curator.state import prune_session_state as prune_curator_state
+                        from archolith_proxy.proxy.agent_solo import prune_session_state as prune_agent_solo_state
+
+                        pruned_agent_solo = prune_agent_solo_state(active_ids)
+                        pruned_curator = prune_curator_state(active_ids)
+                        if pruned_agent_solo or pruned_curator:
+                            logger.info(
+                                "background_cache_pruned",
+                                agent_solo_sessions=pruned_agent_solo,
+                                curator_sessions=pruned_curator,
+                            )
+                    except Exception:
+                        pass
+
             from archolith_proxy.proxy.locks import cleanup_stale_locks
+
             cleaned = cleanup_stale_locks()
             if cleaned:
                 logger.info("background_lock_cleanup", locks_removed=cleaned)
@@ -124,7 +144,6 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     record_start_time()
 
-    # Fail-fast: warn about missing required keys
     proxy_missing = settings.check_required_for_proxy()
     if proxy_missing:
         logger.warning("missing_required_env_vars", vars=proxy_missing, note="proxy calls will fail")
@@ -137,7 +156,6 @@ async def lifespan(app: FastAPI):
             note="set these to enable session graph + context assembly",
         )
 
-    # HTTP clients (shared connection pools)
     app.state.http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
     )
@@ -145,14 +163,16 @@ async def lifespan(app: FastAPI):
         timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0),
     )
 
-    # Graph backend — optional, graceful fallback if unavailable
     if settings.graph_backend == "ladybug":
         try:
             from archolith_proxy.graph.ladybug_backend import LadybugBackend
-            await init_backend(LadybugBackend(
-                db_path=settings.ladybug_db_path,
-                max_concurrent_queries=settings.ladybug_max_concurrent,
-            ))
+
+            await init_backend(
+                LadybugBackend(
+                    db_path=settings.ladybug_db_path,
+                    max_concurrent_queries=settings.ladybug_max_concurrent,
+                )
+            )
             logger.info("ladybug_initialized", db_path=settings.ladybug_db_path)
         except ImportError:
             logger.error("ladybug_not_installed", note="pip install ladybug, or set GRAPH_BACKEND=neo4j")
@@ -167,21 +187,31 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("graph_not_configured", note="set GRAPH_BACKEND=ladybug or SESSION_NEO4J_PASSWORD for graph features")
 
-    # Live stream broadcaster (WebSocket pub/sub)
     from archolith_proxy.proxy.live import get_live_stream
+
     app.state.live_stream = get_live_stream()
 
-    # Turn trace store — with optional disk persistence and reload
-    from archolith_proxy.trace.store import get_trace_store
     app.state.trace_store = get_trace_store()
     if settings.trace_dir:
         loaded = await app.state.trace_store.load_from_disk()
         if loaded:
             logger.info("trace_history_restored", records=loaded)
 
-    # Memory engine registry — load from config if promotion enabled
+    # Startup consistency check: verify trace turn numbers against graph
+    if settings.trace_dir and is_graph_ready():
+        try:
+            report = await app.state.trace_store.verify_consistency()
+            if report["orphans"] or report["mismatches"]:
+                logger.warning(
+                    "trace_graph_consistency_report",
+                    orphans=len(report["orphans"]),
+                    mismatches=len(report["mismatches"]),
+                )
+        except Exception:
+            pass  # Non-fatal; trace/graph drift does not block startup
+
     from archolith_proxy.memory.registry import get_registry, reset_registry
-    from archolith_proxy.memory.models import MemoryEngineConfig
+
     reset_registry()
     registry = get_registry()
     if settings.promotion_enabled:
@@ -189,14 +219,13 @@ async def lifespan(app: FastAPI):
     elif settings.memory_engines_json:
         logger.info("memory_engines_configured_but_disabled", note="set PROMOTION_ENABLED=true to activate")
 
-    # Promotion service
     from archolith_proxy.memory.promotion import PromotionService
+
     app.state.promotion_service = PromotionService(
         registry=registry,
         min_confidence=settings.promotion_min_confidence,
     )
 
-    # Optional: check upstream connectivity (warn-only, not fatal)
     try:
         resp = await app.state.http_client.get(
             f"{settings.upstream_api_url}/models",
@@ -210,21 +239,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("upstream_connectivity_check_failed", error=str(e))
 
+    from archolith_proxy.curator import configure_curation_mode
+
+    configure_curation_mode()
+
     logger.info("proxy_starting", port=settings.proxy_port, upstream=settings.upstream_base_url)
 
-    # Background cleanup loop — hourly session expiry + lock pruning
     _cleanup_task = asyncio.create_task(_background_cleanup_loop())
 
     yield
 
-    # Cancel background cleanup
     _cleanup_task.cancel()
     try:
         await _cleanup_task
     except asyncio.CancelledError:
         pass
 
-    # Cleanup
     await app.state.http_client.aclose()
     await app.state.extractor_client.aclose()
     await close_backend()
@@ -240,7 +270,6 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS — allow all origins for local development
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -248,13 +277,11 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Request-level logging middleware (includes session context via structlog context vars)
     @app.middleware("http")
     async def request_logging_middleware(request: Request, call_next):
         start = time.monotonic()
         record_metric("total_requests")
 
-        # Bind request-level context that the handler may enrich
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
             method=request.method,
@@ -264,7 +291,6 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         latency_ms = (time.monotonic() - start) * 1000
 
-        # Log with whatever context the handler bound (session_id, turn, assembly_mode)
         logger.info(
             "request",
             status=response.status_code,
@@ -272,51 +298,43 @@ def create_app() -> FastAPI:
         )
         return response
 
-    # Mount routes — openai_router is unauthenticated (proxy surface)
+    # Mount route modules
     app.include_router(openai_router)
-    # trace_router is an operator surface — protect with admin token
+    app.include_router(metrics_router)
+    app.include_router(admin_router, dependencies=[Depends(require_admin_token)])
+    app.include_router(sessions_router, dependencies=[Depends(require_admin_token)])
+    app.include_router(memory_admin_router, dependencies=[Depends(require_admin_token)])
+    app.include_router(live_router)
     app.include_router(trace_router, dependencies=[Depends(require_admin_token)])
 
-    # Dashboard static files (serve /dashboard/ -> archolith_proxy/static/)
-    import os
+    # Dashboard static files
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     if os.path.isdir(static_dir):
         app.mount("/dashboard", StaticFiles(directory=static_dir, html=True), name="dashboard")
-
-    # Redirect root to dashboard
-    from fastapi.responses import RedirectResponse
 
     @app.get("/", include_in_schema=False)
     async def root_redirect():
         return RedirectResponse(url="/dashboard/dashboard.html")
 
-    # --- Health endpoints (liveness + readiness + legacy) ---
+    # --- Health endpoints ---
 
     @app.get("/live")
     async def liveness() -> dict:
-        """Liveness probe — is the process alive?
-
-        Always returns 200 while the process is running. Does NOT
-        check upstream or Neo4j connectivity. Use /ready for that.
-        """
+        """Liveness probe — is the process alive?"""
         return {
             "status": "alive",
             "version": "0.1.0",
-            "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
+            "uptime_s": round(time.time() - get_metrics()["start_time"], 0)
+            if get_metrics()["start_time"]
+            else 0,
         }
 
     @app.get("/ready")
-    async def readiness() -> dict:
-        """Readiness probe — is the service ready to handle requests?
-
-        Checks graph backend and upstream connectivity. Returns 503
-        when upstream is unreachable or graph is disconnected, but
-        the process stays alive (liveness unaffected).
-        """
+    async def readiness(request: Request) -> dict:
+        """Readiness probe — is the service ready to handle requests?"""
         ready = True
         reasons = []
 
-        # Check graph backend (works for both Neo4j and LadybugDB)
         graph_status = "not_configured"
         if is_graph_ready():
             try:
@@ -333,11 +351,10 @@ def create_app() -> FastAPI:
                 reasons.append("graph_disconnected")
                 record_metric("neo4j_errors")
 
-        # Check upstream (lightweight, with timeout)
         upstream_status = "unknown"
         try:
             settings = get_settings()
-            resp = await app.state.http_client.get(
+            resp = await request.app.state.http_client.get(
                 f"{settings.upstream_api_url}/models",
                 headers={"Authorization": f"Bearer {settings.upstream_api_key}"},
                 timeout=3.0,
@@ -358,7 +375,9 @@ def create_app() -> FastAPI:
             "graph": graph_status,
             "upstream": upstream_status,
             "version": "0.1.0",
-            "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
+            "uptime_s": round(time.time() - get_metrics()["start_time"], 0)
+            if get_metrics()["start_time"]
+            else 0,
         }
         if reasons:
             result["reasons"] = reasons
@@ -368,7 +387,7 @@ def create_app() -> FastAPI:
         return result
 
     @app.get("/health")
-    async def health() -> dict:
+    async def health(request: Request) -> dict:
         """Legacy health endpoint (compatibility). Delegates to readiness."""
         graph_status = "not_configured"
         if is_graph_ready():
@@ -383,7 +402,7 @@ def create_app() -> FastAPI:
         upstream_status = "unknown"
         try:
             settings = get_settings()
-            resp = await app.state.http_client.get(
+            resp = await request.app.state.http_client.get(
                 f"{settings.upstream_api_url}/models",
                 headers={"Authorization": f"Bearer {settings.upstream_api_key}"},
                 timeout=3.0,
@@ -397,412 +416,10 @@ def create_app() -> FastAPI:
             "graph": graph_status,
             "upstream": upstream_status,
             "version": "0.1.0",
-            "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
+            "uptime_s": round(time.time() - get_metrics()["start_time"], 0)
+            if get_metrics()["start_time"]
+            else 0,
         }
-
-    # --- Metrics endpoint ---
-
-    def _get_circuit_states() -> dict[str, dict]:
-        """Return per-session circuit breaker states for /metrics."""
-        try:
-            from archolith_proxy.proxy.circuit_breaker import get_all_circuit_states
-            return get_all_circuit_states()
-        except Exception:
-            return {}
-
-    @app.get("/metrics")
-    async def metrics() -> dict:
-        active_sessions = 0
-        if is_graph_ready():
-            try:
-                from archolith_proxy.graph.session import list_active_sessions
-                sessions = await list_active_sessions()
-                active_sessions = len(sessions)
-            except Exception:
-                pass
-
-        # Derived rates
-        total_extractions = (
-            get_metrics()["extraction_successes"]
-            + get_metrics()["extraction_failures"]
-            + get_metrics()["extraction_empties"]
-        )
-        extraction_success_rate = (
-            round(get_metrics()["extraction_successes"] / total_extractions, 4)
-            if total_extractions > 0 else 0.0
-        )
-        avg_token_savings = (
-            round(get_metrics()["token_savings_estimated"] / get_metrics()["total_requests"])
-            if get_metrics()["total_requests"] > 0 else 0
-        )
-        total_input = get_metrics()["total_input_tokens_seen"]
-        total_savings = get_metrics()["token_savings_estimated"]
-        token_savings_rate = (
-            round(total_savings / total_input, 4)
-            if total_input > 0 else 0.0
-        )
-
-        # Per-session user turn counts from trace store (cold_start gate progress)
-        trace_store = getattr(app.state, "trace_store", get_trace_store())
-        user_turns_by_session: dict[str, int] = {}
-        try:
-            for session_id, turns in trace_store._by_session.items():
-                if turns:
-                    user_turns_by_session[session_id] = max(
-                        (t.user_turn_count for t in turns), default=0
-                    )
-        except Exception:
-            pass
-
-        # Cost estimation from pricing config — use actual cache breakdown when available
-        settings = get_settings()
-        total_output_tokens = 0
-        total_cache_hit_tokens = 0
-        total_cache_miss_tokens = 0
-        try:
-            for turns in trace_store._by_session.values():
-                for t in turns:
-                    if t.output_tokens:
-                        total_output_tokens += t.output_tokens
-                    total_cache_hit_tokens += t.cache_hit_tokens
-                    total_cache_miss_tokens += t.cache_miss_tokens
-        except Exception:
-            pass
-        output_cost = total_output_tokens * settings.pricing_output_per_million / 1_000_000
-
-        # Cache-aware input cost: use actual cache breakdown when available,
-        # fall back to pricing everything at uncached rate
-        has_cache_data = total_cache_hit_tokens > 0 or total_cache_miss_tokens > 0
-        if has_cache_data:
-            input_cost = (
-                total_cache_hit_tokens * settings.pricing_input_cached_per_million / 1_000_000
-                + total_cache_miss_tokens * settings.pricing_input_per_million / 1_000_000
-            )
-        else:
-            input_cost = total_input * settings.pricing_input_per_million / 1_000_000
-        savings_cost = total_savings * settings.pricing_input_per_million / 1_000_000
-
-        # Derived curator stats
-        curator_calls = get_metrics()["curator_calls"]
-        curator_timeouts = get_metrics()["curator_timeouts"]
-        curator_fallbacks = get_metrics()["curator_fallbacks"]
-        curator_successes = max(0, curator_calls - curator_timeouts - curator_fallbacks)
-        curator_success_rate = (
-            round(curator_successes / curator_calls, 4)
-            if curator_calls > 0 else 0.0
-        )
-
-        # Derived file cache stats
-        cache_hits = get_metrics()["native_read_cache_hits"]
-        cache_misses = get_metrics()["native_read_cache_misses"]
-        cache_total = cache_hits + cache_misses
-        file_cache_hit_rate = (
-            round(cache_hits / cache_total, 4)
-            if cache_total > 0 else 0.0
-        )
-
-        # Average assembly latency from trace store (curator turns only)
-        curator_latencies = []
-        total_curator_tool_calls = 0
-        try:
-            for turns in trace_store._by_session.values():
-                for t in turns:
-                    if t.assembly_mode == "curator":
-                        curator_latencies.append(t.assembly_latency_ms)
-                        if t.curator_tool_log:
-                            total_curator_tool_calls += len(t.curator_tool_log)
-        except Exception:
-            pass
-        avg_curator_latency_ms = (
-            round(sum(curator_latencies) / len(curator_latencies), 1)
-            if curator_latencies else 0.0
-        )
-        avg_curator_tool_calls = (
-            round(total_curator_tool_calls / len(curator_latencies), 1)
-            if curator_latencies else 0.0
-        )
-
-        return {
-            "proxy": "archolith-proxy",
-            "version": "0.1.0",
-            "graph_ready": is_graph_ready(),
-            "total_requests": get_metrics()["total_requests"],
-            "assembly_modes": dict(get_metrics()["assembly_modes"]),
-            "user_turns_by_session": user_turns_by_session,
-            "extraction_successes": get_metrics()["extraction_successes"],
-            "extraction_empties": get_metrics()["extraction_empties"],
-            "extraction_failures": get_metrics()["extraction_failures"],
-            "extraction_success_rate": extraction_success_rate,
-            "upstream_errors": get_metrics()["upstream_errors"],
-            "graph_errors": get_metrics()["neo4j_errors"],
-            "active_sessions": active_sessions,
-            "token_savings_estimated": get_metrics()["token_savings_estimated"],
-            "avg_token_savings_per_request": avg_token_savings,
-            "token_savings_rate": token_savings_rate,
-            "total_input_tokens_seen": get_metrics()["total_input_tokens_seen"],
-            "compaction_applied": get_metrics()["compaction_applied"],
-            "curator_calls": curator_calls,
-            "curator_timeouts": curator_timeouts,
-            "curator_fallbacks": curator_fallbacks,
-            "curator_successes": curator_successes,
-            "curator_success_rate": curator_success_rate,
-            "avg_curator_latency_ms": avg_curator_latency_ms,
-            "avg_curator_tool_calls": avg_curator_tool_calls,
-            "synthetic_tool_successes": get_metrics()["synthetic_tool_successes"],
-            "synthetic_tool_failures": get_metrics()["synthetic_tool_failures"],
-            "synthetic_circuit_opens": get_metrics()["synthetic_circuit_opens"],
-            "synthetic_circuit_hard_disables": get_metrics()["synthetic_circuit_hard_disables"],
-            "synthetic_injections_skipped": get_metrics()["synthetic_injections_skipped"],
-            "synthetic_circuit_states": _get_circuit_states(),
-            "native_read_cache_hits": get_metrics()["native_read_cache_hits"],
-            "native_read_cache_misses": get_metrics()["native_read_cache_misses"],
-            "native_read_intercept_errors": get_metrics()["native_read_intercept_errors"],
-            "file_cache_invalidations": get_metrics()["file_cache_invalidations"],
-            "file_cache_hit_rate": file_cache_hit_rate,
-            "trace_records": trace_store.total_traces,
-            "trace_sessions": trace_store.session_count,
-            "uptime_s": round(time.time() - get_metrics()["start_time"], 0) if get_metrics()["start_time"] else 0,
-            # Cost estimation (cache-aware when upstream reports cache breakdown)
-            "total_output_tokens": total_output_tokens,
-            "total_cache_hit_tokens": total_cache_hit_tokens,
-            "total_cache_miss_tokens": total_cache_miss_tokens,
-            "cache_hit_rate_upstream": (
-                round(total_cache_hit_tokens / (total_cache_hit_tokens + total_cache_miss_tokens), 4)
-                if (total_cache_hit_tokens + total_cache_miss_tokens) > 0 else 0.0
-            ),
-            "cost_input": round(input_cost, 4),
-            "cost_output": round(output_cost, 4),
-            "cost_total": round(input_cost + output_cost, 4),
-            "cost_savings": round(savings_cost, 4),
-            "pricing": {
-                "input_per_million": settings.pricing_input_per_million,
-                "input_cached_per_million": settings.pricing_input_cached_per_million,
-                "output_per_million": settings.pricing_output_per_million,
-            },
-        }
-
-    # --- Runtime config admin endpoints ---
-
-    TUNABLE_FIELDS = {
-        "context_token_budget", "max_rewritten_tokens", "coherence_tail_size", "max_tail_messages",
-        "cold_start_turns", "cold_start_token_threshold",
-        "assembly_min_savings_ratio", "assembly_min_input_tokens",
-        "assembly_latency_budget_ms", "session_ttl_hours",
-        "embedding_enabled", "compaction_enabled", "query_rewrite_enabled",
-        "session_recall_tool_enabled", "rtk_enabled",
-        "pricing_input_per_million", "pricing_input_cached_per_million",
-        "pricing_output_per_million",
-        "agent_solo_shrink_enabled", "agent_solo_dedup_enabled",
-        "agent_solo_compress_middle_enabled", "agent_solo_shrink_max_tokens",
-        "agent_solo_min_input_tokens", "agent_solo_dump_payloads",
-        "curator_enabled", "curator_max_iterations", "curator_latency_budget_ms",
-        "synthetic_tools_enabled", "drop_middle_on_assembly",
-    }
-
-    @app.get("/admin/config")
-    async def get_config(admin: None = Depends(require_admin_token)) -> dict:
-        """Return current runtime-tunable configuration."""
-        settings = get_settings()
-        return {k: getattr(settings, k) for k in sorted(TUNABLE_FIELDS)}
-
-    @app.patch("/admin/config")
-    @app.post("/admin/config")
-    async def update_config(request: Request, admin: None = Depends(require_admin_token)) -> dict:
-        """Update runtime-tunable configuration fields.
-
-        Accepts a JSON object with one or more tunable fields. Changes take
-        effect immediately for subsequent requests (no restart needed).
-        """
-        body = await request.json()
-        settings = get_settings()
-        updated = {}
-        rejected = {}
-        for key, value in body.items():
-            if key not in TUNABLE_FIELDS:
-                rejected[key] = "not a tunable field"
-                continue
-            expected_type = type(getattr(settings, key))
-            try:
-                coerced = expected_type(value)
-                setattr(settings, key, coerced)
-                updated[key] = coerced
-                logger.info("config_updated", field=key, value=coerced)
-            except (ValueError, TypeError) as e:
-                rejected[key] = f"invalid value: {e}"
-        return {"updated": updated, "rejected": rejected}
-
-    # --- Sessions admin endpoints ---
-    @app.get("/sessions")
-    async def list_sessions(admin: None = Depends(require_admin_token)) -> dict:
-        """List all active sessions (admin endpoint)."""
-        if not is_graph_ready():
-            return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
-        try:
-            from archolith_proxy.graph.session import list_active_sessions
-            sessions = await list_active_sessions()
-            return {"sessions": sessions, "count": len(sessions)}
-        except Exception as e:
-            logger.warning("sessions_list_failed", error=str(e))
-            return JSONResponse(status_code=503, content={"error": f"Neo4j error: {e}"})
-
-    @app.get("/sessions/{session_id}")
-    async def get_session(session_id: str, admin: None = Depends(require_admin_token)) -> dict:
-        """Get session details (admin endpoint)."""
-        if not is_graph_ready():
-            return JSONResponse(status_code=503, content={"error": "Neo4j not available"})
-        try:
-            from archolith_proxy.graph.session import get_session_stats
-            stats = await get_session_stats(session_id)
-            if not stats:
-                return JSONResponse(status_code=404, content={"error": f"Session {session_id} not found"})
-            return {"session_id": session_id, **stats}
-        except Exception as e:
-            logger.warning("session_stats_failed", session_id=session_id, error=str(e))
-            return JSONResponse(status_code=503, content={"error": f"Neo4j error: {e}"})
-
-    # --- Memory engine & promotion admin endpoints ---
-
-    @app.get("/memory-engines")
-    async def list_memory_engines(admin: None = Depends(require_admin_token)) -> dict:
-        """List all configured memory engines and their health."""
-        from archolith_proxy.memory.registry import get_registry
-
-        registry = get_registry()
-        engines = registry.list_engines()
-        health = await registry.healthcheck_all()
-        return {
-            "engines": engines,
-            "health": health,
-            "default_engine_id": registry.default_engine_id,
-            "promotion_enabled": get_settings().promotion_enabled,
-        }
-
-    @app.get("/memory-engines/{engine_id}")
-    async def get_memory_engine(engine_id: str, admin: None = Depends(require_admin_token)) -> dict:
-        """Get details and health for a specific memory engine."""
-        from archolith_proxy.memory.registry import get_registry
-
-        registry = get_registry()
-        config = registry.get_config(engine_id)
-        if config is None:
-            return JSONResponse(status_code=404, content={"error": f"Engine {engine_id} not found"})
-        adapter = registry.get_adapter(engine_id)
-        caps = await adapter.capabilities() if adapter else None
-        healthy = False
-        if adapter:
-            try:
-                healthy = await adapter.healthcheck()
-            except Exception:
-                pass
-        return {
-            "id": config.id,
-            "type": config.type,
-            "enabled": config.enabled,
-            "priority": config.priority,
-            "base_url": config.base_url,
-            "is_default": config.id == registry.default_engine_id,
-            "healthy": healthy,
-            "capabilities": caps.model_dump() if caps else None,
-        }
-
-    @app.get("/promotions")
-    async def list_promotions(admin: None = Depends(require_admin_token)) -> dict:
-        """List promotion history and stats."""
-        svc = getattr(app.state, "promotion_service", None)
-        if svc is None:
-            return JSONResponse(status_code=503, content={"error": "Promotion service not initialized"})
-        return {
-            "stats": svc.stats,
-            "recent": [r.model_dump(mode="json") for r in svc.audit_trail[-50:]],
-        }
-
-    @app.post("/promotions/retry/{promotion_id}")
-    async def retry_promotion(promotion_id: str, admin: None = Depends(require_admin_token)) -> dict:
-        """Retry a failed promotion by its promotion_id (finds it in audit trail)."""
-        svc = getattr(app.state, "promotion_service", None)
-        if svc is None:
-            return JSONResponse(status_code=503, content={"error": "Promotion service not initialized"})
-        # Find the original record in the audit trail
-        original = None
-        for r in svc.audit_trail:
-            if r.promotion_id == promotion_id:
-                original = r
-                break
-        if original is None:
-            return JSONResponse(status_code=404, content={"error": f"Promotion {promotion_id} not found"})
-        return JSONResponse(status_code=200, content={"note": "Retry requires resubmission with the original PromotionRecord"})
-
-    # --- Graceful shutdown endpoint ---
-    @app.post("/admin/shutdown")
-    async def graceful_shutdown(
-        background_tasks: BackgroundTasks,
-        admin: None = Depends(require_admin_token),
-    ) -> dict:
-        """Gracefully shut down the proxy.
-
-        Sends SIGTERM to the current process, triggering the lifespan cleanup
-        path (closes LadybugDB with WAL flush, drains HTTP clients, etc.).
-        Use this instead of SIGKILL / Stop-Process -Force to avoid WAL corruption.
-
-        Returns immediately; shutdown completes in the background.
-        """
-        import os
-        import signal
-
-        pid = os.getpid()
-        logger.info("graceful_shutdown_requested", pid=pid)
-
-        async def _send_sigterm() -> None:
-            import asyncio
-            await asyncio.sleep(0.1)  # let the HTTP response flush first
-            os.kill(pid, signal.SIGTERM)
-
-        background_tasks.add_task(_send_sigterm)
-        return {"ok": True, "pid": pid, "note": "SIGTERM sent — proxy will shut down after current requests complete"}
-
-    # --- WebSocket live stream endpoint ---
-    @app.websocket("/ws/stream")
-    async def ws_live_stream(websocket: WebSocket) -> None:
-        """WebSocket endpoint for real-time proxy event streaming.
-
-        Clients connect and receive JSON events for every request, assembly,
-        response, extraction, and recall event that flows through the proxy.
-        Slow clients are disconnected after 256 queued events.
-
-        When ADMIN_TOKEN is set, clients must provide it via query param
-        ?token=<value> or the connection is closed.
-        """
-        settings = get_settings()
-        if settings.admin_token:
-            token = websocket.query_params.get("token", "")
-            if token != settings.admin_token:
-                await websocket.close(code=4001, reason="Invalid admin token")
-                return
-
-        await websocket.accept()
-        live_stream = getattr(app.state, "live_stream", None)
-        if not live_stream:
-            await websocket.close(code=1011, reason="Live stream not initialized")
-            return
-
-        q = await live_stream.subscribe()
-        logger.info("live_stream_client_connected", subscribers=live_stream.subscriber_count)
-
-        try:
-            while True:
-                event = await q.get()
-                if event.get("type") == "dropped":
-                    await websocket.send_json(event)
-                    await websocket.close(code=1008, reason="Queue overflow - too slow")
-                    break
-                await websocket.send_json(event)
-        except WebSocketDisconnect:
-            pass
-        except Exception as e:
-            logger.debug("live_stream_client_error", error=str(e))
-        finally:
-            await live_stream.unsubscribe(q)
-            logger.info("live_stream_client_disconnected", subscribers=live_stream.subscriber_count)
 
     return app
 
