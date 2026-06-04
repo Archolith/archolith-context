@@ -311,11 +311,23 @@ async def _run_with_briefing(
         )
         result, _inl_tool_log, _inl_failure = result_tuple
     except asyncio.TimeoutError:
+        _last_attempt[session_id] = {
+            "tool_log": [],
+            "failure_reason": "inline_timeout",
+        }
         return None
-    except Exception:
+    except Exception as exc:
+        _last_attempt[session_id] = {
+            "tool_log": [],
+            "failure_reason": f"inline_exception: {str(exc)[:200]}",
+        }
         return None
 
     if result is None:
+        _last_attempt[session_id] = {
+            "tool_log": [tc.to_dict() for tc in _inl_tool_log],
+            "failure_reason": f"inline_{_inl_failure or 'no_result'}",
+        }
         return None
 
     _max_summary = 2000

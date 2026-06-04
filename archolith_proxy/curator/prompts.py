@@ -138,10 +138,17 @@ def _format_previous_snapshot(snapshot) -> str:
     """
     lines = ["Previous curator context (from last turn — reuse if still relevant):"]
     if snapshot.curated_paths:
-        lines.append(f"  Files already fetched: {', '.join(snapshot.curated_paths)}")
+        paths_str = ", ".join(snapshot.curated_paths)
+        lines.append(f"  Files already fetched: {paths_str}")
+        lines.append(
+            "  PROHIBITED: do NOT call get_file, get_file_lines, or get_file_outline "
+            f"for these paths ({paths_str}) unless the current question targets a "
+            "DIFFERENT section or the file content has changed since last turn. "
+            "Calling these tools again returns identical content and wastes an iteration."
+        )
     if snapshot.retained_turn_numbers is not None:
         lines.append(f"  Turns retained: {list(snapshot.retained_turn_numbers)}")
-    lines.append(f"  Tool calls used: {snapshot.tool_calls_used}")
+    lines.append(f"  Tool calls used last turn: {snapshot.tool_calls_used}")
     if snapshot.context_summary:
         # Include truncated previous context block for reference
         summary = snapshot.context_summary
@@ -149,10 +156,10 @@ def _format_previous_snapshot(snapshot) -> str:
             summary = summary[:1500] + "..."
         lines.append(f"  Previous context block:\n{summary}")
     lines.append(
-        "\nDelta guidance: You do NOT need to re-fetch these files unless the "
-        "current question targets different sections or new files. If the previous "
-        "context block still applies, you can reuse its content and only fetch "
-        "what's new or changed. This saves iterations."
+        "\nDelta guidance: The previous context block above is still valid for any "
+        "topic it covers. Only call tools for NEW files or facts the current "
+        "question requires that are NOT already in the previous context block. "
+        "Re-fetching what is already there costs an iteration and produces no benefit."
     )
     return "\n".join(lines)
 

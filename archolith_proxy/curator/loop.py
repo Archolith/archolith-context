@@ -185,6 +185,8 @@ async def _run_curator_native(
     curated_paths: set[str] = set()
     retained_turn_numbers: list[int] | None = None
     tool_log: list[CuratorToolCall] = []
+    # Track seen queries to detect wasteful re-fetches of search results
+    _seen_queries: set[str] = set()
 
     for iteration in range(max_iterations):
         logger.debug(
@@ -322,10 +324,39 @@ async def _run_curator_native(
                 else:
                     tool_log.append(CuratorToolCall(tool=tool_name, args=args, status="ok",
                         result_preview=result_str[:200], raw_result=result_str))
-                if tool_name in ("get_file", "get_file_lines"):
+                if tool_name in ("get_file", "get_file_lines", "prefetch_file"):
                     path = args.get("path", "")
                     if path:
-                        curated_paths.add(path)
+                        if path in curated_paths:
+                            # Same file fetched again — inject a proxy note to break the loop
+                            result_str += (
+                                "\n\n(PROXY-NOTE: This path was already fetched earlier "
+                                "in this curator run. The content above is identical to "
+                                "the first result. Do NOT call get_file or get_file_lines "
+                                "with this path again — reuse what you already have.)"
+                            )
+                            logger.info(
+                                "curator_repeated_file_read",
+                                path=path, session_id=session_id,
+                                total_tool_calls=total_tool_calls,
+                            )
+                        else:
+                            curated_paths.add(path)
+                if tool_name in ("search_facts", "search_facts_semantic"):
+                    query = args.get("query", "")
+                    if query:
+                        if query in _seen_queries:
+                            result_str += (
+                                "\n\n(PROXY-NOTE: This exact query was already searched "
+                                "earlier in this curator run. Do NOT search again — use "
+                                "the results from the first call.)"
+                            )
+                            logger.info(
+                                "curator_repeated_search",
+                                query=query[:60], session_id=session_id,
+                            )
+                        else:
+                            _seen_queries.add(query)
                 if tool_name == "select_relevant_turns":
                     turn_nums = args.get("turn_numbers", [])
                     retained_turn_numbers = [int(n) for n in turn_nums] if turn_nums else []
