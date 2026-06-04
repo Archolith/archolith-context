@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-06-04 — RTK / curator tuning: instrumentation, proxy recall, and repeated-call detection (Steps 1–4)
+
+### Step 1 — Baseline instrumentation
+- Added `rtk_available`, `rtk_chars_saved`, `rtk_chars_before` to `TurnTrace` — records whether archolith_rtk is installed and how many chars the filter removed per turn.
+- Added `curator_skip_reason` to `TurnTrace` — classifies why the curator was eligible but did not assemble context (`cold_start`, `disabled`, `inline_timeout`, `no_result`, `timeout`, `exception:…`).
+- Added `is_available()` to `rtk.py` — distinguishes fail-open (package missing) from active RTK.
+- Added `set_rtk_stats()` and `set_curator_skip_reason()` to `TraceBuilder`.
+- Dashboard: RTK✓/RTK✗ badge on turn header; rtk savings in token line; curator skip reason label on passthrough user turns.
+
+### Step 2 — Config experiments
+- `AGENT_SOLO_MIN_INPUT_TOKENS=3000` in `.env` (lowered from default 8000 to compress nearly all multi-turn coding sessions from turn 2 onward).
+- Added "Tuning experiments (2026-06-04)" section to `.agent/workflows/benchmarking.md` with four named variants (A–D): solo threshold, briefing staleness, synthetic tools off, background pass comparison.
+
+### Step 3 — Proxy-driven recall
+- Added `detect_recall_trigger()` to `proxy/recall.py` — fires on explicit recall language in the last user message (`user_phrase`) or when the same file appears in ≥2 tool results in recent messages (`repeated_file_read`).
+- Added `inject_proxy_recall_into_body()` — prepends a `[PROXY-RECALL | trigger=…]` block to the system message before upstream dispatch.
+- `chat.py`: proxy-forced recall block runs between RTK filter and synthetic tools injection; logs `proxy_recall_injections` metric.
+- Added `recall_trigger` field to `TurnTrace` (`"proxy_forced:<type>"` | `"model_invoked"` | `""`).
+- Extended `TraceBuilder.set_recall()` with `trigger` kwarg.
+- Dashboard: recall line shows `[trigger]` annotation.
+
+### Step 4 — Curator tightening
+- `curator/loop.py`: repeated `get_file`/`get_file_lines`/`prefetch_file` calls for the same path now append a `PROXY-NOTE` to the result discouraging re-fetch; repeated `search_facts`/`search_facts_semantic` calls for the same query similarly noted. Added `_seen_queries` set per run.
+- `curator/pipeline.py`: `_run_with_briefing` now populates `_last_attempt` on inline timeout, exception, and no_result — inline pass failures now reach the dashboard's `curator_skip_reason`.
+- `curator/prompts.py`: `_format_previous_snapshot` now emits a `PROHIBITED` prefix with an explicit list of banned tool calls for already-fetched file paths. Delta guidance tightened to "Re-fetching costs an iteration and produces no benefit."
+
 ## 2026-06-01 — Briefing enabler: pluggable curation mode registration
 
 - Added `SessionBriefing.mode` field (`"two_pass"` | `"two_curator"`) — tags which curation mode produced a briefing.
