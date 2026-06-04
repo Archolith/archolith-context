@@ -170,6 +170,36 @@ class TraceBuilder:
     def set_fallback_reason(self, reason: str) -> None:
         self._data["fallback_reason"] = reason
 
+    def set_rtk_stats(
+        self,
+        available: bool,
+        chars_saved: int = 0,
+        chars_before: int = 0,
+    ) -> None:
+        """Record RTK filter availability and per-turn char savings.
+
+        Called after filter_request_body so the trace can distinguish:
+        - rtk_available=True  → package present and active
+        - rtk_available=False → package missing, filter failed open
+        """
+        self._data["rtk_available"] = available
+        self._data["rtk_chars_saved"] = chars_saved
+        self._data["rtk_chars_before"] = chars_before
+
+    def set_curator_skip_reason(self, reason: str) -> None:
+        """Record why the curator was skipped or failed on this user turn.
+
+        Called when the curator was eligible (session+graph ready, not over budget,
+        is_user_turn) but curate_context returned None.  Values:
+        - "cold_start"      — too few user turns to trigger curator
+        - "disabled"        — curator_enabled or file_cache_enabled is False
+        - "no_api_key"      — no curator/extractor API key configured
+        - "timeout"         — curator exceeded latency budget
+        - "no_result"       — curator loop produced no context block
+        - "exception:..."   — unexpected exception in curator
+        """
+        self._data["curator_skip_reason"] = reason
+
     def set_solo_stats(self, stats: dict) -> None:
         """Record agent-solo compression strategy breakdown for trace inspection."""
         self._data["solo_strategies"] = stats.get("strategies_applied", [])

@@ -366,6 +366,20 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             savings_ratio = round(savings / input_tokens, 4) if input_tokens > 0 else 0.0
             record_metric("curator_calls", 1)
 
+    # ── Record curator skip reason when eligible but skipped/failed ──
+    if session_id and graph_ready and not session_over_budget and is_user_turn and not assembled:
+        from archolith_proxy.curator.pipeline import get_last_attempt
+        _last = get_last_attempt(session_id)
+        if _last:
+            _curator_skip = _last.get("failure_reason", "unknown")
+        elif not settings.curator_enabled or not settings.file_cache_enabled:
+            _curator_skip = "disabled"
+        elif user_turn_count < settings.cold_start_turns:
+            _curator_skip = "cold_start"
+        else:
+            _curator_skip = "no_result"
+        trace_builder.set_curator_skip_reason(_curator_skip)
+
     # ── Inject assembled context and proxy tools ──
     if assembled and assembly_mode == "curator":
         from archolith_proxy.proxy.rewrite import rewrite_messages
@@ -385,8 +399,15 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     )
 
     # ── RTK filtering ──
-    from archolith_proxy.rtk import filter_request_body
+    from archolith_proxy.rtk import filter_request_body, is_available as rtk_is_available
+    _rtk_chars_before = sum(len(json.dumps(m)) for m in body.get("messages", []))
     body = filter_request_body(body, enabled=settings.rtk_enabled)
+    _rtk_chars_after = sum(len(json.dumps(m)) for m in body.get("messages", []))
+    trace_builder.set_rtk_stats(
+        available=rtk_is_available(),
+        chars_saved=max(0, _rtk_chars_before - _rtk_chars_after),
+        chars_before=_rtk_chars_before,
+    )
 
     # ── Inject synthetic session-summary tools ──
     synthetic_injected = False

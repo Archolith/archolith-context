@@ -147,6 +147,14 @@ class TurnTrace(BaseModel):
     solo_chars_saved_curator: int = 0     # Curator prefix cache reuse
     solo_chars_saved_total: int = 0       # Sum of all strategies
 
+    # RTK filter status — populated every request after filter_request_body runs
+    rtk_available: bool | None = None   # True = package present; False = fail-open; None = not yet measured
+    rtk_chars_saved: int = 0            # Characters removed by RTK filter on this turn
+    rtk_chars_before: int = 0          # Characters in messages before RTK filter
+
+    # Curator skip reason — populated on user turns when curator was eligible but did not succeed
+    curator_skip_reason: str = ""       # e.g. "cold_start", "disabled", "timeout", "no_api_key", "no_result"
+
 
 class BackgroundPassTrace(BaseModel):
     """Trace record for a single background curator pass.

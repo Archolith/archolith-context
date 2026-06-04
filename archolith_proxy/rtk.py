@@ -64,6 +64,15 @@ def _load_shrink_functions() -> tuple[Callable[..., Any] | None, Callable[..., A
 # ---------------------------------------------------------------------------
 
 
+def is_available() -> bool:
+    """Return True if archolith_rtk is installed and the filter function is callable.
+
+    Used by the trace builder to distinguish 'RTK enabled but package missing
+    (fail-open)' from 'RTK enabled and active'.
+    """
+    return _load_filter_output() is not None
+
+
 def filter_tool_messages(messages: list[dict[str, Any]], enabled: bool) -> list[dict[str, Any]]:
     """Apply RTK Layer 1 filtering to outbound tool-role messages."""
     if not enabled:
