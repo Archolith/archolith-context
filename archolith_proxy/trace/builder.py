@@ -162,10 +162,13 @@ class TraceBuilder:
         used: bool = True,
         question: str = "",
         facts_returned: int = 0,
+        trigger: str = "",
     ) -> None:
         self._data["recall_used"] = used
         self._data["recall_question"] = question[:200]
         self._data["recall_facts_returned"] = facts_returned
+        if trigger:
+            self._data["recall_trigger"] = trigger
 
     def set_fallback_reason(self, reason: str) -> None:
         self._data["fallback_reason"] = reason

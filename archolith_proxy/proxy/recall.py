@@ -265,6 +265,141 @@ async def resend_with_recall(
     return data, tracked_questions, tracked_facts
 
 
+# ---------------------------------------------------------------------------
+# Proxy-forced recall — trigger detection and body injection
+# ---------------------------------------------------------------------------
+
+# Phrases in the last user message that signal the model wants remembered context.
+# Matched case-insensitively against the lowercased user message.
+_RECALL_PHRASES: tuple[str, ...] = (
+    "what did we decide",
+    "what was decided",
+    "what did we agree",
+    "what was our plan",
+    "remind me",
+    "what have we done",
+    "earlier in this session",
+    "from earlier",
+    "from memory",
+    "what did you say about",
+    "what was the decision",
+    "what was agreed",
+)
+
+
+def detect_recall_trigger(
+    messages: list[dict[str, Any]],
+    is_user_turn: bool,
+) -> tuple[str, str] | None:
+    """Return (trigger_type, query) if a proxy-recall should fire, else None.
+
+    Trigger types:
+    - "user_phrase"        — last user message contains explicit recall language.
+    - "repeated_file_read" — the same file path appears in ≥2 tool results in
+                             the last 20 messages, suggesting the model is reading
+                             the same file again because context was lost.
+
+    Only fires on user turns; agent-solo turns are never auto-recalled because
+    they are continuation turns where the model already has recent context.
+    """
+    if not is_user_turn or not messages:
+        return None
+
+    # ── Trigger 1: recall phrase in last user message ──────────────────────
+    last_user_text = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            content = m.get("content", "")
+            if isinstance(content, str):
+                last_user_text = content.lower()
+            elif isinstance(content, list):
+                last_user_text = " ".join(
+                    p.get("text", "") for p in content if isinstance(p, dict)
+                ).lower()
+            break
+
+    if last_user_text:
+        for phrase in _RECALL_PHRASES:
+            if phrase in last_user_text:
+                # Use the raw user text (truncated) as the recall query so the
+                # graph retrieval is anchored to what the user is asking about.
+                return ("user_phrase", last_user_text[:200])
+
+    # ── Trigger 2: repeated file reads in recent tool messages ─────────────
+    # Extract filenames from tool messages named "read_file" or "Read".
+    # The first line of many read_file results is the file path.
+    file_hit_counts: dict[str, int] = {}
+    for m in messages[-20:]:
+        if m.get("role") != "tool":
+            continue
+        tool_name = m.get("name", "").lower()
+        if "read" not in tool_name:
+            continue
+        content = m.get("content", "")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        # Heuristic: first non-blank line often contains path or filename header.
+        for line in content.splitlines():
+            line = line.strip()
+            if line and len(line) < 300:
+                file_hit_counts[line] = file_hit_counts.get(line, 0) + 1
+                break  # Only use first identifying line per message
+
+    repeated = sorted(
+        (f for f, c in file_hit_counts.items() if c >= 2),
+        key=lambda f: -file_hit_counts[f],
+    )
+    if repeated:
+        file_list = "; ".join(repeated[:3])
+        return ("repeated_file_read", f"file content and recent context for: {file_list}")
+
+    return None
+
+
+def inject_proxy_recall_into_body(
+    body: dict[str, Any],
+    recall_text: str,
+    trigger: str,
+) -> dict[str, Any]:
+    """Append a compact proxy-recall block to the system message.
+
+    If no system message exists, one is created.  The block is clearly
+    bracketed so the model can distinguish injected session memory from
+    explicit user instructions.
+    """
+    recall_block = (
+        f"\n\n[PROXY-RECALL | trigger={trigger}]\n"
+        f"{recall_text}\n"
+        "[END PROXY-RECALL]"
+    )
+
+    messages = list(body.get("messages", []))
+    if not messages:
+        return body
+
+    new_messages: list[dict[str, Any]] = []
+    injected = False
+    for m in messages:
+        if not injected and m.get("role") == "system":
+            m = dict(m)
+            content = m.get("content", "")
+            if isinstance(content, str):
+                m["content"] = content + recall_block
+            else:
+                # Multi-part system message — append as a text part
+                m["content"] = list(content) + [{"type": "text", "text": recall_block.strip()}]
+            injected = True
+        new_messages.append(m)
+
+    if not injected:
+        # No system message exists — prepend a minimal one
+        new_messages = [{"role": "system", "content": recall_block.strip()}] + new_messages
+
+    body = dict(body)
+    body["messages"] = new_messages
+    return body
+
+
 async def handle_non_streaming_recall(
     resp: httpx.Response,
     http_client: httpx.AsyncClient,

@@ -409,6 +409,46 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         chars_before=_rtk_chars_before,
     )
 
+    # ── Proxy-forced recall for key trigger patterns ──
+    # This fires before the model receives the request so recall context is
+    # already in the system message — the model does not need to invoke the
+    # recall tool explicitly.  The model-invoked recall path is kept as a
+    # fallback for queries the proxy triggers don't cover.
+    if session_id and graph_ready and not session_over_budget and is_user_turn:
+        from archolith_proxy.proxy.recall import detect_recall_trigger, inject_proxy_recall_into_body
+        from archolith_proxy.proxy.tool_injection import handle_recall_tool_call
+        _recall_trigger = detect_recall_trigger(body.get("messages", []), is_user_turn=is_user_turn)
+        if _recall_trigger:
+            _trigger_type, _trigger_query = _recall_trigger
+            try:
+                _recall_text = await handle_recall_tool_call(
+                    http_client=request.app.state.http_client,
+                    session_id=session_id,
+                    question=_trigger_query,
+                    turn_number=turn_number,
+                )
+                _recall_empty = not _recall_text or "No facts found" in _recall_text or "No relevant facts" in _recall_text
+                if not _recall_empty:
+                    body = inject_proxy_recall_into_body(body, _recall_text, _trigger_type)
+                    # Rough fact count: count lines that look like fact entries
+                    _recall_fact_count = sum(1 for ln in _recall_text.splitlines() if ln.strip().startswith("- "))
+                    trace_builder.set_recall(
+                        used=True,
+                        question=_trigger_query,
+                        facts_returned=_recall_fact_count,
+                        trigger=f"proxy_forced:{_trigger_type}",
+                    )
+                    record_metric("proxy_recall_injections", 1)
+                    logger.info(
+                        "proxy_recall_injected",
+                        session_id=session_id,
+                        trigger=_trigger_type,
+                        query=_trigger_query[:80],
+                        facts=_recall_fact_count,
+                    )
+            except Exception as _exc:
+                logger.warning("proxy_recall_failed", session_id=session_id, error=str(_exc))
+
     # ── Inject synthetic session-summary tools ──
     synthetic_injected = False
     if settings.synthetic_tools_enabled and session_id:

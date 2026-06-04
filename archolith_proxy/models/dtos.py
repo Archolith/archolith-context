@@ -119,6 +119,7 @@ class TurnTrace(BaseModel):
     recall_used: bool = False
     recall_question: str = ""
     recall_facts_returned: int = 0
+    recall_trigger: str = ""  # "proxy_forced:<type>" | "model_invoked" | "" (not used)
 
     # Fallback
     fallback_reason: str = ""

@@ -164,3 +164,100 @@ The comparison script shows:
 - **Recall preservation > 100%** means the proxy path recalls MORE keywords than direct. This happens when the proxy's assembled context surfaces facts that the model would have lost in long raw history.
 - **Recall < 50%** at tight budgets (4K) is expected — aggressive compression necessarily loses detail. The question is whether 8K or 15K recovers enough.
 - **Output collapse** (proxy responses dropping to <50 tokens) indicates the model is confused by the assembled context, not just missing facts. Check the transcript to see what context was sent.
+
+## Tuning experiments (2026-06-04)
+
+Four config variants from the RTK curator tuning plan (archolith-rtk-curator-tuning-plan.md).
+These should be run after Step 1 instrumentation is live so the dashboard shows RTK stats and
+curator skip reasons alongside savings metrics.
+
+### Variant A — lower AGENT_SOLO_MIN_INPUT_TOKENS (active in .env)
+
+Drop the threshold from 8000 → 3000 so agent-solo compression activates from turn 2 onward
+in nearly every coding session.
+
+```bash
+# Baseline (8000 default)
+python scripts/benchmark.py --experiment solo_threshold_8k \
+  --scenario scenarios/long_agent.json --budgets 8000,15000 \
+  --config '{"agent_solo_min_input_tokens": 8000}'
+
+# Active config (3000 — already set in .env)
+python scripts/benchmark.py --experiment solo_threshold_3k \
+  --scenario scenarios/long_agent.json --budgets 8000,15000 \
+  --config '{"agent_solo_min_input_tokens": 3000}'
+
+python scripts/compare_experiments.py solo_threshold_8k solo_threshold_3k
+```
+
+Watch for: savings ratio increase, recall preservation staying >0.85, no output collapse.
+
+### Variant B — stale briefing tolerance
+
+The inline curator pass (max_iterations=2, 3s cap) is already aggressive. The lever here
+is `BRIEFING_MAX_STALENESS`: how many turns old a briefing may be before the inline pass
+ignores it and falls back to cold assembler. Loosening this (2 → 4) reduces background-pass
+pressure at the cost of potentially serving stale context.
+
+```bash
+python scripts/benchmark.py --experiment briefing_staleness_2 \
+  --scenario scenarios/taskflow.json --budgets 8000,15000 \
+  --config '{"briefing_max_staleness": 2}'
+
+python scripts/benchmark.py --experiment briefing_staleness_4 \
+  --scenario scenarios/taskflow.json --budgets 8000,15000 \
+  --config '{"briefing_max_staleness": 4}'
+
+python scripts/compare_experiments.py briefing_staleness_2 briefing_staleness_4
+```
+
+Watch for: assembly_latency_ms changes, curator assembly_mode distribution (briefing vs curator).
+
+### Variant C — synthetic tools off
+
+SYNTHETIC_TOOLS_ENABLED injects `session_recall` and related synthetic tools into every
+turn. Turning this off removes ~300-500 tokens of overhead per turn. Check whether recall
+quality suffers when the model can't invoke session_recall explicitly.
+
+```bash
+python scripts/benchmark.py --experiment synthetic_on \
+  --scenario scenarios/ruler_recall.json --budgets 8000,15000 \
+  --config '{"synthetic_tools_enabled": true}'
+
+python scripts/benchmark.py --experiment synthetic_off \
+  --scenario scenarios/ruler_recall.json --budgets 8000,15000 \
+  --config '{"synthetic_tools_enabled": false}'
+
+python scripts/compare_experiments.py synthetic_on synthetic_off
+```
+
+Watch for: savings ratio up (less overhead), recall drop if model relied on session_recall
+invocations to surface forgotten facts.
+
+### Variant D — background pass vs no background pass
+
+Background pass builds a SessionBriefing asynchronously after each user turn, allowing the
+inline curator to run in 2 iterations instead of 4-6. Disabling it falls back to cold
+assembly every turn (higher latency, potentially richer context).
+
+```bash
+python scripts/benchmark.py --experiment bg_pass_on \
+  --scenario scenarios/long_agent.json --budgets 8000,15000 \
+  --config '{"background_pass_enabled": true}'
+
+python scripts/benchmark.py --experiment bg_pass_off \
+  --scenario scenarios/long_agent.json --budgets 8000,15000 \
+  --config '{"background_pass_enabled": false}'
+
+python scripts/compare_experiments.py bg_pass_on bg_pass_off
+```
+
+Watch for: assembly_latency_ms (should drop with bg_pass_on), recall difference, savings ratio.
+Check dashboard for `assembly_mode` distribution — briefing vs curator vs passthrough.
+
+### Reading results
+
+After running experiments, check the dashboard trace explorer alongside the compare output:
+- `rtk_available` badge confirms RTK filter is active
+- `curator_skip_reason` explains cold_start / disabled / no_result on passthrough turns
+- `rtk_chars_saved` shows per-turn filter savings alongside the benchmark savings_ratio

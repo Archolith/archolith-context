@@ -401,7 +401,10 @@ function buildTurnCard(t) {
     factsHtml += `<div style="font-size:12px;color:var(--text-dim);margin-top:8px;">stored=${t.facts_stored} dupes=${t.duplicates_skipped} invalidations=${t.invalidations_attempted}/${t.invalidations_matched}</div>`;
   }
   if (t.recall_used) {
-    factsHtml += `<div style="font-size:12px;color:var(--purple);margin-top:4px;">recall: "${escapeHtml(t.recall_question)}" → ${t.recall_facts_returned} facts</div>`;
+    const recallTriggerStr = t.recall_trigger
+      ? `<span style="font-size:10px;opacity:0.7;margin-left:4px;">[${escapeHtml(t.recall_trigger)}]</span>`
+      : '<span style="font-size:10px;opacity:0.7;margin-left:4px;">[model_invoked]</span>';
+    factsHtml += `<div style="font-size:12px;color:var(--purple);margin-top:4px;">recall${recallTriggerStr}: "${escapeHtml(t.recall_question)}" → ${t.recall_facts_returned} facts</div>`;
   }
 
   return `
