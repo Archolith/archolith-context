@@ -314,21 +314,15 @@ async def _run_curator_native(
                 handler = TOOL_HANDLERS[tool_name]
                 result_str = await handler(session_id=session_id, **args)
                 total_tool_calls += 1
-                # Detect soft errors — tool returned but with an error/empty indicator
-                is_soft_error = result_str.startswith("(") and ("not cached" in result_str or "no outline" in result_str or "no lines" in result_str)
-                if is_soft_error:
-                    tool_log.append(CuratorToolCall(tool=tool_name, args=args, status="soft_error",
-                        error=result_str[:200]))
-                    logger.info("curator_tool_soft_error", tool=tool_name,
-                        session_id=session_id, result=result_str[:200])
-                else:
-                    tool_log.append(CuratorToolCall(tool=tool_name, args=args, status="ok",
-                        result_preview=result_str[:200], raw_result=result_str))
+                proxy_note = ""
                 if tool_name in ("get_file", "get_file_lines", "prefetch_file"):
                     path = args.get("path", "")
                     if path:
                         if path in curated_paths:
-                            # Same file fetched again — inject a proxy note to break the loop
+                            proxy_note = (
+                                "This path was already fetched earlier in this curator run. "
+                                "Reuse the first result instead of fetching it again."
+                            )
                             result_str += (
                                 "\n\n(PROXY-NOTE: This path was already fetched earlier "
                                 "in this curator run. The content above is identical to "
@@ -346,6 +340,10 @@ async def _run_curator_native(
                     query = args.get("query", "")
                     if query:
                         if query in _seen_queries:
+                            proxy_note = (
+                                "This exact query was already searched earlier in this curator run. "
+                                "Reuse the first result instead of searching again."
+                            )
                             result_str += (
                                 "\n\n(PROXY-NOTE: This exact query was already searched "
                                 "earlier in this curator run. Do NOT search again — use "
@@ -357,6 +355,18 @@ async def _run_curator_native(
                             )
                         else:
                             _seen_queries.add(query)
+                # Detect soft errors — tool returned but with an error/empty indicator
+                is_soft_error = result_str.startswith("(") and ("not cached" in result_str or "no outline" in result_str or "no lines" in result_str)
+                if is_soft_error:
+                    tool_log.append(CuratorToolCall(tool=tool_name, args=args, status="soft_error",
+                        error=result_str[:200], result_preview=result_str[:200],
+                        raw_result=result_str, proxy_note=proxy_note))
+                    logger.info("curator_tool_soft_error", tool=tool_name,
+                        session_id=session_id, result=result_str[:200])
+                else:
+                    tool_log.append(CuratorToolCall(tool=tool_name, args=args, status="ok",
+                        result_preview=result_str[:200], raw_result=result_str,
+                        proxy_note=proxy_note))
                 if tool_name == "select_relevant_turns":
                     turn_nums = args.get("turn_numbers", [])
                     retained_turn_numbers = [int(n) for n in turn_nums] if turn_nums else []

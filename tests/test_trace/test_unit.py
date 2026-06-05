@@ -242,6 +242,56 @@ class TestTraceBuilder:
         assert trace.recall_used is True
         assert trace.recall_question == "what files?"
         assert trace.recall_facts_returned == 3
+        assert trace.recall_trigger == "model_invoked"
+
+    def test_set_recall_preserves_explicit_trigger(self):
+        builder = TraceBuilder()
+        builder.set_recall(
+            used=True,
+            question="what files?",
+            facts_returned=3,
+            trigger="proxy_forced:user_phrase",
+        )
+        trace = builder.build()
+        assert trace.recall_trigger == "proxy_forced:user_phrase"
+
+    def test_set_rtk_and_outbound_context_stats(self):
+        builder = TraceBuilder()
+        builder.set_rtk_stats(
+            available=True,
+            chars_saved=120,
+            chars_before=1000,
+            chars_after=880,
+        )
+        builder.set_outbound_context_stats(outbound_chars_sent=930, proxy_recall_chars_added=50)
+        trace = builder.build()
+        assert trace.rtk_available is True
+        assert trace.rtk_chars_saved == 120
+        assert trace.rtk_chars_before == 1000
+        assert trace.rtk_chars_after == 880
+        assert trace.outbound_chars_sent == 930
+        assert trace.proxy_recall_chars_added == 50
+        assert trace.rtk_strategy_savings == {"request_filter": 120}
+
+    def test_set_solo_stats_adds_strategy_breakdown(self):
+        builder = TraceBuilder()
+        builder.set_solo_stats({
+            "strategies_applied": ["compact", "dedup"],
+            "chars_saved_compact": 400,
+            "chars_saved_dedup": 250,
+            "chars_saved_curator_cache": 100,
+            "total_chars_saved": 750,
+        })
+        trace = builder.build()
+        assert trace.solo_strategies == ["compact", "dedup"]
+        assert trace.solo_chars_saved_compact == 400
+        assert trace.solo_chars_saved_dedup == 250
+        assert trace.solo_chars_saved_curator == 100
+        assert trace.rtk_strategy_savings == {
+            "curator_cache": 100,
+            "compact": 400,
+            "dedup": 250,
+        }
 
     def test_set_fallback_reason(self):
         builder = TraceBuilder()

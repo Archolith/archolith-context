@@ -338,12 +338,24 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     is_agent_solo = session_id and graph_ready and not session_over_budget and not is_user_turn
     if is_agent_solo:
         if settings.agent_solo_shrink_enabled or settings.agent_solo_dedup_enabled or settings.agent_solo_compress_middle_enabled:
-            from archolith_proxy.assembler.solo import apply_agent_solo_compression
-            messages, savings_input, _compression_log = await apply_agent_solo_compression(
-                messages=messages, session_id=session_id, settings=settings,
+            from archolith_proxy.proxy.agent_solo import compress_agent_solo
+
+            messages, solo_stats = compress_agent_solo(
+                messages=messages,
+                session_id=session_id,
+                input_tokens=input_tokens,
+                shrink_enabled=settings.agent_solo_shrink_enabled,
+                dedup_enabled=settings.agent_solo_dedup_enabled,
+                compress_middle_enabled=settings.agent_solo_compress_middle_enabled,
+                shrink_max_tokens=settings.agent_solo_shrink_max_tokens,
+                min_input_tokens=settings.agent_solo_min_input_tokens,
+                coherence_tail_size=settings.coherence_tail_size,
+                max_tail_messages=settings.max_tail_messages,
             )
-            savings += savings_input
-            rewritten_tokens += savings_input
+            solo_chars_saved = int(solo_stats.get("total_chars_saved", 0) or 0)
+            trace_builder.set_solo_stats(solo_stats)
+            savings += solo_chars_saved // 4
+            rewritten_tokens += solo_chars_saved // 4
             assembly_mode = "agent_solo"
             assembly_reason = "agent_solo_compression"
 
@@ -407,6 +419,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         available=rtk_is_available(),
         chars_saved=max(0, _rtk_chars_before - _rtk_chars_after),
         chars_before=_rtk_chars_before,
+        chars_after=_rtk_chars_after,
     )
 
     # ── Proxy-forced recall for key trigger patterns ──
@@ -430,6 +443,11 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 _recall_empty = not _recall_text or "No facts found" in _recall_text or "No relevant facts" in _recall_text
                 if not _recall_empty:
                     body = inject_proxy_recall_into_body(body, _recall_text, _trigger_type)
+                    _outbound_chars_sent = sum(len(json.dumps(m)) for m in body.get("messages", []))
+                    trace_builder.set_outbound_context_stats(
+                        outbound_chars_sent=_outbound_chars_sent,
+                        proxy_recall_chars_added=max(0, _outbound_chars_sent - _rtk_chars_after),
+                    )
                     # Rough fact count: count lines that look like fact entries
                     _recall_fact_count = sum(1 for ln in _recall_text.splitlines() if ln.strip().startswith("- "))
                     trace_builder.set_recall(

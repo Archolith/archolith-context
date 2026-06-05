@@ -547,7 +547,7 @@ PROMOTION_DRY_RUN=false
 | `GET /memory-engines/{id}` | Single engine details, health, and capabilities |
 | `GET /promotions` | Promotion history and stats |
 | `POST /promotions/retry/{id}` | Retry a failed promotion |
-| `GET /dashboard/` | Web dashboard (single-page HTML, zero build step) |
+| `GET /dashboard/` | Web dashboard (single-page HTML, zero build step) with per-turn RTK strategy savings, proxy-recall annotations, and curator proxy-note visibility |
 | `GET /ws/stream` | WebSocket live event stream |
 
 Metrics are in-memory (`_metrics` dict surfaced via `archolith_proxy/metrics.py`), reset on process restart. Prometheus-compatible OpenMetrics format is a future goal.

@@ -18,6 +18,7 @@ class CuratorToolCall:
     error: str = ""           # error message if status == "error"
     result_preview: str = ""  # first 200 chars of result (for debugging)
     raw_result: str = ""      # full result text (for briefing fidelity)
+    proxy_note: str = ""      # proxy-added guidance such as repeated-call warnings
 
     def to_dict(self) -> dict:
         d: dict = {"tool": self.tool, "status": self.status}
@@ -27,6 +28,8 @@ class CuratorToolCall:
             d["error"] = self.error
         if self.result_preview:
             d["result_preview"] = self.result_preview
+        if self.proxy_note:
+            d["proxy_note"] = self.proxy_note
         # raw_result excluded from to_dict — too large for traces/diagnostics
         return d
 

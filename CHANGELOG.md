@@ -26,6 +26,13 @@
 - `curator/pipeline.py`: `_run_with_briefing` now populates `_last_attempt` on inline timeout, exception, and no_result — inline pass failures now reach the dashboard's `curator_skip_reason`.
 - `curator/prompts.py`: `_format_previous_snapshot` now emits a `PROHIBITED` prefix with an explicit list of banned tool calls for already-fetched file paths. Delta guidance tightened to "Re-fetching costs an iteration and produces no benefit."
 
+### Post-review remediation
+- `set_recall()` now records `model_invoked` explicitly when recall happened without a proxy-forced trigger.
+- `TurnTrace` now records `rtk_chars_after`, `proxy_recall_chars_added`, `outbound_chars_sent`, and `rtk_strategy_savings` so RTK filter savings can be compared against final outbound payload size after proxy recall injection.
+- Dashboard turn cards now render RTK strategy-level savings and final outbound char counts, including proxy-recall additions.
+- Curator tool-log records now preserve `proxy_note` warnings for repeated file reads and repeated fact searches, and the dashboard renders those notes directly.
+- Added targeted regression coverage for recall-trigger labeling, RTK/outbound trace stats, strategy breakdown persistence, and curator proxy-note serialization.
+
 ## 2026-06-01 — Briefing enabler: pluggable curation mode registration
 
 - Added `SessionBriefing.mode` field (`"two_pass"` | `"two_curator"`) — tags which curation mode produced a briefing.

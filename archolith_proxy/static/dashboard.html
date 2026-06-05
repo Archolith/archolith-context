@@ -359,6 +359,19 @@ function buildTurnCard(t) {
       : '';
   const rtkSavingsStr = t.rtk_chars_saved > 0
     ? ` · <span style="color:var(--text-dim)">rtk -${t.rtk_chars_saved.toLocaleString()}c</span>` : '';
+  const rtkStrategyEntries = Object.entries(t.rtk_strategy_savings || {}).filter(([, v]) => Number(v) > 0);
+  const rtkStrategyStr = rtkStrategyEntries.length > 0
+    ? `<div style="font-size:12px;color:var(--text-dim);margin-top:4px;">rtk strategies: ${
+        rtkStrategyEntries.map(([k, v]) => `<span class="mono">${escapeHtml(k)}</span> -${Number(v).toLocaleString()}c`).join(' · ')
+      }</div>`
+    : '';
+  const outboundContextStr = (t.outbound_chars_sent || t.proxy_recall_chars_added)
+    ? `<div style="font-size:12px;color:var(--text-dim);margin-top:4px;">outbound chars: <span class="mono">${(t.outbound_chars_sent || 0).toLocaleString()}</span>${
+        t.proxy_recall_chars_added > 0
+          ? ` · <span style="color:var(--purple)">proxy recall +${t.proxy_recall_chars_added.toLocaleString()}c</span>`
+          : ''
+      }</div>`
+    : '';
 
   let factsHtml = '';
   if (t.facts_selected && t.facts_selected.length > 0) {
@@ -406,6 +419,8 @@ function buildTurnCard(t) {
       : '<span style="font-size:10px;opacity:0.7;margin-left:4px;">[model_invoked]</span>';
     factsHtml += `<div style="font-size:12px;color:var(--purple);margin-top:4px;">recall${recallTriggerStr}: "${escapeHtml(t.recall_question)}" → ${t.recall_facts_returned} facts</div>`;
   }
+  factsHtml += rtkStrategyStr;
+  factsHtml += outboundContextStr;
 
   return `
     <div class="turn-card" data-turn-id="${escapeHtml(t.turn_id)}" data-user-turn="${!!t.is_user_turn}" onclick="this.classList.toggle('selected')">
@@ -443,7 +458,10 @@ function buildTurnCard(t) {
             const statusColor = tc.status === 'ok' ? 'var(--green)' : tc.status === 'soft_error' ? 'var(--yellow)' : 'var(--red)';
             const detail = tc.error ? escapeHtml(tc.error) : tc.result_preview ? escapeHtml(tc.result_preview.substring(0, 100)) : '';
             const argsStr = tc.args ? Object.entries(tc.args).map(([k,v]) => k+'='+JSON.stringify(v).substring(0,60)).join(', ') : '';
-            return `<div style="margin-bottom:2px;"><span style="color:${statusColor}">[${tc.status}]</span> <span style="color:var(--accent)">${escapeHtml(tc.tool)}</span>(${escapeHtml(argsStr)})${detail ? ' → '+detail : ''}</div>`;
+            const proxyNote = tc.proxy_note
+              ? `<div style="color:var(--yellow);margin-left:18px;">proxy note: ${escapeHtml(tc.proxy_note)}</div>`
+              : '';
+            return `<div style="margin-bottom:2px;"><span style="color:${statusColor}">[${tc.status}]</span> <span style="color:var(--accent)">${escapeHtml(tc.tool)}</span>(${escapeHtml(argsStr)})${detail ? ' → '+detail : ''}${proxyNote}</div>`;
           }).join('')}
         </div>
         ` : ''}

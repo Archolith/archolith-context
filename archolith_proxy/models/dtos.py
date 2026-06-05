@@ -152,6 +152,10 @@ class TurnTrace(BaseModel):
     rtk_available: bool | None = None   # True = package present; False = fail-open; None = not yet measured
     rtk_chars_saved: int = 0            # Characters removed by RTK filter on this turn
     rtk_chars_before: int = 0          # Characters in messages before RTK filter
+    rtk_chars_after: int = 0           # Characters after RTK filtering, before later proxy injections
+    proxy_recall_chars_added: int = 0  # Characters injected back via [PROXY-RECALL]
+    outbound_chars_sent: int = 0       # Final outbound message chars after all proxy rewrites
+    rtk_strategy_savings: dict[str, int] = Field(default_factory=dict)
 
     # Curator skip reason — populated on user turns when curator was eligible but did not succeed
     curator_skip_reason: str = ""       # e.g. "cold_start", "disabled", "timeout", "no_api_key", "no_result"

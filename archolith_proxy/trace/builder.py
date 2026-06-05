@@ -169,6 +169,8 @@ class TraceBuilder:
         self._data["recall_facts_returned"] = facts_returned
         if trigger:
             self._data["recall_trigger"] = trigger
+        elif used:
+            self._data["recall_trigger"] = "model_invoked"
 
     def set_fallback_reason(self, reason: str) -> None:
         self._data["fallback_reason"] = reason
@@ -178,6 +180,7 @@ class TraceBuilder:
         available: bool,
         chars_saved: int = 0,
         chars_before: int = 0,
+        chars_after: int = 0,
     ) -> None:
         """Record RTK filter availability and per-turn char savings.
 
@@ -188,6 +191,19 @@ class TraceBuilder:
         self._data["rtk_available"] = available
         self._data["rtk_chars_saved"] = chars_saved
         self._data["rtk_chars_before"] = chars_before
+        self._data["rtk_chars_after"] = chars_after
+        self._data["outbound_chars_sent"] = chars_after
+        if chars_saved > 0:
+            self._data["rtk_strategy_savings"] = {"request_filter": chars_saved}
+
+    def set_outbound_context_stats(
+        self,
+        outbound_chars_sent: int,
+        proxy_recall_chars_added: int = 0,
+    ) -> None:
+        """Record final outbound payload size after all proxy injections."""
+        self._data["outbound_chars_sent"] = outbound_chars_sent
+        self._data["proxy_recall_chars_added"] = max(0, proxy_recall_chars_added)
 
     def set_curator_skip_reason(self, reason: str) -> None:
         """Record why the curator was skipped or failed on this user turn.
@@ -212,6 +228,18 @@ class TraceBuilder:
         self._data["solo_chars_saved_compact"] = stats.get("chars_saved_compact", 0)
         self._data["solo_chars_saved_curator"] = stats.get("chars_saved_curator_cache", 0)
         self._data["solo_chars_saved_total"] = stats.get("total_chars_saved", 0)
+        strategy_savings = dict(self._data.get("rtk_strategy_savings") or {})
+        for key, value in (
+            ("curator_cache", stats.get("chars_saved_curator_cache", 0)),
+            ("compact", stats.get("chars_saved_compact", 0)),
+            ("middle_filter", stats.get("chars_saved_middle", 0)),
+            ("dedup", stats.get("chars_saved_dedup", 0)),
+            ("shrink", stats.get("chars_saved_shrink", 0)),
+        ):
+            if value > 0:
+                strategy_savings[key] = value
+        if strategy_savings:
+            self._data["rtk_strategy_savings"] = strategy_savings
 
     def set_curator_info(
         self,
