@@ -155,6 +155,21 @@ async def lifespan(app: FastAPI):
     if proxy_missing:
         logger.warning("missing_required_env_vars", vars=proxy_missing, note="proxy calls will fail")
 
+    # Loud startup check: RTK_ENABLED but the package missing from THIS env means
+    # agent-solo compression and RTK filtering silently no-op (the failure that
+    # made the proxy look 100% passthrough on real sessions). Surface it now.
+    if settings.rtk_enabled:
+        from archolith_proxy.rtk import is_available as _rtk_is_available
+        if _rtk_is_available():
+            logger.info("rtk_available", note="archolith_rtk loaded")
+        else:
+            logger.error(
+                "rtk_enabled_but_unavailable",
+                note="RTK_ENABLED=true but archolith_rtk is not importable in this "
+                     "environment; agent-solo compression and RTK filtering will do "
+                     "NOTHING. Install into the active venv: pip install -e ../archolith-rtk",
+            )
+
     graph_missing = settings.check_required_for_graph()
     if graph_missing:
         logger.info(

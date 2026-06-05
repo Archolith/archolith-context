@@ -398,6 +398,24 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             _curator_skip = "no_result"
         trace_builder.set_curator_skip_reason(_curator_skip)
 
+    # ── Record final assembly outcome on the trace ──
+    # Without this, normal (non-"-passthrough") requests never called
+    # set_assembly, so the trace always defaulted to mode="passthrough" with
+    # 0 savings — even when agent-solo or the curator compressed heavily. The
+    # only prior set_assembly call lived on the -passthrough branch.
+    _final_rewritten = max(0, input_tokens - savings)
+    _final_ratio = round(savings / input_tokens, 4) if input_tokens > 0 else 0.0
+    _comp_ratio = round(_final_rewritten / input_tokens, 4) if input_tokens > 0 else 1.0
+    trace_builder.set_assembly(
+        mode=assembly_mode,
+        reason=assembly_reason,
+        latency_ms=assembly_latency_ms,
+        rewritten_tokens=_final_rewritten,
+        savings_tokens=savings,
+        savings_ratio=_final_ratio,
+        compression_ratio=_comp_ratio,
+    )
+
     # ── Inject assembled context and proxy tools ──
     if assembled and assembly_mode == "curator":
         from archolith_proxy.proxy.rewrite import rewrite_messages

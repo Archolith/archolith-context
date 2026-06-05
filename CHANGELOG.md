@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-06-05 — Fix: proxy was inert on real sessions (RTK missing + trace mislabel)
+
+Root-caused via replaying a real captured coding session: the proxy did NO context
+management on real agent sessions (100% passthrough), which produced the 58/100 grade.
+- **Root cause (env):** `archolith_rtk` was installed only in the global Python, not in
+  the proxy's `.venv` (which `proxy_restart.py` launches). Agent-solo compression is RTK
+  code, so it silently no-op'd and `rtk_available` was false. Fixed by installing RTK into
+  the venv; after the fix a real session compresses ~190K chars/turn (filter+dedup+shrink).
+- `main.py`: loud `rtk_enabled_but_unavailable` ERROR at startup when `RTK_ENABLED=true`
+  but `archolith_rtk` is not importable — so this silent degradation can't recur unnoticed.
+- `openai/chat.py`: **`set_assembly()` is now called on the normal request path.** It only
+  ran in the `-passthrough` branch before, so every normal request recorded
+  `assembly_mode="passthrough"` with 0 savings even when agent-solo/curator compressed
+  heavily — the reason every baseline looked 100% passthrough. Traces now report the real
+  mode and savings.
+- `scripts/benchmark.py`: pin the proxy session via `X-Session-ID` (`send_chat` gains a
+  `session_id` arg); trace lookups no longer guess `sessions[0]` and grab a stale
+  disk-restored session.
+
 ## 2026-06-05 — Proxy memory-leak fixes (recoverable on session resume)
 
 Investigated unbounded in-memory growth before running the tuning baseline. Fixes below;

@@ -123,17 +123,22 @@ def send_chat(
     messages: list[dict],
     model: str,
     max_retries: int = 5,
+    session_id: str | None = None,
 ) -> tuple[str, float, dict]:
     """Send a chat completion request. Returns (response_text, latency_ms, usage_dict).
 
     Retries on 429 (rate limit) with exponential backoff. Parses Retry-After
-    header when available.
+    header when available. When session_id is given, pins the proxy session via
+    X-Session-ID so trace lookups don't have to guess (and never grab a stale
+    disk-restored session).
     """
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    if session_id:
+        headers["X-Session-ID"] = session_id
     body = {
         "model": model,
         "messages": messages,
@@ -446,7 +451,9 @@ def run_benchmark(
     edit_probe_results = []
     direct_history: list[dict] = []
     proxy_history: list[dict] = []
-    proxy_session_id: str | None = None
+    # Pin the proxy session up front so trace lookups are exact (never grab a
+    # stale disk-restored session via sessions[0]).
+    proxy_session_id: str | None = f"bench_{scenario.name}_{budget or 'def'}_{int(time.time())}"
     start_turn = 0
     consecutive_collapses = 0
 
@@ -502,10 +509,10 @@ def run_benchmark(
             direct_output = direct_usage.get("completion_tokens", estimate_tokens(direct_text))
             print(f"  [direct] {direct_input} in / {direct_output} out in {direct_latency:.0f}ms")
 
-            # --- Proxy call ---
+            # --- Proxy call (pinned session) ---
             print(f"  [proxy]  Sending {len(proxy_history)} messages (~{proxy_est_tokens} tokens)...")
             proxy_text, proxy_latency, proxy_usage = send_chat(
-                client, proxy_url, _key, proxy_history, model
+                client, proxy_url, _key, proxy_history, model, session_id=proxy_session_id
             )
             proxy_input = proxy_usage.get("prompt_tokens", proxy_est_tokens)
             proxy_output = proxy_usage.get("completion_tokens", estimate_tokens(proxy_text))
