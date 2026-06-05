@@ -33,13 +33,27 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
-load_dotenv()
+# NOTE: do NOT call load_dotenv() at import time — importing this module (e.g.
+# from a test) must not mutate os.environ. load_dotenv() is called in main().
+# These constants read process env only at import; main() refreshes them from
+# .env via _load_env_config().
 
 _proxy_port = os.getenv("PROXY_PORT", "9801")
 PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{_proxy_port}/v1")
 DIRECT_URL = os.getenv("UPSTREAM_BASE_URL", "https://integrate.api.nvidia.com/v1")
 API_KEY = os.getenv("UPSTREAM_API_KEY", "")
 MODEL = os.getenv("BENCHMARK_MODEL", "gpt-4o-mini")
+
+
+def _load_env_config() -> None:
+    """Load .env and refresh env-derived module globals. Called from main()."""
+    load_dotenv()
+    global PROXY_URL, DIRECT_URL, API_KEY, MODEL
+    port = os.getenv("PROXY_PORT", "9801")
+    PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{port}/v1")
+    DIRECT_URL = os.getenv("UPSTREAM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    API_KEY = os.getenv("UPSTREAM_API_KEY", "")
+    MODEL = os.getenv("BENCHMARK_MODEL", "gpt-4o-mini")
 
 SCENARIOS_DIR = Path(__file__).parent / "scenarios"
 
@@ -872,6 +886,7 @@ def save_results(data: dict, output_dir: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 def main():
+    _load_env_config()
     parser = argparse.ArgumentParser(
         description="Archolith proxy benchmark suite",
         formatter_class=argparse.RawDescriptionHelpFormatter,
