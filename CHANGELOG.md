@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-05 — Proxy memory-leak fixes (recoverable on session resume)
+
+Investigated unbounded in-memory growth before running the tuning baseline. Fixes below;
+all evicted/pruned state is recoverable — caches rebuild from the graph or on the next turn.
+- `trace/store.py`: `_bg_passes` is now capped per session (`max_bg_passes_per_session`, default 50) like turns were, and session LRU eviction now drops `_bg_passes` + `_session_meta` (previously only turns were dropped, leaking both for every evicted session). Added `has_session_metadata()`.
+- `openai/chat.py`: per-session trace metadata (harness_env, proxy_config) now repopulates whenever absent — not only on `is_new` — so a session resuming after an LRU eviction restores its metadata instead of losing it for the process lifetime.
+- `main.py`: the in-memory cache prune (curator + agent-solo + last-attempts) now runs every cleanup cycle, not only when a graph session expired — previously the prune was nested under `if expired:` and could be skipped indefinitely.
+- `curator/pipeline.py`: added `prune_last_attempts()` for the `_last_attempt` diagnostic map (regenerated per curator run).
+- `proxy/agent_solo.py`: `_curator_caches` (holds full rewritten message lists) now has a hard cap mirroring `_session_trackers`, as defense-in-depth between prune cycles.
+- `tests/test_memory_bounds.py`: regression tests for the bg-pass cap, eviction cleanup, resume recoverability, last-attempt prune, and curator-cache cap.
+
 ## 2026-06-05 — RTK / curator tuning: Step 0 offline harness extensions
 
 - `scripts/redundancy.py`: offline read-file redundancy analyzer — classifies file-read tokens in a captured session into exact-dup / superseded-by-full-write / live buckets to size RTK Step 5-B and curator Step 4-C before building them. Partial edits do not count as superseding. 6 unit tests.

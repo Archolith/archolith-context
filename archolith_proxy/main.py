@@ -110,22 +110,29 @@ async def _background_cleanup_loop() -> None:
                     deleted = await backend.delete_expired_sessions()
                     logger.info("background_cleanup_cycle", expired=expired, deleted=deleted)
 
-                    try:
-                        active = await backend.list_active_sessions()
-                        active_ids = {s.get("session_id") for s in active if s.get("session_id")}
-                        from archolith_proxy.curator.state import prune_session_state as prune_curator_state
-                        from archolith_proxy.proxy.agent_solo import prune_session_state as prune_agent_solo_state
+                # Prune in-memory caches EVERY cycle (not only when a session
+                # expired) so they cannot outgrow the active-session set. Pruned
+                # state is recoverable: curator snapshot/briefing rebuild from the
+                # graph and the dedupe/prefix caches rebuild on the next turn.
+                try:
+                    active = await backend.list_active_sessions()
+                    active_ids = {s.get("session_id") for s in active if s.get("session_id")}
+                    from archolith_proxy.curator.pipeline import prune_last_attempts
+                    from archolith_proxy.curator.state import prune_session_state as prune_curator_state
+                    from archolith_proxy.proxy.agent_solo import prune_session_state as prune_agent_solo_state
 
-                        pruned_agent_solo = prune_agent_solo_state(active_ids)
-                        pruned_curator = prune_curator_state(active_ids)
-                        if pruned_agent_solo or pruned_curator:
-                            logger.info(
-                                "background_cache_pruned",
-                                agent_solo_sessions=pruned_agent_solo,
-                                curator_sessions=pruned_curator,
-                            )
-                    except Exception:
-                        pass
+                    pruned_agent_solo = prune_agent_solo_state(active_ids)
+                    pruned_curator = prune_curator_state(active_ids)
+                    pruned_attempts = prune_last_attempts(active_ids)
+                    if pruned_agent_solo or pruned_curator or pruned_attempts:
+                        logger.info(
+                            "background_cache_pruned",
+                            agent_solo_sessions=pruned_agent_solo,
+                            curator_sessions=pruned_curator,
+                            last_attempts=pruned_attempts,
+                        )
+                except Exception:
+                    pass
 
             from archolith_proxy.proxy.locks import cleanup_stale_locks
 

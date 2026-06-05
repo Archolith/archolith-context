@@ -31,6 +31,8 @@ logger = structlog.get_logger()
 
 # Default: keep at most this many turns per session
 DEFAULT_MAX_TURNS_PER_SESSION = 100
+# Default: keep at most this many background-pass traces per session
+DEFAULT_MAX_BG_PASSES_PER_SESSION = 50
 
 
 class TraceStore:
@@ -45,9 +47,11 @@ class TraceStore:
         max_turns_per_session: int = DEFAULT_MAX_TURNS_PER_SESSION,
         max_sessions: int = 1000,
         trace_dir: str | None = None,
+        max_bg_passes_per_session: int = DEFAULT_MAX_BG_PASSES_PER_SESSION,
     ) -> None:
         self._max_turns = max_turns_per_session
         self._max_sessions = max_sessions
+        self._max_bg_passes = max_bg_passes_per_session
         self._lock = asyncio.Lock()
         # session_id -> list[TurnTrace] (ordered by turn_number)
         self._by_session: dict[str, list[TurnTrace]] = defaultdict(list)
@@ -93,8 +97,7 @@ class TraceStore:
                 # Evict the least-recently-active session
                 evict_sid = self._session_order[0]
                 if evict_sid != session_id:
-                    for t in self._by_session.pop(evict_sid, []):
-                        self._by_turn_id.pop(t.turn_id, None)
+                    self._drop_session_state(evict_sid)
                     self._session_order.pop(0)
                 else:
                     break  # Can't evict the current session
@@ -115,6 +118,20 @@ class TraceStore:
             except Exception:
                 logger.warning("trace_disk_write_failed", session_id=session_id, exc_info=True)
 
+    def _drop_session_state(self, session_id: str) -> None:
+        """Remove ALL in-memory state for a session (turns, bg-passes, metadata).
+
+        Called under ``self._lock`` during LRU eviction. Does not touch
+        ``_session_order`` (the caller manages ordering). Safe to drop: every
+        consumer rebuilds lazily if the session resumes — turns/bg-passes are
+        observability (also persisted to disk when trace_dir is set) and the
+        metadata is repopulated on the next request via set_session_metadata.
+        """
+        for t in self._by_session.pop(session_id, []):
+            self._by_turn_id.pop(t.turn_id, None)
+        self._bg_passes.pop(session_id, None)
+        self._session_meta.pop(session_id, None)
+
     def set_session_metadata(
         self, session_id: str, key: str, value: object,
     ) -> None:
@@ -124,6 +141,15 @@ class TraceStore:
         """
         meta = self._session_meta.setdefault(session_id, {})
         meta[key] = value
+
+    def has_session_metadata(self, session_id: str, key: str) -> bool:
+        """True if metadata ``key`` is present for the session.
+
+        Lets the request path repopulate metadata after an LRU eviction so a
+        resumed session restores its harness_env / proxy_config rather than
+        losing it for the process lifetime.
+        """
+        return key in self._session_meta.get(session_id, {})
 
     def get_session_metadata(
         self, session_id: str, key: str,
@@ -138,7 +164,12 @@ class TraceStore:
         """
         session_id = trace.session_id or "__no_session__"
         async with self._lock:
-            self._bg_passes[session_id].append(trace)
+            bg_list = self._bg_passes[session_id]
+            bg_list.append(trace)
+            # Cap per-session bg-pass history (turns are capped too) so a long
+            # or abandoned session cannot grow this list without bound.
+            while len(bg_list) > self._max_bg_passes:
+                bg_list.pop(0)
 
         if self._trace_dir:
             try:

@@ -36,6 +36,17 @@ def get_last_attempt(session_id: str) -> dict | None:
     return _last_attempt.pop(session_id, None)
 
 
+def prune_last_attempts(active_session_ids: set[str]) -> int:
+    """Drop last-attempt diagnostics for sessions no longer active.
+
+    Recoverable: regenerated on the next curator run for the session.
+    """
+    stale = [sid for sid in _last_attempt if sid not in active_session_ids]
+    for sid in stale:
+        _last_attempt.pop(sid, None)
+    return len(stale)
+
+
 def _extract_section(context_text: str, section_name: str) -> str:
     """Extract a named section from the curator's context block."""
     import re

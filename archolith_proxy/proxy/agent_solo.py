@@ -102,6 +102,12 @@ def cache_curator_rewrite(
 
     count = len(original_messages)
     fp = _fingerprint_message(original_messages[-1])
+    # Hard cap (mirrors _session_trackers) so the prefix cache cannot grow
+    # without bound between hourly prunes. Evicting is safe: the cache rebuilds
+    # on the session's next curator run.
+    if session_id not in _curator_caches and len(_curator_caches) >= _MAX_SESSIONS:
+        oldest = next(iter(_curator_caches))
+        del _curator_caches[oldest]
     _curator_caches[session_id] = _CuratorCache(
         original_count=count,
         fingerprint=fp,
