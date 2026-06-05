@@ -403,16 +403,16 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     # set_assembly, so the trace always defaulted to mode="passthrough" with
     # 0 savings — even when agent-solo or the curator compressed heavily. The
     # only prior set_assembly call lived on the -passthrough branch.
-    _final_rewritten = max(0, input_tokens - savings)
-    _final_ratio = round(savings / input_tokens, 4) if input_tokens > 0 else 0.0
-    _comp_ratio = round(_final_rewritten / input_tokens, 4) if input_tokens > 0 else 1.0
+    # Use the per-block values already computed above (passthrough leaves them at
+    # 0, preserving the existing "passthrough => rewritten_tokens == 0" invariant).
+    _comp_ratio = round((input_tokens - savings) / input_tokens, 4) if input_tokens > 0 else 1.0
     trace_builder.set_assembly(
         mode=assembly_mode,
         reason=assembly_reason,
         latency_ms=assembly_latency_ms,
-        rewritten_tokens=_final_rewritten,
+        rewritten_tokens=rewritten_tokens,
         savings_tokens=savings,
-        savings_ratio=_final_ratio,
+        savings_ratio=savings_ratio,
         compression_ratio=_comp_ratio,
     )
 

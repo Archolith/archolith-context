@@ -8,8 +8,9 @@ management on real agent sessions (100% passthrough), which produced the 58/100 
   the proxy's `.venv` (which `proxy_restart.py` launches). Agent-solo compression is RTK
   code, so it silently no-op'd and `rtk_available` was false. Fixed by installing RTK into
   the venv; after the fix a real session compresses ~190K chars/turn (filter+dedup+shrink).
-- `main.py`: loud `rtk_enabled_but_unavailable` ERROR at startup when `RTK_ENABLED=true`
-  but `archolith_rtk` is not importable — so this silent degradation can't recur unnoticed.
+- `main.py`: **refuse to start** (raise `RuntimeError`) when `RTK_ENABLED=true` but
+  `archolith_rtk` is not importable — a proxy that silently does no curation is worse than
+  one that won't boot. (`rtk_enabled` defaults to false, so tests are unaffected.)
 - `openai/chat.py`: **`set_assembly()` is now called on the normal request path.** It only
   ran in the `-passthrough` branch before, so every normal request recorded
   `assembly_mode="passthrough"` with 0 savings even when agent-solo/curator compressed
