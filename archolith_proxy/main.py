@@ -172,7 +172,7 @@ async def lifespan(app: FastAPI):
             raise RuntimeError(
                 "RTK_ENABLED=true but archolith_filter is not importable in this environment. "
                 "Agent-solo compression and RTK filtering would silently do nothing. "
-                "Install it into the active venv (pip install -e ../archolith-rtk) "
+                "Install it into the active venv (pip install -e ../archolith-filter) "
                 "or set RTK_ENABLED=false."
             )
 

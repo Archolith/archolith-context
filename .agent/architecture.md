@@ -32,7 +32,7 @@ that wires them together at the proxy boundary.
 
 | Module | Role | Dependency model |
 |--------|------|-----------------|
-| **archolith-rtk** | Token reduction — filter noise, shrink oversized tool results | Optional peer; fail-open lazy import |
+| **archolith-filter** | Token reduction — filter noise, shrink oversized tool results | Optional peer; fail-open lazy import |
 | **archolith-memory** | Long-term memory — cross-session fact storage and retrieval | Optional peer; fail-open lazy import (planned) |
 | **archolith-context** | Proxy — orchestrates session context, extraction, curation | Orchestrator; imports peers when available |
 
@@ -262,7 +262,7 @@ classified as an agent-solo turn. Returns `(messages, stats_dict)`.
    on every API call, so curator savings evaporate unless the proxy re-applies the
    cached rewrite on each subsequent agent-solo turn.
 
-2. **RTK Layer 3 strategies** — delegates to `archolith_rtk.agent_solo.compress_agent_solo_turn()`
+2. **RTK Layer 3 strategies** — delegates to `archolith_filter.agent_solo.compress_agent_solo_turn()`
    with four composable strategies (D→C→B→A):
    - **D (Compact)**: Replace large Write/Edit/create_file arguments in completed tool_use
      calls with compact summaries. The model can Read the file to recover. Default on.
@@ -586,10 +586,10 @@ Metrics are in-memory (`_metrics` dict surfaced via `archolith_proxy/metrics.py`
 - `docker-compose.yml`: proxy + neo4j:5-community with APOC plugin, healthchecks, volumes, dependency ordering
 - Override file: `docker-compose.override.yml` (gitignored)
 
-## Token Reduction — archolith-rtk Integration
+## Token Reduction — archolith-filter Integration
 
-Token reduction is handled by `archolith-rtk`, a standalone Python library that lives
-in a sibling project (`projects/archolith/archolith-rtk`).  It is the **preferred and
+Token reduction is handled by `archolith-filter`, a standalone Python library that lives
+in a sibling project (`projects/archolith/archolith-filter`).  It is the **preferred and
 canonical** token reduction toolkit for this workspace.  archolith-context treats it as
 a first-class peer: when installed, it is used deeply at every pipeline point where
 token reduction matters; when absent, all RTK paths are fail-open and the proxy operates
@@ -599,15 +599,15 @@ without RTK passes.
 
 | Layer | Module | What it does |
 |-------|--------|-------------|
-| Layer 1 — Output Filtering | `archolith_rtk.filter_output` | Strips noise/boilerplate from tool results: git diffs, test output, build logs, lint, directory trees, JSON payloads, search results. 13 named categories + cross-turn deduplication via `DedupeTracker`. ANSI stripping is always applied. Fail-open: exceptions return ANSI-stripped input unchanged. |
-| Layer 2 — Shrink | `archolith_rtk.shrink` | Deterministic token budgeting: `shrink_oversized_tool_call_args_by_tokens` collapses large string values in assistant tool_call JSON (Write/Edit file content); `shrink_oversized_tool_results_by_tokens` truncates tool-role messages over a per-message token cap. |
-| Layer 3 — Agent-Solo | `archolith_rtk.agent_solo` | Four composable strategies (D→C→B→A) for tool-call continuation turns. Strategy D compacts completed Write/Edit args, C filters middle-section tools, B deduplicates byte-identical results, A char-budgets all results. Called by `archolith_proxy/proxy/agent_solo.py`. |
+| Layer 1 — Output Filtering | `archolith_filter.filter_output` | Strips noise/boilerplate from tool results: git diffs, test output, build logs, lint, directory trees, JSON payloads, search results. 13 named categories + cross-turn deduplication via `DedupeTracker`. ANSI stripping is always applied. Fail-open: exceptions return ANSI-stripped input unchanged. |
+| Layer 2 — Shrink | `archolith_filter.shrink` | Deterministic token budgeting: `shrink_oversized_tool_call_args_by_tokens` collapses large string values in assistant tool_call JSON (Write/Edit file content); `shrink_oversized_tool_results_by_tokens` truncates tool-role messages over a per-message token cap. |
+| Layer 3 — Agent-Solo | `archolith_filter.agent_solo` | Four composable strategies (D→C→B→A) for tool-call continuation turns. Strategy D compacts completed Write/Edit args, C filters middle-section tools, B deduplicates byte-identical results, A char-budgets all results. Called by `archolith_proxy/proxy/agent_solo.py`. |
 
 ### Adapter (`archolith_proxy/rtk.py`)
 
-A thin adapter that lazy-loads archolith-rtk with independent per-function sentinels
+A thin adapter that lazy-loads archolith-filter with independent per-function sentinels
 (sentinel = `False` → unresolved, `None` → unavailable, callable → loaded).  Each
-wrapper is **fail-open**: if archolith-rtk is not installed, `ImportError` sets the
+wrapper is **fail-open**: if archolith-filter is not installed, `ImportError` sets the
 sentinel to `None` and the wrapper returns its input unchanged.
 
 **Public API exposed by the adapter:**
@@ -638,16 +638,16 @@ CONTEXT ASSEMBLY:
 
 ### Relationship Between Projects
 
-archolith-rtk is the first concrete module in the [Archolith Ecosystem](#archolith-ecosystem) —
+archolith-filter is the first concrete module in the [Archolith Ecosystem](#archolith-ecosystem) —
 the same optional-peer pattern applies to archolith-memory (planned) and any future modules.
 
-archolith-rtk is **not a dependency** of archolith-context in the `pyproject.toml` sense — it is an optional peer.  This preserves the ability to run archolith-context standalone without the RTK library installed.  When both are present in the same virtualenv, RTK is used automatically with no configuration required.
+archolith-filter is **not a dependency** of archolith-context in the `pyproject.toml` sense — it is an optional peer.  This preserves the ability to run archolith-context standalone without the RTK library installed.  When both are present in the same virtualenv, RTK is used automatically with no configuration required.
 
 ```bash
-uv pip install -e ../archolith-rtk  # from inside archolith-context
+uv pip install -e ../archolith-filter  # from inside archolith-context
 ```
 
-archolith-rtk has zero dependency on archolith-context and can be used independently as a standalone token-reduction library in any Python project.
+archolith-filter has zero dependency on archolith-context and can be used independently as a standalone token-reduction library in any Python project.
 
 ## External Dependencies
 
@@ -658,7 +658,7 @@ archolith-rtk has zero dependency on archolith-context and can be used independe
 | OpenAI API (gpt-4.1-mini) | Fact extraction + curator LLM | Optional — extraction skipped on failure |
 | OpenAI API (embeddings) | Semantic similarity for `search_facts_semantic` | Optional — falls back to substring search |
 | Upstream LLM API | Target for proxied requests | **Yes — required** |
-| archolith-rtk | Token reduction (Layer 1 + Layer 2) | Optional peer (fail-open) |
+| archolith-filter | Token reduction (Layer 1 + Layer 2) | Optional peer (fail-open) |
 | archolith-memory | Long-term cross-session memory | Optional peer (planned — fail-open) |
 | Memory backend API (e.g. cth.mcp.memory) | Promotion target for durable facts | Optional — only when `PROMOTION_ENABLED=true` |
 

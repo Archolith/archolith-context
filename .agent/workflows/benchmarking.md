@@ -167,7 +167,7 @@ The comparison script shows:
 
 ## Tuning experiments (2026-06-04)
 
-Four config variants from the RTK curator tuning plan (archolith-rtk-curator-tuning-plan.md).
+Four config variants from the RTK curator tuning plan (archolith-filter-curator-tuning-plan.md).
 These should be run after Step 1 instrumentation is live so the dashboard shows RTK stats and
 curator skip reasons alongside savings metrics.
 

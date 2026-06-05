@@ -96,7 +96,7 @@ class TurnTrace(BaseModel):
     request_timestamp: float = 0.0       # Wall clock (time.time) at request arrival
     total_latency_ms: float = 0.0        # Wall clock from request entry to response start
     proxy_overhead_ms: float = 0.0       # total_latency - upstream_latency
-    rtk_latency_ms: float = 0.0          # Time in archolith-rtk (filter + agent-solo compression)
+    rtk_latency_ms: float = 0.0          # Time in archolith-filter (filter + agent-solo compression)
 
     # Upstream response
     upstream_status: int = 0

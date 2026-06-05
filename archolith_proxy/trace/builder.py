@@ -64,7 +64,7 @@ class TraceBuilder:
         self._data["request_timestamp"] = wall_clock
 
     def set_rtk_latency(self, rtk_ms: float) -> None:
-        """Record time spent in archolith-rtk (per-request filter + agent-solo compression)."""
+        """Record time spent in archolith-filter (per-request filter + agent-solo compression)."""
         self._data["rtk_latency_ms"] = self._data.get("rtk_latency_ms", 0.0) + rtk_ms
 
     def finalize_timing(self, monotonic_now: float) -> None:

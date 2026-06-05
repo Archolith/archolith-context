@@ -43,15 +43,15 @@ across turns.
   loop with a call to `filter_output(content, tool=tool_name)` per tool-role middle
   message — this routes each result through the correct category filter and the
   singleton `DedupeTracker` simultaneously
-- `DedupeTracker` is already public in archolith-rtk (`__all__`); no changes to
-  archolith-rtk required — all work is in archolith-context `rewrite.py` and `rtk.py`
+- `DedupeTracker` is already public in archolith-filter (`__all__`); no changes to
+  archolith-filter required — all work is in archolith-context `rewrite.py` and `rtk.py`
 - Add `filter_middle_tool_results(messages) -> list[dict]` to `rtk.py` as the
   fail-open adapter (analogous to `filter_tool_messages` but scoped to middle-section
   non-tail messages)
 - The singleton `DedupeTracker` is process-level, so cross-turn dedup between the
   middle pass and the later `filter_request_body` pass is automatic — no explicit
   threading required
-- **Blocked on archolith-rtk**: the `archolith-rtk-cross-turn-dedupe-plan` workspace plan improves
+- **Blocked on archolith-filter**: the `archolith-filter-cross-turn-dedupe-plan` workspace plan improves
   the `DedupeTracker` within RTK first (fingerprinting, compact markers, recovery IDs). The
   archolith-context wiring (swap compressible-tool loop for `filter_output` call) is a follow-on
   once the RTK-side plan lands — it will inherit the improved dedup automatically.

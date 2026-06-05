@@ -355,7 +355,7 @@ function buildTurnCard(t) {
   const rtkBadge = t.rtk_available === true
     ? `<span class="tag" style="background:rgba(35,134,54,0.15);color:#56d364;font-size:10px;padding:1px 5px;">RTK✓</span>`
     : t.rtk_available === false
-      ? `<span class="tag" style="background:rgba(248,81,73,0.15);color:#f85149;font-size:10px;padding:1px 5px;" title="archolith_rtk not installed — filter fail-open">RTK✗</span>`
+      ? `<span class="tag" style="background:rgba(248,81,73,0.15);color:#f85149;font-size:10px;padding:1px 5px;" title="archolith_filter not installed — filter fail-open">RTK✗</span>`
       : '';
   const rtkSavingsStr = t.rtk_chars_saved > 0
     ? ` · <span style="color:var(--text-dim)">rtk -${t.rtk_chars_saved.toLocaleString()}c</span>` : '';
