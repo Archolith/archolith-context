@@ -161,16 +161,16 @@ async def lifespan(app: FastAPI):
     if settings.rtk_enabled:
         from archolith_proxy.rtk import is_available as _rtk_is_available
         if _rtk_is_available():
-            logger.info("rtk_available", note="archolith_rtk loaded")
+            logger.info("rtk_available", note="archolith_filter loaded")
         else:
             logger.error(
                 "rtk_enabled_but_unavailable",
-                note="RTK_ENABLED=true but archolith_rtk is not importable; refusing to start.",
+                note="RTK_ENABLED=true but archolith_filter is not importable; refusing to start.",
             )
             # Fail fast: a proxy that silently does no curation is worse than one
             # that won't boot. If RTK is explicitly enabled it must be importable.
             raise RuntimeError(
-                "RTK_ENABLED=true but archolith_rtk is not importable in this environment. "
+                "RTK_ENABLED=true but archolith_filter is not importable in this environment. "
                 "Agent-solo compression and RTK filtering would silently do nothing. "
                 "Install it into the active venv (pip install -e ../archolith-rtk) "
                 "or set RTK_ENABLED=false."

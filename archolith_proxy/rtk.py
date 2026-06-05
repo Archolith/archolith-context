@@ -19,31 +19,31 @@ _shrink_results_fn: Callable[..., Any] | None | bool = False
 
 
 def _load_filter_output() -> Callable[..., Any] | None:
-    """Lazy-load archolith_rtk.filter_output and fail open if unavailable."""
+    """Lazy-load archolith_filter.filter_output and fail open if unavailable."""
     global _filter_output_fn
     if _filter_output_fn is False:
         try:
-            from archolith_rtk import filter_output as loaded
+            from archolith_filter import filter_output as loaded
 
             _filter_output_fn = loaded
         except ImportError:
             logger.warning(
                 "rtk_dependency_missing",
-                message="archolith_rtk is not installed; RTK filtering disabled",
+                message="archolith_filter is not installed; RTK filtering disabled",
             )
             _filter_output_fn = None
     return _filter_output_fn if callable(_filter_output_fn) else None
 
 
 def _load_shrink_functions() -> tuple[Callable[..., Any] | None, Callable[..., Any] | None]:
-    """Lazy-load archolith_rtk shrink functions and fail open if unavailable.
+    """Lazy-load archolith_filter shrink functions and fail open if unavailable.
 
     Returns (shrink_args_fn, shrink_results_fn).
     """
     global _shrink_args_fn, _shrink_results_fn
     if _shrink_args_fn is False:
         try:
-            from archolith_rtk.shrink import (
+            from archolith_filter.shrink import (
                 shrink_oversized_tool_call_args_by_tokens,
                 shrink_oversized_tool_results_by_tokens,
             )
@@ -65,7 +65,7 @@ def _load_shrink_functions() -> tuple[Callable[..., Any] | None, Callable[..., A
 
 
 def is_available() -> bool:
-    """Return True if archolith_rtk is installed and the filter function is callable.
+    """Return True if archolith_filter is installed and the filter function is callable.
 
     Used by the trace builder to distinguish 'RTK enabled but package missing
     (fail-open)' from 'RTK enabled and active'.

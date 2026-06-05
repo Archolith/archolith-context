@@ -1,6 +1,6 @@
 """Agent-solo turn compression — thin proxy-side orchestrator.
 
-Delegates all compression logic to ``archolith_rtk.agent_solo``.
+Delegates all compression logic to ``archolith_filter.agent_solo``.
 This module owns:
 - Per-session ``DedupeTracker`` lifecycle
 - Curator prefix cache (persist curator savings across agent-solo turns)
@@ -35,7 +35,7 @@ def _get_tracker(session_id: str) -> Any:
         return tracker
 
     try:
-        from archolith_rtk.dedupe import DedupeTracker
+        from archolith_filter.dedupe import DedupeTracker
     except ImportError:
         return None
 
@@ -257,7 +257,7 @@ def compress_agent_solo(
 
         if effective_tokens >= min_input_tokens:
             try:
-                from archolith_rtk.agent_solo import compress_agent_solo_turn
+                from archolith_filter.agent_solo import compress_agent_solo_turn
             except ImportError:
                 if curator_chars_saved == 0:
                     stats["skipped_reason"] = "rtk_unavailable"
