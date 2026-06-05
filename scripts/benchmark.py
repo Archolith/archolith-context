@@ -54,6 +54,21 @@ class FactProbe:
     question: str
     expected_keywords: list[str]
 
+
+@dataclass
+class EditProbe:
+    """A fidelity probe: ask the model to produce a concrete edit/patch, then
+    check the response contains the required anchors and none of the forbidden
+    ones. Unlike a FactProbe (does the model *recall* a keyword), this measures
+    whether the model can still produce the *correct change* under compressed
+    context — the edit-fidelity signal behind the tuning plan's fidelity gate.
+    """
+    after_turn: int
+    instruction: str
+    required_fragments: list[str]
+    forbidden_fragments: list[str] = field(default_factory=list)
+
+
 @dataclass
 class Scenario:
     name: str
@@ -61,18 +76,21 @@ class Scenario:
     system_prompt: str
     turns: list[str]
     fact_probes: list[FactProbe] = field(default_factory=list)
+    edit_probes: list[EditProbe] = field(default_factory=list)
 
     @classmethod
     def from_file(cls, path: Path) -> "Scenario":
         with open(path) as f:
             data = json.load(f)
         probes = [FactProbe(**p) for p in data.get("fact_probes", [])]
+        edit_probes = [EditProbe(**p) for p in data.get("edit_probes", [])]
         return cls(
             name=data["name"],
             description=data["description"],
             system_prompt=data["system_prompt"],
             turns=data["turns"],
             fact_probes=probes,
+            edit_probes=edit_probes,
         )
 
 
@@ -275,6 +293,90 @@ def run_fact_probes(
 
 
 # ---------------------------------------------------------------------------
+# Edit-fidelity probe evaluation
+# ---------------------------------------------------------------------------
+
+def score_edit_probe(
+    response: str,
+    required_fragments: list[str],
+    forbidden_fragments: list[str] | None = None,
+) -> dict:
+    """Score a model's edit response (pure, deterministic — unit-testable).
+
+    fidelity = fraction of required fragments present, but ZERO if any forbidden
+    fragment appears (a wrong/stale edit fails outright). Matching is
+    case-sensitive on the fragment but whitespace-insensitive is intentionally
+    NOT applied — anchors should be exact.
+    """
+    forbidden = forbidden_fragments or []
+    total_req = len(required_fragments)
+    required_hits = sum(1 for frag in required_fragments if frag in response)
+    forbidden_hits = [frag for frag in forbidden if frag in response]
+
+    if forbidden_hits:
+        fidelity = 0.0
+    elif total_req == 0:
+        fidelity = 1.0
+    else:
+        fidelity = required_hits / total_req
+
+    return {
+        "required_hits": required_hits,
+        "total_required": total_req,
+        "forbidden_hit": bool(forbidden_hits),
+        "forbidden_fragments_present": forbidden_hits,
+        "fidelity": round(fidelity, 3),
+    }
+
+
+def run_edit_probes(
+    client: httpx.Client,
+    scenario: Scenario,
+    direct_history: list[dict],
+    proxy_history: list[dict],
+    proxy_url: str,
+    direct_url: str,
+    model: str,
+    current_turn: int,
+    api_key: str = "",
+) -> list[dict]:
+    """Run any edit-fidelity probes scheduled after the current turn."""
+    _key = api_key or API_KEY
+    results = []
+    for probe in scenario.edit_probes:
+        if probe.after_turn != current_turn:
+            continue
+
+        probe_msg = {"role": "user", "content": probe.instruction}
+
+        direct_text, _, _ = send_chat(client, direct_url, _key, direct_history + [probe_msg], model)
+        proxy_text, _, _ = send_chat(client, proxy_url, _key, proxy_history + [probe_msg], model)
+
+        direct_score = score_edit_probe(direct_text, probe.required_fragments, probe.forbidden_fragments)
+        proxy_score = score_edit_probe(proxy_text, probe.required_fragments, probe.forbidden_fragments)
+
+        result = {
+            "after_turn": probe.after_turn,
+            "instruction": probe.instruction,
+            "required_fragments": probe.required_fragments,
+            "forbidden_fragments": probe.forbidden_fragments,
+            "direct_fidelity": direct_score["fidelity"],
+            "proxy_fidelity": proxy_score["fidelity"],
+            "direct_forbidden_hit": direct_score["forbidden_hit"],
+            "proxy_forbidden_hit": proxy_score["forbidden_hit"],
+            "direct_response_preview": direct_text[:200],
+            "proxy_response_preview": proxy_text[:200],
+        }
+        results.append(result)
+
+        status = "PASS" if proxy_score["fidelity"] >= direct_score["fidelity"] else "DEGRADED"
+        print(f"  [edit]   After turn {current_turn}: {status} — "
+              f"proxy fidelity {proxy_score['fidelity']:.2f} vs direct {direct_score['fidelity']:.2f}")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Main benchmark loop
 # ---------------------------------------------------------------------------
 
@@ -288,12 +390,14 @@ def _save_checkpoint(
     results: list, probe_results: list,
     direct_history: list, proxy_history: list,
     proxy_session_id: str | None,
+    edit_probe_results: list | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump({
             "scenario": scenario_name, "budget": budget,
             "results": results, "probe_results": probe_results,
+            "edit_probe_results": edit_probe_results or [],
             "direct_history": direct_history, "proxy_history": proxy_history,
             "proxy_session_id": proxy_session_id,
         }, f)
@@ -325,6 +429,7 @@ def run_benchmark(
     _key = api_key or API_KEY
     results = []
     probe_results = []
+    edit_probe_results = []
     direct_history: list[dict] = []
     proxy_history: list[dict] = []
     proxy_session_id: str | None = None
@@ -338,6 +443,7 @@ def run_benchmark(
         if ckpt and ckpt["scenario"] == scenario.name and ckpt["budget"] == budget:
             results = ckpt["results"]
             probe_results = ckpt["probe_results"]
+            edit_probe_results = ckpt.get("edit_probe_results", [])
             direct_history = ckpt["direct_history"]
             proxy_history = ckpt["proxy_history"]
             proxy_session_id = ckpt["proxy_session_id"]
@@ -473,11 +579,19 @@ def run_benchmark(
             )
             probe_results.extend(probes)
 
+            # Run edit-fidelity probes after this turn
+            edit_probes = run_edit_probes(
+                client, scenario, direct_history, proxy_history,
+                proxy_url, direct_url, model, i, api_key=_key,
+            )
+            edit_probe_results.extend(edit_probes)
+
             # Checkpoint after each turn for resume support
             _save_checkpoint(
                 ckpt_path, scenario.name, budget,
                 results, probe_results,
                 direct_history, proxy_history, proxy_session_id,
+                edit_probe_results=edit_probe_results,
             )
 
             # Abort if model has collapsed — consecutive stub responses
@@ -507,6 +621,18 @@ def run_benchmark(
             "recall_preservation": round(avg_proxy_recall / avg_direct_recall, 3) if avg_direct_recall > 0 else 0,
         }
 
+    edit_summary = {}
+    if edit_probe_results:
+        avg_direct_fid = sum(p["direct_fidelity"] for p in edit_probe_results) / len(edit_probe_results)
+        avg_proxy_fid = sum(p["proxy_fidelity"] for p in edit_probe_results) / len(edit_probe_results)
+        edit_summary = {
+            "total_edit_probes": len(edit_probe_results),
+            "avg_direct_fidelity": round(avg_direct_fid, 3),
+            "avg_proxy_fidelity": round(avg_proxy_fid, 3),
+            "fidelity_preservation": round(avg_proxy_fid / avg_direct_fid, 3) if avg_direct_fid > 0 else 0,
+            "proxy_forbidden_hits": sum(1 for p in edit_probe_results if p["proxy_forbidden_hit"]),
+        }
+
     # Detect which turns had output collapse
     collapsed_turns = [
         r["turn"] for r in results
@@ -533,8 +659,10 @@ def run_benchmark(
             "collapse_rate": round(len(collapsed_turns) / len(results), 3) if results else 0,
         },
         "quality": probe_summary,
+        "edit_fidelity": edit_summary,
         "turns": results,
         "fact_probes": probe_results,
+        "edit_probes": edit_probe_results,
     }
 
 
@@ -697,6 +825,16 @@ def print_summary(data: dict) -> None:
         print(f"    Avg direct recall:       {q['avg_direct_recall']:.1%}")
         print(f"    Avg proxy recall:        {q['avg_proxy_recall']:.1%}")
         print(f"    Recall preservation:     {q['recall_preservation']:.1%}")
+
+    if data.get("edit_fidelity"):
+        e = data["edit_fidelity"]
+        print("\n  Edit Fidelity:")
+        print(f"    Edit probes run:         {e['total_edit_probes']}")
+        print(f"    Avg direct fidelity:     {e['avg_direct_fidelity']:.1%}")
+        print(f"    Avg proxy fidelity:      {e['avg_proxy_fidelity']:.1%}")
+        print(f"    Fidelity preservation:   {e['fidelity_preservation']:.1%}")
+        if e.get("proxy_forbidden_hits"):
+            print(f"    Proxy stale/wrong edits: {e['proxy_forbidden_hits']} (forbidden fragments present)")
     print()
 
 

@@ -261,3 +261,55 @@ After running experiments, check the dashboard trace explorer alongside the comp
 - `rtk_available` badge confirms RTK filter is active
 - `curator_skip_reason` explains cold_start / disabled / no_result on passthrough turns
 - `rtk_chars_saved` shows per-turn filter savings alongside the benchmark savings_ratio
+
+## Step 0 additions (2026-06-05)
+
+Three additions from the RTK/curator tuning plan's Step 0 (extend the existing harness; do not
+rebuild it).
+
+### Edit-fidelity probes
+
+`FactProbe` measures whether the model *recalls* a keyword. `EditProbe` measures whether the
+model can still produce the *correct change* under proxy-compressed context — the fidelity
+signal behind the plan's hard fidelity gate. Add an `edit_probes` array to any scenario JSON:
+
+```json
+"edit_probes": [
+  {
+    "after_turn": 6,
+    "instruction": "Apply the fix we discussed to parse_config() and show the edited function.",
+    "required_fragments": ["def parse_config", "timeout = 30"],
+    "forbidden_fragments": ["timeout = 10"]
+  }
+]
+```
+
+Scoring (`score_edit_probe`, pure/deterministic): fidelity = fraction of `required_fragments`
+present, but **0.0 if any `forbidden_fragment` appears** (a stale/wrong edit fails outright).
+The run reports `avg_direct_fidelity`, `avg_proxy_fidelity`, `fidelity_preservation`, and a
+count of `proxy_forbidden_hits`. Use `fidelity_preservation` (proxy/direct) as the gate: a tuning
+change that drops it below 1.0 is a fidelity regression regardless of token savings.
+
+### Read-file redundancy analyzer
+
+`scripts/redundancy.py` classifies the tokens spent on file-read tool results in a captured
+session into exact-dup / superseded-by-full-write / live buckets. Run it on a captured session
+JSON to SIZE whether RTK superseded-read collapse (Step 5-B) or curator condensing (Step 4-C)
+are worth building before writing any of that code:
+
+```bash
+python scripts/redundancy.py path/to/session.json
+```
+
+If the corpus is mostly exact-dup tokens, the existing dedup (agent_solo Strategy B) already
+closes the gap and superseded-collapse is not worth the risk. Partial edits deliberately do NOT
+count as superseding (only full-file writes do).
+
+### Determinism decision: variance-based, not byte-replay
+
+The harness makes live upstream calls at `temperature=0.3`, so reruns are **not** byte-identical.
+Rather than build a record/replay cache, the chosen approach is **variance-based**: run each
+config as a named experiment **N times** (N>=3) and compare **medians and spread** via
+`compare_experiments.py`, not single-run point values. A tuning change counts only if the median
+moves beyond the run-to-run spread of the baseline. This keeps the harness honest about its live
+nature instead of pretending to a determinism it does not have.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-05 — RTK / curator tuning: Step 0 offline harness extensions
+
+- `scripts/redundancy.py`: offline read-file redundancy analyzer — classifies file-read tokens in a captured session into exact-dup / superseded-by-full-write / live buckets to size RTK Step 5-B and curator Step 4-C before building them. Partial edits do not count as superseding. 6 unit tests.
+- `scripts/benchmark.py`: added `EditProbe` + pure `score_edit_probe` + `run_edit_probes` — an edit-fidelity probe alongside the keyword `FactProbe`. Fidelity = fraction of required fragments present, 0.0 if any forbidden (stale) fragment appears. Reports `avg_*_fidelity`, `fidelity_preservation`, `proxy_forbidden_hits`; wired into scenario loading, checkpoint/resume, summary, and print output. 7 unit tests.
+- `.agent/workflows/benchmarking.md`: documented both tools and the determinism decision — variance-based (N>=3 runs, compare medians/spread) rather than a byte-replay cache, since the harness makes live temperature-0.3 calls.
+
 ## 2026-06-04 — RTK / curator tuning: instrumentation, proxy recall, and repeated-call detection (Steps 1–4)
 
 ### Step 1 — Baseline instrumentation
