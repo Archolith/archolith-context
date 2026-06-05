@@ -142,6 +142,31 @@ class TestPartialEditNoSupersede:
         assert report.superseded_reads == 0
 
 
+class TestFilePathKey:
+    """Real harnesses (OpenCode/Claude) use camelCase 'filePath' for the path."""
+
+    def test_filepath_camelcase_supersession(self) -> None:
+        read_id = _next_id()
+        write_id = _next_id()
+        read_call = {
+            "id": read_id, "type": "function",
+            "function": {"name": "read", "arguments": json.dumps({"filePath": "a.py"})},
+        }
+        write_call = {
+            "id": write_id, "type": "function",
+            "function": {"name": "write", "arguments": json.dumps({"filePath": "a.py"})},
+        }
+        messages = [
+            _make_assistant_with_calls([read_call]),
+            _make_tool_result(LONG_CONTENT, read_id, "read"),
+            _make_assistant_with_calls([write_call]),
+            _make_tool_result("ok", write_id, "write"),
+        ]
+        report = redundancy.classify_read_redundancy(messages)
+        assert report.superseded_reads == 1  # path resolved via filePath
+        assert report.live_reads == 0
+
+
 class TestLiveRead:
     """A single read with no later write and no duplicate → live."""
 

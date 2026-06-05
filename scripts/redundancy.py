@@ -77,7 +77,7 @@ def _build_call_map(messages: list[dict]) -> dict[str, tuple[str, str]]:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else {}
                 except (json.JSONDecodeError, TypeError):
                     args = {}
-                path: str = str(args.get("file_path") or args.get("path") or "")
+                path: str = str(args.get("file_path") or args.get("filePath") or args.get("path") or "")
                 call_map[call_id] = (tool_name, path)
         except Exception:
             continue
@@ -205,7 +205,7 @@ def find_full_write_indices(messages: list[dict]) -> dict[str, list[int]]:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else {}
                 except (json.JSONDecodeError, TypeError):
                     args = {}
-                path: str = str(args.get("file_path") or args.get("path") or "")
+                path: str = str(args.get("file_path") or args.get("filePath") or args.get("path") or "")
                 if not path:
                     continue
                 writes.setdefault(path, []).append(idx)
