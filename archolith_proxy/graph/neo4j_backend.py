@@ -242,6 +242,12 @@ class Neo4jBackend:
     async def delete_file_content(self, session_id: str, path: str) -> bool:
         raise NotImplementedError("FileContent features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
 
+    async def delete_file_outline(self, session_id: str, path: str) -> bool:
+        raise NotImplementedError("FileContent features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
+
+    async def evict_stale_file_cache(self, session_id: str, max_turns_age: int, max_entries: int) -> None:
+        raise NotImplementedError("FileContent features require LadybugDB backend; set GRAPH_BACKEND=ladybug")
+
     # ── Checkpoint / Issues / Verifications (LadybugDB-only in MVP) ───
 
     async def upsert_checkpoint(

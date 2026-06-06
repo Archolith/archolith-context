@@ -55,6 +55,8 @@ from archolith_proxy.graph.ladybug_facts import (
 )
 from archolith_proxy.graph.ladybug_files import (
     delete_file_content,
+    delete_file_outline,
+    evict_stale_file_cache,
     get_file_content,
     get_file_lines,
     get_file_outline,
@@ -426,11 +428,17 @@ class LadybugBackend:
     async def delete_file_content(self, session_id: str, path: str) -> bool:
         return await delete_file_content(self._execute, session_id, path)
 
+    async def delete_file_outline(self, session_id: str, path: str) -> bool:
+        return await delete_file_outline(self._execute, session_id, path)
+
     async def upsert_file_outline(self, session_id: str, path: str, outline: str, turn: int) -> None:
         return await upsert_file_outline(self._execute, session_id, path, outline, turn)
 
     async def get_file_outline(self, session_id: str, path: str) -> str | None:
         return await get_file_outline(self._execute, session_id, path)
+
+    async def evict_stale_file_cache(self, session_id: str, max_turns_age: int, max_entries: int) -> None:
+        return await evict_stale_file_cache(self._execute, session_id, max_turns_age, max_entries)
 
     # ── Checkpoint / Issues / Verifications (delegated) ────────────────
 

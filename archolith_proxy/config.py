@@ -145,6 +145,8 @@ class Settings(BaseSettings):
     # File content cache
     file_cache_enabled: bool = True
     file_cache_max_file_bytes: int = 500_000  # skip caching files larger than this
+    file_cache_ttl_turns: int = 50  # evict entries older than this many turns
+    file_cache_max_entries: int = 200  # evict oldest entries if over this count
 
     # Maximum active facts fetched for dedup, assembly, and recall.
     # Higher values improve dedup coverage in long sessions but increase

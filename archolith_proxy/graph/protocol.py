@@ -259,6 +259,20 @@ class GraphBackend(Protocol):
         """Delete a cached file entry. Returns True if a row was deleted."""
         ...
 
+    async def delete_file_outline(self, session_id: str, path: str) -> bool:
+        """Delete a file outline entry. Returns True if a row was deleted."""
+        ...
+
+    async def evict_stale_file_cache(
+        self, session_id: str, max_turns_age: int, max_entries: int
+    ) -> None:
+        """Evict stale file cache entries based on TTL and max entry count.
+
+        - Removes entries where last_updated_turn < (current_turn - max_turns_age)
+        - If still over max_entries, evicts oldest entries by last_updated_turn
+        """
+        ...
+
     # ── Checkpoint ─────────────────────────────────────────────────────
 
     async def upsert_checkpoint(
