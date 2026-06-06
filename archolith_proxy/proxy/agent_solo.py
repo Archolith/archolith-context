@@ -4,10 +4,10 @@ Delegates all compression logic to ``archolith_filter.agent_solo``.
 This module owns:
 - Per-session ``DedupeTracker`` lifecycle
 - Curator prefix cache (persist curator savings across agent-solo turns)
-- Config → RTK parameter mapping
+- Config → archolith_filter parameter mapping
 - Stats dict formatting for trace recording
 
-The RTK module owns HOW to compress; this module owns WHEN.
+The archolith_filter module owns HOW to compress; this module owns WHEN.
 """
 
 from __future__ import annotations
