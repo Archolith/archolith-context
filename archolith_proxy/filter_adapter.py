@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 from typing import Any, Callable
 
 import structlog
@@ -9,19 +10,28 @@ import structlog
 logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
-# Lazy loaders — each sentinel starts as False (unresolved), becomes a
+# Sentinel type — explicit 3-state for unresolved/callable/unavailable
+# ---------------------------------------------------------------------------
+
+class _LoadState(enum.Enum):
+    UNRESOLVED = enum.auto()
+
+_UNRESOLVED = _LoadState.UNRESOLVED
+
+# ---------------------------------------------------------------------------
+# Lazy loaders — each sentinel starts as UNRESOLVED, becomes a
 # callable on first successful import, or None if the package is absent.
 # ---------------------------------------------------------------------------
 
-_filter_output_fn: Callable[..., Any] | None | bool = False
-_shrink_args_fn: Callable[..., Any] | None | bool = False
-_shrink_results_fn: Callable[..., Any] | None | bool = False
+_filter_output_fn: Callable[..., Any] | None | _LoadState = _UNRESOLVED
+_shrink_args_fn: Callable[..., Any] | None | _LoadState = _UNRESOLVED
+_shrink_results_fn: Callable[..., Any] | None | _LoadState = _UNRESOLVED
 
 
 def _load_filter_output() -> Callable[..., Any] | None:
     """Lazy-load archolith_filter.filter_output and fail open if unavailable."""
     global _filter_output_fn
-    if _filter_output_fn is False:
+    if _filter_output_fn is _UNRESOLVED:
         try:
             from archolith_filter import filter_output as loaded
 
@@ -41,7 +51,7 @@ def _load_shrink_functions() -> tuple[Callable[..., Any] | None, Callable[..., A
     Returns (shrink_args_fn, shrink_results_fn).
     """
     global _shrink_args_fn, _shrink_results_fn
-    if _shrink_args_fn is False:
+    if _shrink_args_fn is _UNRESOLVED:
         try:
             from archolith_filter.shrink import (
                 shrink_oversized_tool_call_args_by_tokens,
