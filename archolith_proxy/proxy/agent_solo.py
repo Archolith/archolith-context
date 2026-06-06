@@ -19,6 +19,14 @@ import structlog
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "cache_curator_rewrite",
+    "clear_curator_cache",
+    "clear_session_hashes",
+    "_reset_agent_solo",
+    "prune_session_state",
+]
+
 
 # ---------------------------------------------------------------------------
 # Per-session DedupeTracker registry
@@ -186,6 +194,17 @@ def clear_session_hashes(session_id: str) -> None:
     """Clear dedup state for a session (e.g., on session end)."""
     _session_trackers.pop(session_id, None)
     _curator_caches.pop(session_id, None)
+
+
+def _reset_agent_solo() -> None:
+    """Reset all agent-solo state — used in tests.
+
+    Thread-safety: Single-threaded proxy event loop. This function is only
+    called during test setup/teardown, never during request handling.
+    """
+    global _session_trackers, _curator_caches
+    _session_trackers.clear()
+    _curator_caches.clear()
 
 
 def prune_session_state(active_session_ids: set[str]) -> int:

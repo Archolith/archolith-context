@@ -21,6 +21,11 @@ giving us access to the full non-streaming response before forwarding).
 
 from __future__ import annotations
 
+__all__ = [
+    "NativeInterceptResult",
+    "handle_native_read_intercept",
+]
+
 import json
 from dataclasses import dataclass, field
 from typing import Any

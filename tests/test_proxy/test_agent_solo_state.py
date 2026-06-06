@@ -4,14 +4,14 @@ from archolith_proxy.proxy.agent_solo import (
     _CuratorCache,
     _curator_caches,
     _session_trackers,
+    _reset_agent_solo,
     prune_session_state,
 )
 
 
 class TestAgentSoloStatePruning:
     def setup_method(self):
-        _session_trackers.clear()
-        _curator_caches.clear()
+        _reset_agent_solo()
 
     def test_prunes_only_inactive_sessions(self):
         _session_trackers["active"] = object()

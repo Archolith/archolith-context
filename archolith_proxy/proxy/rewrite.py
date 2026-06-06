@@ -8,9 +8,18 @@ Pure functions with no graph coupling. Handles:
 
 from __future__ import annotations
 
+import functools
 import re
 
 from archolith_proxy.filter_adapter import shrink_tail_tool_results
+
+__all__ = [
+    "strip_reasoning",
+    "strip_dsml_artifacts",
+    "estimate_input_tokens",
+    "rewrite_messages",
+    "inject_no_dsml_hint",
+]
 
 # Pattern for stripping model reasoning/thinking blocks before extraction
 _REASONING_PATTERN = re.compile(
@@ -77,6 +86,7 @@ def strip_dsml_artifacts(text: str) -> str:
     return text.rstrip()
 
 
+@functools.lru_cache(maxsize=1)
 def _get_encoder():
     """Return a cached tiktoken encoder."""
     import tiktoken

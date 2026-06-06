@@ -27,6 +27,16 @@ Requires:
 
 from __future__ import annotations
 
+__all__ = [
+    "RECALL_TOOL_NAME",
+    "inject_recall_tool",
+    "strip_recall_tool",
+    "find_recall_tool_call",
+    "strip_recall_from_response",
+    "build_tool_result_message",
+    "handle_recall_tool_call",
+]
+
 import json
 from typing import Any
 

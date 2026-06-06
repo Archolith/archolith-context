@@ -28,6 +28,16 @@ from archolith_proxy.filter_adapter import filter_request_body
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "RecallResult",
+    "execute_recall",
+    "build_resend_messages",
+    "resend_with_recall",
+    "detect_recall_trigger",
+    "inject_proxy_recall_into_body",
+    "handle_non_streaming_recall",
+]
+
 
 @dataclass
 class RecallResult:

@@ -6,6 +6,7 @@ import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 import structlog
@@ -336,9 +337,9 @@ def create_app() -> FastAPI:
     app.include_router(trace_router, dependencies=[Depends(require_admin_token)])
 
     # Dashboard static files
-    static_dir = os.path.join(os.path.dirname(__file__), "static")
-    if os.path.isdir(static_dir):
-        app.mount("/dashboard", StaticFiles(directory=static_dir, html=True), name="dashboard")
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.is_dir():
+        app.mount("/dashboard", StaticFiles(directory=str(static_dir), html=True), name="dashboard")
 
     @app.get("/", include_in_schema=False)
     async def root_redirect():

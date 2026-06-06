@@ -14,6 +14,17 @@ import re
 
 import structlog
 
+__all__ = [
+    "set_benchmark_session_id",
+    "get_benchmark_session_id",
+    "set_benchmark_passthrough_session_id",
+    "get_benchmark_passthrough_session_id",
+    "sanitize_system_prompt",
+    "compute_fingerprint",
+    "extract_harness_env",
+    "resolve_session_id",
+]
+
 from archolith_proxy.graph.backend import get_backend
 from archolith_proxy.trace.store import get_trace_store
 

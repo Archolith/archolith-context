@@ -6,12 +6,16 @@ a cached singleton — Settings() is constructed once per process.
 Runtime overrides from PATCH /admin/config are persisted to
 config_overrides.json and re-applied on startup, making them
 survive restarts.
+
+Config loading is synchronous and must complete before async request
+paths begin. The module-level lock guards the first-access race condition.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -29,6 +33,9 @@ _OVERRIDES_FILE = _PROJECT_ROOT / "config_overrides.json"
 
 # In-memory snapshot of base env values (before overrides applied)
 _base_values: dict[str, object] = {}
+
+# Lock guarding _settings and _base_values during initialization
+_settings_lock = threading.Lock()
 
 
 class Settings(BaseSettings):
@@ -119,7 +126,7 @@ class Settings(BaseSettings):
 
     # Graph backend selection
     graph_backend: str = "neo4j"  # "neo4j" or "ladybug"
-    ladybug_db_path: str = "./data/context.lbug"
+    ladybug_db_path: str = str(Path(__file__).parent.parent / "data" / "context.lbug")
     ladybug_max_concurrent: int = 8
 
     # Optional: promotion to long-term memory
@@ -290,19 +297,23 @@ def get_settings() -> Settings:
     """Return cached settings instance (singleton per process)."""
     global _settings, _base_values
     if _settings is None:
-        _settings = Settings()
-        # Snapshot base values before applying overrides
-        _base_values = {k: getattr(_settings, k) for k in _settings.model_fields}
-        # Apply persisted overrides from config_overrides.json
-        _apply_overrides(_settings)
+        with _settings_lock:
+            # Double-check pattern: another thread may have initialized while waiting
+            if _settings is None:
+                _settings = Settings()
+                # Snapshot base values before applying overrides
+                _base_values = {k: getattr(_settings, k) for k in _settings.model_fields}
+                # Apply persisted overrides from config_overrides.json
+                _apply_overrides(_settings)
     return _settings
 
 
 def reset_settings() -> None:
     """Reset the cached settings — used in tests."""
     global _settings, _base_values
-    _settings = None
-    _base_values = {}
+    with _settings_lock:
+        _settings = None
+        _base_values = {}
 
 
 def _read_overrides() -> dict[str, object]:

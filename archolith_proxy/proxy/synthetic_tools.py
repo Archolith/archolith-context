@@ -28,6 +28,14 @@ served transparently when the model calls native Read tools.
 
 from __future__ import annotations
 
+__all__ = [
+    "SyntheticResult",
+    "inject_synthetic_tools",
+    "strip_synthetic_tools",
+    "find_synthetic_tool_call",
+    "strip_synthetic_from_response",
+]
+
 import json
 from dataclasses import dataclass, field
 from typing import Any
