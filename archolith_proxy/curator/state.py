@@ -34,9 +34,11 @@ class CuratorSnapshot:
 
 
 # session_id → last successful snapshot
+# THREAD-SAFETY: safe under single asyncio event loop
 _cache: dict[str, CuratorSnapshot] = {}
 
 # session_id → last background pass briefing
+# THREAD-SAFETY: safe under single asyncio event loop
 _briefing_cache: dict[str, SessionBriefing] = {}
 
 
@@ -91,6 +93,8 @@ def clear_briefing(session_id: str) -> None:
 # Background pass task guard — one in-flight per session
 # ---------------------------------------------------------------------------
 
+# session_id → in-flight asyncio.Task
+# THREAD-SAFETY: safe under single asyncio event loop
 _bg_tasks: dict[str, asyncio.Task] = {}
 
 
@@ -105,7 +109,10 @@ def swap_background_task(session_id: str, task: asyncio.Task) -> None:
         old.cancel()
 
     _bg_tasks[session_id] = task
-    task.add_done_callback(lambda t: _bg_tasks.pop(session_id, None))
+    # Done callback only pops if the stored task IS the same object that completed.
+    # This prevents an older task's callback from popping a newer task when
+    # a new task is registered before the old one finishes.
+    task.add_done_callback(lambda t: _bg_tasks.pop(session_id, None) if _bg_tasks.get(session_id) is t else None)
 
 
 def cancel_background_task(session_id: str) -> None:
@@ -118,7 +125,7 @@ def cancel_background_task(session_id: str) -> None:
 def prune_session_state(active_session_ids: set[str]) -> int:
     """Drop curator state for sessions no longer present in the graph."""
     stale_ids = {
-        sid for sid in (*_cache.keys(), *_briefing_cache.keys(), *_bg_tasks.keys())
+        sid for sid in (*list(_cache.keys()), *list(_briefing_cache.keys()), *list(_bg_tasks.keys()))
         if sid not in active_session_ids
     }
     for session_id in stale_ids:
@@ -126,3 +133,11 @@ def prune_session_state(active_session_ids: set[str]) -> int:
         clear_briefing(session_id)
         cancel_background_task(session_id)
     return len(stale_ids)
+
+
+__all__ = [
+    "CuratorSnapshot",
+    "cache_snapshot", "get_snapshot", "clear_snapshot",
+    "cache_briefing", "get_briefing", "is_briefing_fresh", "clear_briefing",
+    "swap_background_task", "cancel_background_task", "prune_session_state",
+]

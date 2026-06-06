@@ -11,7 +11,6 @@ Registered via register_curation_mode(inline_pass_fn=run_assembler).
 from __future__ import annotations
 
 import asyncio
-import time
 
 import structlog
 from openai import AsyncOpenAI
@@ -210,3 +209,6 @@ async def run_assembler(
         retained_turn_numbers=result.retained_turn_numbers,
         curator_tool_log=[tc.to_dict() for tc in result.tool_log],
     )
+
+
+__all__ = ["run_assembler"]

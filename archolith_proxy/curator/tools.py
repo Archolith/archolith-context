@@ -454,6 +454,15 @@ async def prefetch_file(
         if not resolved:
             return f"(cannot resolve relative path: {path} — use absolute paths or ensure related files are already cached)"
 
+    # Validate final resolved path against allowed roots
+    if settings.prefetch_allowed_roots:
+        resolved = file_path.resolve()
+        if not any(
+            resolved == Path(root).resolve() or resolved.is_relative_to(Path(root).resolve())
+            for root in settings.prefetch_allowed_roots
+        ):
+            return f"(blocked: resolved path {resolved} is outside allowed workspace roots)"
+
     if not file_path.exists():
         return f"(file not found: {file_path})"
 
@@ -604,3 +613,5 @@ TOOL_HANDLERS: dict[str, callable] = {
     "prefetch_file": prefetch_file,
     "score_file_relevance": score_file_relevance,
 }
+
+__all__ = ["TOOL_HANDLERS"]

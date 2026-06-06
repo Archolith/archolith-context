@@ -329,3 +329,5 @@ ASSEMBLER_TOOLS: list[dict] = [
     t for t in ALL_CURATOR_TOOLS
     if t.get("function", {}).get("name") in _ASSEMBLER_TOOL_NAMES
 ]
+
+__all__ = ["ALL_CURATOR_TOOLS", "PREPPER_TOOLS", "ASSEMBLER_TOOLS"]

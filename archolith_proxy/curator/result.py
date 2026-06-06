@@ -44,6 +44,7 @@ class CuratorResult:
     context_text: str           # The formatted context block to inject
     curated_paths: set[str] = field(default_factory=set)   # Files the curator retrieved
     tool_calls_used: int = 0    # How many tool calls the loop made
+    iterations_used: int = 0    # How many iterations (LLM calls) the loop used
     estimated_tokens: int = 0   # tiktoken estimate of context_text
     # Turn numbers the curator selected to retain in the middle section.
     # None = keep all (curator did not call select_relevant_turns).
@@ -74,3 +75,6 @@ class CuratorFailure(BaseModel):
     iterations_completed: int = 0
     error_detail: str = ""
     timestamp: float = PydanticField(default_factory=time.time)
+
+
+__all__ = ["CuratorToolCall", "CuratorResult", "CuratorFailure"]
