@@ -18,7 +18,7 @@ class TestConfigValidation:
         s = Settings(_env_file=None)  # Ignore .env file for test isolation
         assert s.proxy_port == 9800
         assert s.cold_start_turns == 3
-        assert s.rtk_enabled is False
+        assert s.filter_enabled is False
         # upstream_base_url default is "https://api.deepseek.com/v1" but .env may override
 
     def test_invalid_upstream_url_raises(self):

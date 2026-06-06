@@ -160,7 +160,7 @@ async def resend_with_recall(
             "stream": False,
             "messages": current_messages,
         }
-        resend_payload = filter_request_body(resend_payload, enabled=settings.rtk_enabled)
+        resend_payload = filter_request_body(resend_payload, enabled=settings.filter_enabled)
         # Debug: log the message structure being sent for the resend
         msg_summary = []
         for m in current_messages:

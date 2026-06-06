@@ -294,7 +294,7 @@ async def handle_native_read_intercept(
         "messages": resend_messages,
     }
     resend_payload.pop("stream_options", None)
-    resend_payload = filter_request_body(resend_payload, enabled=settings.rtk_enabled)
+    resend_payload = filter_request_body(resend_payload, enabled=settings.filter_enabled)
     resend_body = json.dumps(resend_payload).encode("utf-8")
 
     # ── Step 4: Re-send to upstream ────────────────────────────────────────

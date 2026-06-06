@@ -299,7 +299,7 @@ async def _handle_streaming(
                                 **body_dict,
                                 "stream": False,
                                 "messages": resend_messages,
-                            }, enabled=settings.rtk_enabled)
+                            }, enabled=settings.filter_enabled)
                             resend_body = json.dumps(resend_payload).encode("utf-8")
 
                             try:
@@ -369,7 +369,7 @@ async def _handle_streaming(
                                         **body_dict,
                                         "stream": False,
                                         "messages": third_messages,
-                                    }, enabled=settings.rtk_enabled)
+                                    }, enabled=settings.filter_enabled)
                                     third_body = json.dumps(third_payload).encode("utf-8")
 
                                     try:

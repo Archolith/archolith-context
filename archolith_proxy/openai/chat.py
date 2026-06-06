@@ -434,10 +434,10 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         has_tools=bool(body.get("tools")),
     )
 
-    # ── RTK filtering ──
+    # ── Filtering ──
     from archolith_proxy.filter_adapter import filter_request_body, is_available as rtk_is_available
     _rtk_chars_before = sum(len(json.dumps(m)) for m in body.get("messages", []))
-    body = filter_request_body(body, enabled=settings.rtk_enabled)
+    body = filter_request_body(body, enabled=settings.filter_enabled)
     _rtk_chars_after = sum(len(json.dumps(m)) for m in body.get("messages", []))
     trace_builder.set_rtk_stats(
         available=rtk_is_available(),
