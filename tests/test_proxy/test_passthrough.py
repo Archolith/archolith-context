@@ -222,7 +222,7 @@ async def test_streaming_forwards_sse_format(client_with_mock, mock_upstream):
     )
 
     text = resp.text
-    lines = [l for l in text.split("\n") if l.startswith("data: ")]
+    lines = [line for line in text.split("\n") if line.startswith("data: ")]
 
     # Each data line should contain valid JSON (except [DONE])
     for line in lines:
