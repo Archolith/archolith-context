@@ -234,27 +234,27 @@ async def evict_stale_file_cache(execute, session_id: str, max_turns_age: int, m
         await execute(
             """
             MATCH (fc:FileContent {session_id: $sid})
-            ORDER BY fc.last_updated_turn ASC
-            LIMIT $limit
+            WITH fc ORDER BY fc.last_updated_turn ASC LIMIT $limit
             DELETE fc
             """,
             {"sid": session_id, "limit": to_evict},
         )
-        # Also evict corresponding outlines
-        outline_count_rows = await execute(
-            "MATCH (fo:FileOutline {session_id: $sid}) RETURN count(fo) AS count",
-            {"sid": session_id},
-        )
-        outline_count = outline_count_rows[0].get("count", 0) if outline_count_rows else 0
-        if outline_count > max_entries:
-            outline_to_evict = outline_count - max_entries
-            await execute(
-                """
-                MATCH (fo:FileOutline {session_id: $sid})
-                ORDER BY fo.last_updated_turn ASC
-                LIMIT $limit
-                DELETE fo
-                """,
-                {"sid": session_id, "limit": outline_to_evict},
-            )
         logger.debug("file_cache_lru_eviction", session_id=session_id, evicted_count=to_evict)
+
+    # Evict outlines independently
+    outline_count_rows = await execute(
+        "MATCH (fo:FileOutline {session_id: $sid}) RETURN count(fo) AS count",
+        {"sid": session_id},
+    )
+    outline_count = outline_count_rows[0].get("count", 0) if outline_count_rows else 0
+    if outline_count > max_entries:
+        outline_to_evict = outline_count - max_entries
+        await execute(
+            """
+            MATCH (fo:FileOutline {session_id: $sid})
+            WITH fo ORDER BY fo.last_updated_turn ASC LIMIT $limit
+            DELETE fo
+            """,
+            {"sid": session_id, "limit": outline_to_evict},
+        )
+        logger.debug("file_outline_lru_eviction", session_id=session_id, evicted_count=outline_to_evict)

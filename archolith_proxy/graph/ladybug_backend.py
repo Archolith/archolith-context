@@ -144,7 +144,8 @@ CREATE NODE TABLE IF NOT EXISTS FileOutline(
     session_id        STRING,
     path              STRING,
     outline           STRING,
-    last_updated_turn INT64
+    last_updated_turn INT64,
+    created_at        TIMESTAMP
 );
 
 CREATE NODE TABLE IF NOT EXISTS Checkpoint(
