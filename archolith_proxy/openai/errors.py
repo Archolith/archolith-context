@@ -4,6 +4,19 @@ from __future__ import annotations
 
 from fastapi.responses import JSONResponse
 
+__all__ = [
+    "OpenAIError",
+    "InvalidRequestError",
+    "AuthenticationError",
+    "UpstreamError",
+    "UpstreamTimeoutError",
+    "RateLimitError",
+    "NotFoundError",
+    "ContextLengthExceededError",
+    "InternalServerError",
+    "make_error_response",
+]
+
 
 class OpenAIError(Exception):
     """Base error that produces an OpenAI-formatted error response."""
@@ -73,6 +86,46 @@ class UpstreamTimeoutError(OpenAIError):
             error_type="upstream_timeout",
             code="timeout",
             status_code=504,
+        )
+
+
+class RateLimitError(OpenAIError):
+    def __init__(self, message: str = "Rate limit exceeded"):
+        super().__init__(
+            message=message,
+            error_type="rate_limit_error",
+            code="rate_limit_exceeded",
+            status_code=429,
+        )
+
+
+class NotFoundError(OpenAIError):
+    def __init__(self, message: str = "Resource not found"):
+        super().__init__(
+            message=message,
+            error_type="not_found_error",
+            code="not_found",
+            status_code=404,
+        )
+
+
+class ContextLengthExceededError(OpenAIError):
+    def __init__(self, message: str = "Context length exceeded"):
+        super().__init__(
+            message=message,
+            error_type="invalid_request_error",
+            code="context_length_exceeded",
+            status_code=400,
+        )
+
+
+class InternalServerError(OpenAIError):
+    def __init__(self, message: str = "Internal server error"):
+        super().__init__(
+            message=message,
+            error_type="server_error",
+            code="internal_error",
+            status_code=500,
         )
 
 
