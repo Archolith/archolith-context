@@ -1,5 +1,7 @@
 # Benchmarking & Tuning Workflow
 
+> **Note (2026-06-06):** The standalone benchmark scripts (`scripts/benchmark.py`, `scripts/compare_experiments.py`, `scripts/scenarios/`) have been migrated to the **archolith-bench** project (`../archolith-bench/`). The benchmark CLI is now `archolith-bench proxy|filter|stack|audit|report`. The scenario format, experiment arms, and tuning workflows described below remain architecturally accurate but the script paths reference the old in-repo location. Use `archolith-bench` for all benchmark runs going forward.
+
 ## What this system does
 
 The benchmark suite measures how well the archolith-proxy compresses conversation context while preserving the model's ability to recall facts from earlier turns. It sends the same multi-turn conversation through two paths:

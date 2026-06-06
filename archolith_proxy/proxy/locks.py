@@ -77,3 +77,8 @@ def cleanup_stale_locks(max_locks: int = 10000) -> int:
     for key in to_remove:
         del _session_locks[key]
     return len(to_remove)
+
+
+def _reset_locks() -> None:
+    """Clear all session locks (test isolation helper)."""
+    _session_locks.clear()

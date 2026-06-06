@@ -12,3 +12,47 @@
 ## Scope
 
 These instructions apply to the entire repository.
+
+## Build / Lint / Test Commands
+
+```bash
+# Install with dev dependencies
+pip install -e ".[dev]"
+
+# Run all tests
+pytest
+
+# Run single test file
+pytest tests/test_config.py
+
+# Run single test
+pytest tests/test_config.py::test_upstream_url_validation
+
+# Lint
+ruff check .
+
+# Auto-fix lint issues
+ruff check --fix .
+
+# Run the proxy (requires upstream API key)
+python -m archolith_proxy.main
+```
+
+## Code Style
+
+See `.agent/workflows/code_conventions.md` for full rules. Key points:
+
+- Python 3.11+, 4 spaces indent, 120 char max line length
+- Builtin generics (`list`, `dict`), `X | Y` unions, not `typing.List`/`Optional`
+- `%s`-style lazy formatting for loggers
+- snake_case for modules/functions, PascalCase for classes
+
+## Project-Specific Notes
+
+- **Naming**: Public product/repo is `archolith-context`; Python package is `archolith_proxy`; PyPI distribution is `archolith-proxy`. Older `cth.context-engine` naming still appears in some historical docs.
+- The proxy default config (`Settings` class) uses Neo4j as the graph backend and DeepSeek as upstream. The README and `.env.example` are optimized for the LadybugDB + OpenAI bootstrap path. Both realities are valid.
+- All peer integrations (archolith-filter, archolith-memory) are fail-open — when absent, the proxy operates in passthrough mode.
+- archolith-filter is not a `pyproject.toml` dependency. Install it alongside with `uv pip install -e ../archolith-filter`.
+- Session state is ephemeral (TTL default 24h). No durable storage without memory promotion enabled.
+- The proxy serves on port 9800 by default. Health check at `GET /health`.
+- Runtime config tunable via `GET/PATCH /admin/config`. Overrides persisted to `config_overrides.json`.

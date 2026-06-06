@@ -71,6 +71,14 @@ def get_benchmark_passthrough_session_id() -> str | None:
     return _benchmark_passthrough_session_id
 
 
+def _reset_sessions() -> None:
+    """Clear all session state (test isolation helper)."""
+    global _reconciled_sessions, _benchmark_session_id, _benchmark_passthrough_session_id
+    _reconciled_sessions.clear()
+    _benchmark_session_id = None
+    _benchmark_passthrough_session_id = None
+
+
 # ── Patterns to strip from system prompts before fingerprinting ───────────────
 _SANITIZE_PATTERNS = [
     re.compile(r"(?m)^.*current\s+(date|time|timestamp)\s*[:=].*$", re.IGNORECASE),
