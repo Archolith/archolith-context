@@ -82,7 +82,7 @@ import importlib  # noqa: E402
 import archolith_proxy.curator  # noqa: E402
 importlib.reload(archolith_proxy.curator)
 
-from archolith_proxy.curator import _extract_section, _build_briefing_from_result  # noqa: E402
+from archolith_proxy.curator.briefing import extract_section as _extract_section, build_briefing_from_result as _build_briefing_from_result  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
