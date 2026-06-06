@@ -12,31 +12,14 @@ from starlette.background import BackgroundTasks
 from starlette.responses import Response
 
 from archolith_proxy.config import get_settings
-from archolith_proxy.metrics import get_metrics, record_metric
-from archolith_proxy.models.dtos import TurnTrace
+from archolith_proxy.metrics import record_metric
 from archolith_proxy.openai.errors import make_error_response
 from archolith_proxy.openai.extraction import _run_extraction
-from archolith_proxy.openai.file_cache import (
-    _upsert_file_cache,
-    _extract_file_writes,
-    _invalidate_written_files,
-    _invalidate_file_cache,
-)
 from archolith_proxy.openai.helpers import (
-    _normalize_message_content,
-    _build_call_map,
-    _extract_response_text,
-    _collect_tool_call_records,
     _extract_finish_reason,
+    _extract_response_text,
 )
-from archolith_proxy.proxy.circuit_breaker import record_synthetic_success, record_synthetic_failure
 from archolith_proxy.proxy.live import broadcast_response, broadcast_recall
-from archolith_proxy.proxy.synthetic_tools import (
-    handle_non_streaming_synthetic,
-    strip_synthetic_from_response,
-    SyntheticResult,
-)
-from archolith_proxy.proxy.tool_injection import strip_recall_from_response, RECALL_TOOL_NAME, find_recall_tool_call
 from archolith_proxy.proxy.upstream import upstream_request_with_retry
 from archolith_proxy.trace.builder import TraceBuilder
 from archolith_proxy.trace.store import get_trace_store

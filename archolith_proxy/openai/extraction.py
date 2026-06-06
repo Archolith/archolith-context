@@ -19,7 +19,6 @@ from archolith_proxy.openai.helpers import (
     _extract_file_reads,
     _normalize_message_content,
 )
-from archolith_proxy.shared.text_utils import _build_outline  # noqa: F401 — re-exported for backward compat
 from archolith_proxy.proxy.live import broadcast_extraction, broadcast_session_event
 from archolith_proxy.proxy.rewrite import strip_reasoning
 from archolith_proxy.trace.builder import TraceBuilder
@@ -312,7 +311,6 @@ async def _run_extraction(
         if promotion_service is not None:
             try:
                 from archolith_proxy.memory.models import PromotionRecord
-                from archolith_proxy.memory.promotion import PromotionService
 
                 svc = promotion_service
                 settings = get_settings()

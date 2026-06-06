@@ -15,33 +15,25 @@ import time
 import httpx
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from archolith_proxy.config import get_settings
-from archolith_proxy.curator.pipeline import curate_context, run_background_pass
+from archolith_proxy.curator.pipeline import curate_context
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
-from archolith_proxy.metrics import get_metrics, record_metric
-from archolith_proxy.models.dtos import TurnTrace
+from archolith_proxy.metrics import record_metric
 from archolith_proxy.openai.schemas import ChatCompletionRequest
 from archolith_proxy.openai.helpers import (
-    _build_call_map,
-    _collect_recent_tool_results,
-    _collect_tool_call_records,
-    _extract_file_reads,
-    _extract_finish_reason,
+    _build_call_map,  # noqa: F401 — re-exported for test compatibility
+    _collect_tool_call_records,  # noqa: F401 — re-exported for test compatibility
     _extract_response_text,
-    _extract_tool_path,
     _extract_user_message,
-    _infer_file_touch_statuses,
-    _normalize_message_content,
-    _prefer_stronger_file_status,
+    _infer_file_touch_statuses,  # noqa: F401 — re-exported for test compatibility
 )
-from archolith_proxy.openai.extraction import _run_extraction, _build_outline
+from archolith_proxy.openai.extraction import _run_extraction  # noqa: F401 — re-exported for test compatibility
 from archolith_proxy.openai.file_cache import (
-    _extract_file_writes,
-    _invalidate_file_cache,
-    _invalidate_written_files,
-    _upsert_file_cache,
+    _invalidate_file_cache,  # noqa: F401 — re-exported for test compatibility
+    _invalidate_written_files,  # noqa: F401 — re-exported for test compatibility
+    _upsert_file_cache,  # noqa: F401 — re-exported for file cache pipeline
 )
 from archolith_proxy.openai.non_streaming import _handle_non_streaming
 from archolith_proxy.openai.streaming import _handle_streaming

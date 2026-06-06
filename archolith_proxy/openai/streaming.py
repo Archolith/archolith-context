@@ -4,38 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 
 import httpx
 import structlog
 from fastapi import Request
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTasks
 
 from archolith_proxy.config import get_settings
 from archolith_proxy.metrics import get_metrics, record_metric
-from archolith_proxy.models.dtos import TurnTrace
 from archolith_proxy.openai.extraction import _run_extraction
-from archolith_proxy.openai.helpers import _normalize_message_content, _build_call_map, _extract_tool_path
 from archolith_proxy.proxy.live import broadcast_recall, broadcast_response
 from archolith_proxy.proxy.streaming import (
     ResponseCapture,
-    StreamingToolCallAccumulator,
-    StreamingRecallResult,
     stream_with_capture,
     stream_with_recall_detection,
     _assemble_streaming_response,
-    _parse_sse_line,
-    _non_streaming_to_sse,
     yield_as_sse,
-)
-from archolith_proxy.proxy.tool_injection import (
-    RECALL_TOOL_NAME,
-    find_recall_tool_call,
-    handle_recall_tool_call,
-    build_tool_result_message,
-    strip_recall_from_response,
-    strip_recall_tool,
 )
 from archolith_proxy.proxy.upstream import RETRYABLE_STATUS_CODES, upstream_request_with_retry
 from archolith_proxy.filter_adapter import filter_request_body
