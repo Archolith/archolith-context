@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path

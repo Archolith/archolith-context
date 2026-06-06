@@ -22,7 +22,7 @@ __all__ = [
     "sanitize_system_prompt",
     "compute_fingerprint",
     "extract_harness_env",
-    "resolve_session_id",
+    "resolve_session",
 ]
 
 from archolith_proxy.graph.backend import get_backend
