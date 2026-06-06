@@ -42,8 +42,10 @@ __all__ = [
 # Maximum number of sessions to track before evicting oldest entries
 _MAX_CIRCUIT_SESSIONS = 10_000
 
-# Lock protecting _sessions from concurrent mutation
-_sessions_lock = threading.Lock()
+# Lock protecting _sessions from concurrent mutation.
+# Reentrant: several public accessors hold the lock and then call
+# get_circuit_state(), which re-acquires it on the same thread.
+_sessions_lock = threading.RLock()
 
 
 @dataclass
