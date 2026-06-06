@@ -9,6 +9,20 @@ import structlog
 from archolith_proxy.models.graph_nodes import FileStatus
 from archolith_proxy.filter_adapter import filter_single_tool_result
 
+__all__ = [
+    "_normalize_message_content",
+    "_build_call_map",
+    "_extract_tool_path",
+    "_prefer_stronger_file_status",
+    "_infer_file_touch_statuses",
+    "_extract_file_reads",
+    "_extract_user_message",
+    "_collect_recent_tool_results",
+    "_collect_tool_call_records",
+    "_extract_finish_reason",
+    "_extract_response_text",
+]
+
 logger = structlog.get_logger()
 
 
@@ -240,22 +254,23 @@ def _extract_file_reads(messages: list[dict]) -> list[dict]:
     call_map = _build_call_map(messages)
 
     # Debug: log message structure when call_map is empty to diagnose extraction misses
-    role_counts = {}
-    for m in messages:
-        r = m.get("role", "unknown")
-        role_counts[r] = role_counts.get(r, 0) + 1
-    tool_msg_ids = [m.get("tool_call_id", "") for m in messages if m.get("role") == "tool"]
-    sample_args = [(name, list(args.keys())) for name, args in list(call_map.values())[:4]]
-    logger.info(
-        "file_cache_extract_debug",
-        total_messages=len(messages),
-        role_counts=role_counts,
-        call_map_size=len(call_map),
-        tool_result_count=len(tool_msg_ids),
-        sample_call_names=list({v[0] for v in call_map.values()})[:8],
-        sample_tool_ids_match=[tid for tid in tool_msg_ids[:4] if tid in call_map],
-        sample_args=sample_args,
-    )
+    if logger.isEnabledFor(__import__('logging').DEBUG):
+        role_counts = {}
+        for m in messages:
+            r = m.get("role", "unknown")
+            role_counts[r] = role_counts.get(r, 0) + 1
+        tool_msg_ids = [m.get("tool_call_id", "") for m in messages if m.get("role") == "tool"]
+        sample_args = [(name, list(args.keys())) for name, args in list(call_map.values())[:4]]
+        logger.debug(
+            "file_cache_extract_debug",
+            total_messages=len(messages),
+            role_counts=role_counts,
+            call_map_size=len(call_map),
+            tool_result_count=len(tool_msg_ids),
+            sample_call_names=list({v[0] for v in call_map.values()})[:8],
+            sample_tool_ids_match=[tid for tid in tool_msg_ids[:4] if tid in call_map],
+            sample_args=sample_args,
+        )
 
     # Match tool results to calls
     results = []
