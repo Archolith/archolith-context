@@ -167,7 +167,7 @@ async def handle_native_read_intercept(
     from archolith_proxy.graph.backend import is_graph_ready
     from archolith_proxy.metrics import record_metric
     from archolith_proxy.proxy.upstream import upstream_request_with_retry
-    from archolith_proxy.rtk import filter_request_body
+    from archolith_proxy.filter_adapter import filter_request_body
 
     settings = get_settings()
 

@@ -7,7 +7,7 @@ import json
 import structlog
 
 from archolith_proxy.models.graph_nodes import FileStatus
-from archolith_proxy.rtk import filter_single_tool_result
+from archolith_proxy.filter_adapter import filter_single_tool_result
 
 logger = structlog.get_logger()
 

@@ -435,7 +435,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     )
 
     # ── RTK filtering ──
-    from archolith_proxy.rtk import filter_request_body, is_available as rtk_is_available
+    from archolith_proxy.filter_adapter import filter_request_body, is_available as rtk_is_available
     _rtk_chars_before = sum(len(json.dumps(m)) for m in body.get("messages", []))
     body = filter_request_body(body, enabled=settings.rtk_enabled)
     _rtk_chars_after = sum(len(json.dumps(m)) for m in body.get("messages", []))

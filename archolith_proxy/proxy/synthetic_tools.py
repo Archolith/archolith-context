@@ -420,7 +420,7 @@ async def handle_non_streaming_synthetic(
         synthetic_used flag, and tool_name.
     """
     from archolith_proxy.proxy.upstream import upstream_request_with_retry
-    from archolith_proxy.rtk import filter_request_body
+    from archolith_proxy.filter_adapter import filter_request_body
     from archolith_proxy.config import get_settings
 
     data = resp.json()

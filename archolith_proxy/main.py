@@ -159,7 +159,7 @@ async def lifespan(app: FastAPI):
     # agent-solo compression and RTK filtering silently no-op (the failure that
     # made the proxy look 100% passthrough on real sessions). Surface it now.
     if settings.rtk_enabled:
-        from archolith_proxy.rtk import is_available as _rtk_is_available
+        from archolith_proxy.filter_adapter import is_available as _rtk_is_available
         if _rtk_is_available():
             logger.info("rtk_available", note="archolith_filter loaded")
         else:

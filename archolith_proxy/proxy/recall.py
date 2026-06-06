@@ -24,7 +24,7 @@ import httpx
 import structlog
 
 from archolith_proxy.metrics import get_metrics, record_metric
-from archolith_proxy.rtk import filter_request_body
+from archolith_proxy.filter_adapter import filter_request_body
 
 logger = structlog.get_logger()
 

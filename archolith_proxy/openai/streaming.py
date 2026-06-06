@@ -38,7 +38,7 @@ from archolith_proxy.proxy.tool_injection import (
     strip_recall_tool,
 )
 from archolith_proxy.proxy.upstream import RETRYABLE_STATUS_CODES, upstream_request_with_retry
-from archolith_proxy.rtk import filter_request_body
+from archolith_proxy.filter_adapter import filter_request_body
 from archolith_proxy.trace.builder import TraceBuilder
 from archolith_proxy.trace.store import get_trace_store
 

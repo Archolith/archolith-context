@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from archolith_proxy.rtk import shrink_tail_tool_results
+from archolith_proxy.filter_adapter import shrink_tail_tool_results
 
 # Pattern for stripping model reasoning/thinking blocks before extraction
 _REASONING_PATTERN = re.compile(

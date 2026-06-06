@@ -55,8 +55,8 @@ async def test_rtk_enabled_filters_outbound_tool_messages(client_with_mock, monk
     def fake_filter_output(text: str, *, tool: str = "", **_: object) -> SimpleNamespace:
         return SimpleNamespace(output=f"filtered:{tool}:{text[:12]}")
 
-    monkeypatch.setattr("archolith_proxy.rtk._filter_output_fn", False)
-    monkeypatch.setattr("archolith_proxy.rtk._load_filter_output", lambda: fake_filter_output)
+    monkeypatch.setattr("archolith_proxy.filter_adapter._filter_output_fn", False)
+    monkeypatch.setattr("archolith_proxy.filter_adapter._load_filter_output", lambda: fake_filter_output)
 
     resp = await client.post(
         "/v1/chat/completions",
