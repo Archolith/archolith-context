@@ -80,18 +80,34 @@ async def test_update_config_float_preserved(client):
 
 
 @pytest.mark.asyncio
-async def test_retry_promotion_returns_501(client):
-    """POST /promotions/retry/{id} returns 501 Not Implemented."""
-    response = await client.post(
-        "/promotions/retry/nonexistent-id"
+async def test_retry_promotion_returns_501(client, app):
+    """POST /promotions/retry/{id} returns 501 when the promotion is found (stub)."""
+    from types import SimpleNamespace
+
+    # Inject a promotion service whose audit trail contains the requested id so
+    # the endpoint reaches the found-but-not-implemented (501) path rather than
+    # the 503 (no service) / 404 (not found) early returns.
+    app.state.promotion_service = SimpleNamespace(
+        audit_trail=[SimpleNamespace(promotion_id="known-id")]
     )
-    # Either 404 if not found, or 501 if found but not implemented
-    # For non-existent ID it should be 404
-    if response.status_code == 404:
-        data = response.json()
-        assert "not found" in data.get("error", "").lower()
-    else:
-        # If somehow the ID exists, it should still be 501
+    try:
+        response = await client.post("/promotions/retry/known-id")
         assert response.status_code == 501
         data = response.json()
         assert data.get("error") == "Not Implemented"
+    finally:
+        app.state.promotion_service = None
+
+
+@pytest.mark.asyncio
+async def test_retry_promotion_unknown_id_returns_404(client, app):
+    """POST /promotions/retry/{id} returns 404 when the id is not in the audit trail."""
+    from types import SimpleNamespace
+
+    app.state.promotion_service = SimpleNamespace(audit_trail=[])
+    try:
+        response = await client.post("/promotions/retry/nonexistent-id")
+        assert response.status_code == 404
+        assert "not found" in response.json().get("error", "").lower()
+    finally:
+        app.state.promotion_service = None
