@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from archolith_proxy.memory.models import EngineCapabilities, MemoryEngineConfig, PromotionRecord, PromotionResult
 
+from archolith_proxy.memory.models import PromotionOutcome
+
 
 class MemoryAdapterBase(abc.ABC):
     """Base class for all memory engine adapters.
@@ -54,6 +56,14 @@ class MemoryAdapterBase(abc.ABC):
 
     # --- Optional (sensible defaults) ---
 
+    async def close(self) -> None:
+        """Close any open connections or resources.
+
+        Default: no-op. Subclasses should override if they hold httpx.AsyncClient
+        or other resources that need cleanup.
+        """
+        pass
+
     async def promote_batch(self, promotions: list[PromotionRecord]) -> list[PromotionResult]:
         """Promote a batch of facts. Default: sequential promote_fact calls."""
         return [await self.promote_fact(p) for p in promotions]
@@ -75,7 +85,7 @@ class MemoryAdapterBase(abc.ABC):
     async def update_promoted_memory(self, remote_id: str, promotion: PromotionRecord) -> PromotionResult:
         """Update a previously promoted memory. Only if capabilities().update_promoted."""
 
-        from archolith_proxy.memory.models import PromotionResult, PromotionOutcome
+        from archolith_proxy.memory.models import PromotionResult
 
         return PromotionResult(
             promotion_id=promotion.promotion_id,
@@ -87,7 +97,7 @@ class MemoryAdapterBase(abc.ABC):
     async def delete_promoted_memory(self, remote_id: str) -> PromotionResult:
         """Delete a previously promoted memory. Only if capabilities().delete_promoted."""
 
-        from archolith_proxy.memory.models import PromotionOutcome, PromotionResult
+        from archolith_proxy.memory.models import PromotionResult
 
         return PromotionResult(
             engine_id=self.config.id,

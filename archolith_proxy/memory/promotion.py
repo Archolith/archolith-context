@@ -9,20 +9,16 @@ status for observability.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
 
 import structlog
 
+from archolith_proxy.memory.adapters.base import MemoryAdapterBase
 from archolith_proxy.memory.models import (
-    EngineCapabilities,
     PromotionOutcome,
     PromotionRecord,
     PromotionResult,
 )
 from archolith_proxy.memory.registry import MemoryEngineRegistry, get_registry
-
-if TYPE_CHECKING:
-    pass
 
 logger = structlog.get_logger()
 
@@ -255,7 +251,7 @@ class PromotionService:
 
     # --- Internal ---
 
-    def _resolve_adapter(self, engine_id: str | None = None):
+    def _resolve_adapter(self, engine_id: str | None = None) -> "MemoryAdapterBase | None":
         """Resolve adapter by explicit id or default."""
         if engine_id is not None:
             return self.registry.get_adapter(engine_id)
