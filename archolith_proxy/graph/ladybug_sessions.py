@@ -39,36 +39,24 @@ async def find_session_by_fingerprint(execute, fingerprint: str) -> dict | None:
 
 
 async def find_or_create_by_fingerprint(execute, fingerprint: str) -> tuple[dict, bool]:
-    """Atomically find or create a session by fingerprint.
+    """Find an existing session by fingerprint or create a new one.
 
-    Uses MERGE to avoid lookup-then-create races when two concurrent
-    requests arrive with the same fingerprint. Returns (session_data, is_new).
+    Returns (session_data, is_new). NOTE: a true fingerprint-keyed atomic MERGE
+    is not possible in LadybugDB/kuzu because MERGE requires the primary key
+    (session_id) in the node pattern, and we key on fingerprint. This
+    lookup-then-create is safe under the proxy's single asyncio event loop (no
+    thread preemption between the lookup and the create); the post-create
+    re-query handles the rare failure path.
     """
+    existing = await find_session_by_fingerprint(execute, fingerprint)
+    if existing:
+        return existing, False
     session_id = uuid4().hex[:16]
-
-    # MERGE (Cypher) is atomic in LadybugDB:
-    # - If session with fingerprint exists, match it and update last_active
-    # - If not, create it with new session_id
-    rows = await execute(
-        """
-        MERGE (s:Session {fingerprint: $fingerprint})
-        ON CREATE SET
-            s.session_id = $session_id,
-            s.goal = NULL,
-            s.created_at = current_timestamp(),
-            s.last_active = current_timestamp(),
-            s.ttl_hours = 24,
-            s.status = 'active',
-            s.turn_number = 0
-        ON MATCH SET
-            s.last_active = current_timestamp()
-        RETURN s, CASE WHEN s.created_at = current_timestamp() THEN true ELSE false END AS is_new
-        """,
-        {"fingerprint": fingerprint, "session_id": session_id},
-    )
-    if rows:
-        return rows[0]["s"], rows[0].get("is_new", False)
-    return {}, True
+    created = await create_session(execute, session_id, fingerprint=fingerprint)
+    if not created:
+        existing = await find_session_by_fingerprint(execute, fingerprint)
+        return existing or {}, False
+    return created, True
 
 
 async def touch_session(execute, session_id: str) -> None:

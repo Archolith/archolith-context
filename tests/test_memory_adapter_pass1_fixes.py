@@ -15,9 +15,13 @@ from archolith_proxy.memory.models import MemoryEngineConfig, PromotionOutcome
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_generic_http_healthcheck_401_unhealthy():
-    """healthcheck() returns False for 401 Unauthorized."""
+def _http_adapter_returning(status_code: int) -> GenericHttpAdapter:
+    """Build a generic_http adapter whose client returns ``status_code`` for any GET.
+
+    Uses a real httpx.AsyncClient over MockTransport so the adapter's
+    ``await client.get(path)`` works correctly (the previous synchronous mock
+    raised on await and made every healthcheck return False).
+    """
     config = MemoryEngineConfig(
         id="test-http",
         type="generic_http",
@@ -27,74 +31,35 @@ async def test_generic_http_healthcheck_401_unhealthy():
     )
     adapter = GenericHttpAdapter(config)
 
-    # Mock client to return 401
-    def mock_get(path):
-        class MockResp:
-            status_code = 401
-        return MockResp()
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"ok": True})
 
-    adapter._get_client = lambda: type('MockClient', (), {
-        'get': lambda self, path: mock_get(path),
-        'is_closed': False,
-        'aclose': lambda self: None,
-    })()
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://localhost:9999"
+    )
+    adapter._get_client = lambda: client
+    return adapter
 
-    result = await adapter.healthcheck()
-    assert result is False
+
+@pytest.mark.asyncio
+async def test_generic_http_healthcheck_401_unhealthy():
+    """healthcheck() returns False for 401 Unauthorized."""
+    adapter = _http_adapter_returning(401)
+    assert await adapter.healthcheck() is False
 
 
 @pytest.mark.asyncio
 async def test_generic_http_healthcheck_429_unhealthy():
     """healthcheck() returns False for 429 Too Many Requests."""
-    config = MemoryEngineConfig(
-        id="test-http",
-        type="generic_http",
-        base_url="http://localhost:9999",
-        enabled=True,
-        priority=10,
-    )
-    adapter = GenericHttpAdapter(config)
-
-    def mock_get(path):
-        class MockResp:
-            status_code = 429
-        return MockResp()
-
-    adapter._get_client = lambda: type('MockClient', (), {
-        'get': lambda self, path: mock_get(path),
-        'is_closed': False,
-        'aclose': lambda self: None,
-    })()
-
-    result = await adapter.healthcheck()
-    assert result is False
+    adapter = _http_adapter_returning(429)
+    assert await adapter.healthcheck() is False
 
 
 @pytest.mark.asyncio
 async def test_generic_http_healthcheck_200_healthy():
     """healthcheck() returns True for 200 OK."""
-    config = MemoryEngineConfig(
-        id="test-http",
-        type="generic_http",
-        base_url="http://localhost:9999",
-        enabled=True,
-        priority=10,
-    )
-    adapter = GenericHttpAdapter(config)
-
-    def mock_get(path):
-        class MockResp:
-            status_code = 200
-        return MockResp()
-
-    adapter._get_client = lambda: type('MockClient', (), {
-        'get': lambda self, path: mock_get(path),
-        'is_closed': False,
-        'aclose': lambda self: None,
-    })()
-
-    result = await adapter.healthcheck()
-    assert result is True
+    adapter = _http_adapter_returning(200)
+    assert await adapter.healthcheck() is True
 
 
 # ---------------------------------------------------------------------------
