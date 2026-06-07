@@ -29,6 +29,9 @@ logs/
 # Pytest
 .pytest_cache/
 
+# Linter cache
+.ruff_cache/
+
 # Coverage
 htmlcov/
 .coverage
@@ -60,6 +63,7 @@ audit_results.json
 # Runtime state files
 .bench_state.json
 .scripted_bench_state.json
+config_overrides.json
 
 # Harness task/worktree artifacts
 TASK-*.md
