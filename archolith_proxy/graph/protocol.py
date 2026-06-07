@@ -7,7 +7,11 @@ this interface, enabling pluggable backends (Neo4j, LadybugDB, etc.).
 
 from __future__ import annotations
 
+__all__ = ["GraphBackend"]
+
 from typing import Protocol, runtime_checkable
+
+from archolith_proxy.models.graph_nodes import FactType
 
 
 @runtime_checkable
@@ -41,6 +45,16 @@ class GraphBackend(Protocol):
 
     def is_ready(self) -> bool:
         """Return True if the backend is connected and ready."""
+        ...
+
+    def supported_methods(self) -> set[str]:
+        """Return set of supported method names.
+
+        Methods not in this set will raise NotImplementedError.
+        Allows callers to check capability before calling. Example:
+        if 'bulk_create_touches' in backend.supported_methods():
+            ...
+        """
         ...
 
     # ── Session CRUD ───────────────────────────────────────────────────
@@ -97,7 +111,7 @@ class GraphBackend(Protocol):
         self,
         session_id: str,
         content: str,
-        fact_type: str,
+        fact_type: str | FactType,
         source_turn: int,
         confidence: float = 0.5,
         embedding: list[float] | None = None,
@@ -257,6 +271,20 @@ class GraphBackend(Protocol):
 
     async def delete_file_content(self, session_id: str, path: str) -> bool:
         """Delete a cached file entry. Returns True if a row was deleted."""
+        ...
+
+    async def delete_file_outline(self, session_id: str, path: str) -> bool:
+        """Delete a file outline entry. Returns True if a row was deleted."""
+        ...
+
+    async def evict_stale_file_cache(
+        self, session_id: str, max_turns_age: int, max_entries: int
+    ) -> None:
+        """Evict stale file cache entries based on TTL and max entry count.
+
+        - Removes entries where last_updated_turn < (current_turn - max_turns_age)
+        - If still over max_entries, evicts oldest entries by last_updated_turn
+        """
         ...
 
     # ── Checkpoint ─────────────────────────────────────────────────────

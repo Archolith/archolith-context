@@ -10,7 +10,16 @@ from archolith_proxy.proxy.locks import (
     wait_for_prior_extraction,
     cleanup_session_lock,
     cleanup_stale_locks,
+    _reset_locks,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_locks_before_test():
+    """Reset locks before each test for isolation."""
+    _reset_locks()
+    yield
+    _reset_locks()
 
 
 class TestGetSessionLock:

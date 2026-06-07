@@ -6,6 +6,8 @@ type, or default target. Adapters are instantiated lazily on first access.
 
 from __future__ import annotations
 
+__all__ = ["MemoryEngineRegistry", "get_registry", "reset_registry"]
+
 import importlib
 import structlog
 from typing import TYPE_CHECKING
@@ -105,6 +107,10 @@ class MemoryEngineRegistry:
         if self._default_engine_id is None:
             return None
         return self.get_adapter(self._default_engine_id)
+
+    def get_all_adapters(self) -> list[MemoryAdapterBase]:
+        """Return all instantiated adapters (excluding disabled engines)."""
+        return list(self._adapters.values())
 
     def list_engines(self) -> list[dict]:
         """Return summary info for all registered engines."""
@@ -213,11 +219,20 @@ def _discover_memory_plugins() -> None:
             logger.exception("memory_plugin_load_failed", entry_point=ep.name)
 
 
-# Auto-discover memory plugins at import time.
-# Intentionally runs at module load rather than inside get_registry() so that
-# _ADAPTER_TYPES is fully populated before any MemoryEngineRegistry instance
-# resolves adapter modules — regardless of call order.
-_discover_memory_plugins()
+_plugins_initialized = False
+
+
+def init_plugins() -> None:
+    """Initialize memory adapter plugins from entry points.
+
+    Call this once during app startup, before registering engines.
+    Populates _ADAPTER_TYPES with any discovered plugins.
+    """
+    global _plugins_initialized
+    if _plugins_initialized:
+        return
+    _discover_memory_plugins()
+    _plugins_initialized = True
 
 
 def register_memory_adapter(adapter_type: str, module_path: str) -> None:

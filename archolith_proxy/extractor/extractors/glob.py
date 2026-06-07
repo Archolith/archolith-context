@@ -6,6 +6,8 @@ import httpx
 
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord, ToolExtractor
 
+__all__ = ["GlobExtractor"]
+
 _MAX_DISPLAY_PATHS = 8
 
 

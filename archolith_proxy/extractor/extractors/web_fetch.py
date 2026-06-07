@@ -14,6 +14,8 @@ from archolith_proxy.config import get_settings
 
 logger = structlog.get_logger()
 
+__all__ = ["WebFetchExtractor"]
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 

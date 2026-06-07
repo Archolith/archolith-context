@@ -1,7 +1,13 @@
-"""Stable public API surface for the archolith context engine.
+"""Re-export public API from extractor and memory registries.
 
-Import from here rather than from internal submodules.
-This module is the intended package boundary if proxy and engine are ever split.
+This module bundles key types and factory functions from the extractor and
+memory backends for convenient import. It serves as a stable boundary between
+the proxy core and the backend components.
+
+Exports:
+- Extractor types: PartialExtractionResult, ToolCallRecord, ToolExtractor
+- Extractor client: extract_facts_per_tool
+- Registry access: get_registry, register_extractor, get_memory_registry, register_memory_adapter
 """
 
 from archolith_proxy.extractor.base import (

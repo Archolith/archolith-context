@@ -1,5 +1,6 @@
 """Pydantic models matching OpenAI API request/response shapes."""
 
+# Required for forward references in ChatMessage.tool_calls (ToolCall) and ToolCall.function (ToolCallFunction)
 from __future__ import annotations
 
 import time
@@ -8,6 +9,23 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+__all__ = [
+    "ChatMessage",
+    "ToolCallFunction",
+    "ToolCall",
+    "ToolFunction",
+    "ToolDefinition",
+    "ChatCompletionRequest",
+    "ChatMessageResponse",
+    "Choice",
+    "Usage",
+    "ChatCompletionResponse",
+    "DeltaMessage",
+    "ChunkChoice",
+    "ChatCompletionChunk",
+    "ModelObject",
+    "ModelListResponse",
+]
 
 # --- Request Models ---
 
@@ -20,6 +38,7 @@ class ChatMessage(BaseModel):
     name: str | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+    refusal: str | None = None
 
 
 class ToolCallFunction(BaseModel):
@@ -66,6 +85,9 @@ class ChatCompletionRequest(BaseModel):
     top_logprobs: int | None = None
     n: int = 1
     user: str | None = None
+    service_chat_id: str | None = None
+    store: bool | None = None
+    metadata: dict[str, Any] | None = None
 
     model_config = {"extra": "allow"}
 

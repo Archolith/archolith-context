@@ -8,21 +8,19 @@ status for observability.
 
 from __future__ import annotations
 
+__all__ = ["PromotionService"]
+
 import time
-from typing import TYPE_CHECKING
 
 import structlog
 
+from archolith_proxy.memory.adapters.base import MemoryAdapterBase
 from archolith_proxy.memory.models import (
-    EngineCapabilities,
     PromotionOutcome,
     PromotionRecord,
     PromotionResult,
 )
 from archolith_proxy.memory.registry import MemoryEngineRegistry, get_registry
-
-if TYPE_CHECKING:
-    pass
 
 logger = structlog.get_logger()
 
@@ -196,14 +194,17 @@ class PromotionService:
         *,
         dry_run: bool = False,
     ) -> list[PromotionResult]:
-        """Promote a batch of facts. Routes to adapter's promote_batch if supported."""
+        """Promote a batch of facts. Routes to adapter's promote_batch if supported.
+
+        Records stats and audit for all outcomes: success, skipped, failed.
+        """
         if not promotions:
             return []
 
         adapter = self._resolve_adapter(engine_id)
         if adapter is None:
             # All skipped
-            return [
+            results = [
                 PromotionResult(
                     promotion_id=p.promotion_id,
                     engine_id=engine_id or "none",
@@ -212,9 +213,12 @@ class PromotionService:
                 )
                 for p in promotions
             ]
+            for r in results:
+                self._record(r)
+            return results
 
         if dry_run:
-            return [
+            results = [
                 PromotionResult(
                     promotion_id=p.promotion_id,
                     engine_id=adapter.config.id,
@@ -223,6 +227,9 @@ class PromotionService:
                 )
                 for p in promotions
             ]
+            for r in results:
+                self._record(r)
+            return results
 
         # Use adapter batch method
         records = [p.with_auto_dedupe() for p in promotions]
@@ -233,7 +240,7 @@ class PromotionService:
             return results
         except Exception as exc:
             logger.exception("batch_promotion_failed", engine_id=adapter.config.id)
-            return [
+            results = [
                 PromotionResult(
                     promotion_id=p.promotion_id,
                     engine_id=adapter.config.id,
@@ -242,6 +249,9 @@ class PromotionService:
                 )
                 for p in promotions
             ]
+            for r in results:
+                self._record(r)
+            return results
 
     # --- Observability ---
 
@@ -255,7 +265,7 @@ class PromotionService:
 
     # --- Internal ---
 
-    def _resolve_adapter(self, engine_id: str | None = None):
+    def _resolve_adapter(self, engine_id: str | None = None) -> "MemoryAdapterBase | None":
         """Resolve adapter by explicit id or default."""
         if engine_id is not None:
             return self.registry.get_adapter(engine_id)

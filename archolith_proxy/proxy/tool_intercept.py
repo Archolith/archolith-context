@@ -21,6 +21,11 @@ giving us access to the full non-streaming response before forwarding).
 
 from __future__ import annotations
 
+__all__ = [
+    "NativeInterceptResult",
+    "handle_native_read_intercept",
+]
+
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -167,7 +172,7 @@ async def handle_native_read_intercept(
     from archolith_proxy.graph.backend import is_graph_ready
     from archolith_proxy.metrics import record_metric
     from archolith_proxy.proxy.upstream import upstream_request_with_retry
-    from archolith_proxy.rtk import filter_request_body
+    from archolith_proxy.filter_adapter import filter_request_body
 
     settings = get_settings()
 
@@ -294,7 +299,7 @@ async def handle_native_read_intercept(
         "messages": resend_messages,
     }
     resend_payload.pop("stream_options", None)
-    resend_payload = filter_request_body(resend_payload, enabled=settings.rtk_enabled)
+    resend_payload = filter_request_body(resend_payload, enabled=settings.filter_enabled)
     resend_body = json.dumps(resend_payload).encode("utf-8")
 
     # ── Step 4: Re-send to upstream ────────────────────────────────────────

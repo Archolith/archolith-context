@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from archolith_proxy.config import get_settings
-
 # Re-export _execute type — callers pass the ladybug backend's _execute
 
 
@@ -41,6 +39,15 @@ async def find_session_by_fingerprint(execute, fingerprint: str) -> dict | None:
 
 
 async def find_or_create_by_fingerprint(execute, fingerprint: str) -> tuple[dict, bool]:
+    """Find an existing session by fingerprint or create a new one.
+
+    Returns (session_data, is_new). NOTE: a true fingerprint-keyed atomic MERGE
+    is not possible in LadybugDB/kuzu because MERGE requires the primary key
+    (session_id) in the node pattern, and we key on fingerprint. This
+    lookup-then-create is safe under the proxy's single asyncio event loop (no
+    thread preemption between the lookup and the create); the post-create
+    re-query handles the rare failure path.
+    """
     existing = await find_session_by_fingerprint(execute, fingerprint)
     if existing:
         return existing, False

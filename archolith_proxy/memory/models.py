@@ -6,6 +6,14 @@ write API. No vendor-specific schemas leak into the promotion pipeline.
 
 from __future__ import annotations
 
+__all__ = [
+    "PromotionOutcome",
+    "PromotionRecord",
+    "PromotionResult",
+    "EngineCapabilities",
+    "MemoryEngineConfig",
+]
+
 import hashlib
 import time
 import uuid
@@ -21,7 +29,6 @@ class PromotionOutcome(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
     SKIPPED = "skipped"  # Policy filtered out or dedupe hit
-    RETRY = "retry"  # Transient failure, eligible for retry
 
 
 class PromotionRecord(BaseModel):
@@ -39,7 +46,7 @@ class PromotionRecord(BaseModel):
     # Content
     fact_type: str = "observation"  # Matches FactType values
     content: str = ""
-    confidence: float = 0.0
+    confidence: float | None = None
     session_goal: str | None = None
 
     # Provenance

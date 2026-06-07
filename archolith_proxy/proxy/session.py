@@ -14,6 +14,17 @@ import re
 
 import structlog
 
+__all__ = [
+    "set_benchmark_session_id",
+    "get_benchmark_session_id",
+    "set_benchmark_passthrough_session_id",
+    "get_benchmark_passthrough_session_id",
+    "sanitize_system_prompt",
+    "compute_fingerprint",
+    "extract_harness_env",
+    "resolve_session",
+]
+
 from archolith_proxy.graph.backend import get_backend
 from archolith_proxy.trace.store import get_trace_store
 
@@ -69,6 +80,14 @@ def clear_benchmark_passthrough_session_id() -> None:
 def get_benchmark_passthrough_session_id() -> str | None:
     """Return the current passthrough benchmark override, or None."""
     return _benchmark_passthrough_session_id
+
+
+def _reset_sessions() -> None:
+    """Clear all session state (test isolation helper)."""
+    global _reconciled_sessions, _benchmark_session_id, _benchmark_passthrough_session_id
+    _reconciled_sessions.clear()
+    _benchmark_session_id = None
+    _benchmark_passthrough_session_id = None
 
 
 # ── Patterns to strip from system prompts before fingerprinting ───────────────

@@ -47,6 +47,19 @@ RETURN s
     return results[0]["s"] if results else None
 
 
+async def find_by_fingerprint(fingerprint: str) -> dict | None:
+    """Look up a session by fingerprint.
+
+    Returns the session node if found, None otherwise.
+    """
+    cypher = f"""
+MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{fingerprint: $fingerprint}})
+RETURN s
+"""
+    results = await run_query(cypher, {"fingerprint": fingerprint})
+    return results[0]["s"] if results else None
+
+
 async def find_or_create_by_fingerprint(
     fingerprint: str,
 ) -> tuple[dict, bool]:

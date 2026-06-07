@@ -11,12 +11,11 @@ Registered via register_curation_mode(inline_pass_fn=run_assembler).
 from __future__ import annotations
 
 import asyncio
-import time
 
 import structlog
 from openai import AsyncOpenAI
 
-from archolith_proxy.config import get_settings
+from archolith_proxy.config import get_settings  # noqa: F401 - used in tests for mocking
 from archolith_proxy.curator.briefing import SessionBriefing, format_briefing_for_prompt
 from archolith_proxy.curator.loop import _run_curator_native
 from archolith_proxy.curator.prompts import build_curator_user_prompt
@@ -122,7 +121,7 @@ async def run_assembler(
         return None
 
     # Create assembler-specific client if the model differs from the caller's model
-    if asm_base_url != client._base_url or asm_api_key != client.api_key:
+    if asm_base_url != str(client.base_url).rstrip("/") or asm_api_key != client.api_key:
         client = AsyncOpenAI(base_url=asm_base_url, api_key=asm_api_key)
 
     # Format briefing for assembler prompt
@@ -210,3 +209,6 @@ async def run_assembler(
         retained_turn_numbers=result.retained_turn_numbers,
         curator_tool_log=[tc.to_dict() for tc in result.tool_log],
     )
+
+
+__all__ = ["run_assembler"]

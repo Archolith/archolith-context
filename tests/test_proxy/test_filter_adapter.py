@@ -1,4 +1,4 @@
-"""Proxy RTK integration tests."""
+"""Proxy filter adapter integration tests."""
 
 import json
 from types import SimpleNamespace
@@ -47,16 +47,16 @@ async def client_with_mock(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rtk_enabled_filters_outbound_tool_messages(client_with_mock, monkeypatch):
+async def test_filter_enabled_filters_outbound_tool_messages(client_with_mock, monkeypatch):
     client, captured = client_with_mock
-    monkeypatch.setenv("RTK_ENABLED", "true")
+    monkeypatch.setenv("FILTER_ENABLED", "true")
     reset_settings()
 
     def fake_filter_output(text: str, *, tool: str = "", **_: object) -> SimpleNamespace:
         return SimpleNamespace(output=f"filtered:{tool}:{text[:12]}")
 
-    monkeypatch.setattr("archolith_proxy.rtk._filter_output_fn", False)
-    monkeypatch.setattr("archolith_proxy.rtk._load_filter_output", lambda: fake_filter_output)
+    monkeypatch.setattr("archolith_proxy.filter_adapter._filter_output_fn", False)
+    monkeypatch.setattr("archolith_proxy.filter_adapter._load_filter_output", lambda: fake_filter_output)
 
     resp = await client.post(
         "/v1/chat/completions",
@@ -75,9 +75,9 @@ async def test_rtk_enabled_filters_outbound_tool_messages(client_with_mock, monk
 
 
 @pytest.mark.asyncio
-async def test_rtk_disabled_leaves_tool_messages_unchanged(client_with_mock, monkeypatch):
+async def test_filter_disabled_leaves_tool_messages_unchanged(client_with_mock, monkeypatch):
     client, captured = client_with_mock
-    monkeypatch.setenv("RTK_ENABLED", "false")
+    monkeypatch.setenv("FILTER_ENABLED", "false")
     reset_settings()
 
     resp = await client.post(

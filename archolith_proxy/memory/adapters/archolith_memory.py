@@ -6,6 +6,8 @@ same backend used by the memory MCP tools (add_memory, recall_memories, etc.).
 
 from __future__ import annotations
 
+__all__ = ["Adapter"]
+
 from typing import TYPE_CHECKING
 
 import httpx
@@ -75,6 +77,12 @@ class Adapter(MemoryAdapterBase):
             delete_promoted=False,
             healthcheck=True,
         )
+
+    async def close(self) -> None:
+        """Close the httpx client if open."""
+        client = getattr(self, "_client", None)
+        if client is not None and not client.is_closed:
+            await client.aclose()
 
     async def healthcheck(self) -> bool:
         """Check if the memory API is reachable."""
@@ -183,3 +191,4 @@ class Adapter(MemoryAdapterBase):
                 "dedupe_key": promotion.dedupe_key,
             },
         }
+

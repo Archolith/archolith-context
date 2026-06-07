@@ -428,9 +428,10 @@ class TestBasicMemoryAdapter:
         assert "[source] archolith-proxy promotion" in md
 
     def test_slugify(self):
-        from archolith_proxy.memory.adapters.basic_memory import Adapter
-        assert Adapter._slugify("Hello World! @#") == "hello-world"
-        assert Adapter._slugify("a" * 100) == "a" * 60
+        # _slugify was extracted to shared.text_utils.slugify (single source of truth).
+        from archolith_proxy.shared.text_utils import slugify
+        assert slugify("Hello World! @#") == "hello-world"
+        assert slugify("a" * 100) == "a" * 60
 
     @pytest.mark.asyncio
     async def test_validate_config_no_base_url(self):

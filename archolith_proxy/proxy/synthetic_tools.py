@@ -28,6 +28,14 @@ served transparently when the model calls native Read tools.
 
 from __future__ import annotations
 
+__all__ = [
+    "SyntheticResult",
+    "inject_synthetic_tools",
+    "strip_synthetic_tools",
+    "find_synthetic_tool_call",
+    "strip_synthetic_from_response",
+]
+
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -420,7 +428,7 @@ async def handle_non_streaming_synthetic(
         synthetic_used flag, and tool_name.
     """
     from archolith_proxy.proxy.upstream import upstream_request_with_retry
-    from archolith_proxy.rtk import filter_request_body
+    from archolith_proxy.filter_adapter import filter_request_body
     from archolith_proxy.config import get_settings
 
     data = resp.json()
@@ -490,7 +498,7 @@ async def handle_non_streaming_synthetic(
         "messages": resend_messages,
     }
     resend_payload.pop("stream_options", None)  # stream_options is only valid with stream=true
-    resend_payload = filter_request_body(resend_payload, enabled=settings.rtk_enabled)
+    resend_payload = filter_request_body(resend_payload, enabled=settings.filter_enabled)
     resend_body = json.dumps(resend_payload).encode("utf-8")
 
     try:

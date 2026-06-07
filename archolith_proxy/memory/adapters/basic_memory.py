@@ -11,6 +11,8 @@ making them immediately visible in Obsidian or any markdown editor.
 
 from __future__ import annotations
 
+__all__ = ["Adapter"]
+
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,6 +26,7 @@ from archolith_proxy.memory.models import (
     PromotionOutcome,
     PromotionResult,
 )
+from archolith_proxy.shared.text_utils import slugify
 
 if TYPE_CHECKING:
     from archolith_proxy.memory.models import MemoryEngineConfig, PromotionRecord
@@ -92,6 +95,12 @@ class Adapter(MemoryAdapterBase):
             healthcheck=True,
         )
 
+    async def close(self) -> None:
+        """Close the httpx client if open (API mode only)."""
+        client = getattr(self, "_client", None)
+        if client is not None and not client.is_closed:
+            await client.aclose()
+
     async def healthcheck(self) -> bool:
         if self._mode == "filesystem":
             return Path(self.config.base_url).is_dir()
@@ -136,7 +145,7 @@ class Adapter(MemoryAdapterBase):
         folder_path.mkdir(parents=True, exist_ok=True)
 
         # Generate a filename-safe slug from the promotion
-        slug = self._slugify(f"{promotion.fact_type}-{promotion.promotion_id}")
+        slug = slugify(f"{promotion.fact_type}-{promotion.promotion_id}")
         file_path = folder_path / f"{slug}.md"
 
         content = self._build_markdown(promotion)
@@ -166,7 +175,7 @@ class Adapter(MemoryAdapterBase):
         lines.append("---")
         lines.append(f"title: {self._escape_yaml(promotion.content[:80])}")
         lines.append(f"type: note")
-        lines.append(f"permalink: {self._slugify(promotion.content[:60])}")
+        lines.append(f"permalink: {slugify(promotion.content[:60])}")
         lines.append(f"tags:")
         for tag in (promotion.tags or []):
             lines.append(f"  - {tag}")
@@ -223,20 +232,16 @@ class Adapter(MemoryAdapterBase):
         return "\n".join(lines)
 
     @staticmethod
-    def _slugify(text: str) -> str:
-        """Convert text to a URL/filename-safe slug."""
-        import re
-        slug = text.lower().strip()
-        slug = re.sub(r"[^\w\s-]", "", slug)
-        slug = re.sub(r"[\s_]+", "-", slug)
-        slug = re.sub(r"-+", "-", slug)
-        return slug[:60].strip("-")
-
-    @staticmethod
     def _escape_yaml(text: str) -> str:
-        """Escape text for safe YAML value."""
-        if any(c in text for c in (":", "'", '"', "\n", "#")):
-            return f'"{text.replace(chr(34), chr(92) + chr(34))}"'
+        """Escape text for safe YAML value.
+
+        Escapes backslashes BEFORE double quotes to avoid double-escaping issues
+        on Windows paths like C:\\Users\\...
+        """
+        if any(c in text for c in (":", "'", '"', "\n", "#", "\\")):
+            # Escape backslashes first, then double quotes
+            escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{escaped}"'
         return text
 
     # --- API mode ---
@@ -251,7 +256,6 @@ class Adapter(MemoryAdapterBase):
             "tags": promotion.tags + [f"fact:{promotion.fact_type}", f"session:{promotion.session_id}"],
         }
         resp = await client.post("/api/notes", json=payload)
-        elapsed_ms = 0  # Caller sets this
 
         if resp.status_code in (200, 201):
             data = resp.json()
@@ -269,3 +273,4 @@ class Adapter(MemoryAdapterBase):
                 outcome=PromotionOutcome.FAILED,
                 error_message=f"HTTP {resp.status_code}: {resp.text[:500]}",
             )
+

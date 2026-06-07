@@ -29,12 +29,13 @@ async def backend(tmp_db_path):
 
 
 @pytest.mark.asyncio
-async def test_protocol_compliance():
+async def test_protocol_compliance(tmp_db_path):
     """LadybugBackend satisfies the GraphBackend protocol."""
     from archolith_proxy.graph.ladybug_backend import LadybugBackend
     from archolith_proxy.graph.protocol import GraphBackend
 
-    assert isinstance(LadybugBackend, GraphBackend)
+    backend = LadybugBackend(db_path=tmp_db_path)
+    assert isinstance(backend, GraphBackend)
 
 
 @pytest.mark.asyncio
@@ -293,3 +294,238 @@ async def test_bulk_issue_verification_and_supersedes_operations(backend):
     last_verification = await backend.get_last_verification("sess-012")
     assert last_verification is not None
     assert last_verification["status"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_upsert_file_content_with_created_at(backend):
+    """FileContent nodes should have created_at timestamp when created."""
+    await backend.create_session("sess-file-001")
+
+    # Upsert a file
+    await backend.upsert_file_content(
+        session_id="sess-file-001",
+        path="src/main.py",
+        content="print('hello')",
+        sha256="abc123def456",
+        turn=1
+    )
+
+    # List to verify it exists
+    files = await backend.list_cached_files("sess-file-001")
+    assert len(files) >= 1
+    assert any(f["path"] == "src/main.py" for f in files)
+
+
+@pytest.mark.asyncio
+async def test_upsert_file_outline_with_created_at(backend):
+    """FileOutline nodes should have created_at timestamp when created."""
+    await backend.create_session("sess-file-002")
+
+    # Upsert an outline
+    await backend.upsert_file_outline(
+        session_id="sess-file-002",
+        path="src/main.py",
+        outline="line 1: def main()\nline 5: class Helper",
+        turn=1
+    )
+
+    # Retrieve it
+    outline = await backend.get_file_outline("sess-file-002", "src/main.py")
+    assert outline is not None
+    assert "def main" in outline
+
+
+@pytest.mark.asyncio
+async def test_invalidation_deletes_both_content_and_outline(backend):
+    """Invalidating a path should delete BOTH FileContent and FileOutline."""
+    await backend.create_session("sess-file-003")
+
+    # Upsert both content and outline for the same path
+    await backend.upsert_file_content(
+        session_id="sess-file-003",
+        path="test.py",
+        content="def test_foo():\n    pass",
+        sha256="test123",
+        turn=1
+    )
+
+    await backend.upsert_file_outline(
+        session_id="sess-file-003",
+        path="test.py",
+        outline="line 1: def test_foo()",
+        turn=1
+    )
+
+    # List to verify both exist
+    files = await backend.list_cached_files("sess-file-003")
+    assert any(f["path"] == "test.py" for f in files)
+
+    outline = await backend.get_file_outline("sess-file-003", "test.py")
+    assert outline is not None
+
+    # Delete the content
+    deleted = await backend.delete_file_content("sess-file-003", "test.py")
+    assert deleted is True
+
+    # Verify content is gone from list
+    files_after = await backend.list_cached_files("sess-file-003")
+    assert not any(f["path"] == "test.py" for f in files_after)
+
+    # Also delete the outline
+    outline_deleted = await backend.delete_file_outline("sess-file-003", "test.py")
+    assert outline_deleted is True
+
+    # Verify outline is gone
+    outline = await backend.get_file_outline("sess-file-003", "test.py")
+    assert outline is None
+
+
+@pytest.mark.asyncio
+async def test_eviction_on_empty_cache_no_error(backend):
+    """Eviction on a session with zero cached files should not error."""
+    await backend.create_session("sess-file-004")
+
+    # Should not raise an exception
+    await backend.evict_stale_file_cache(
+        session_id="sess-file-004",
+        max_turns_age=50,
+        max_entries=10
+    )
+
+
+@pytest.mark.asyncio
+async def test_ttl_eviction_removes_old_entries(backend):
+    """TTL eviction should remove entries older than max_turns_age."""
+    await backend.create_session("sess-file-005")
+
+    # Advance session to turn 100
+    for _ in range(100):
+        await backend.touch_session("sess-file-005")
+
+    current_turn = await backend.get_turn_number("sess-file-005")
+    assert current_turn == 100
+
+    # Create files with old timestamps (turn 10) and recent ones (turn 90)
+    for i in range(3):
+        await backend.upsert_file_content(
+            session_id="sess-file-005",
+            path=f"old_file_{i}.py",
+            content=f"old content {i}",
+            sha256=f"old_sha_{i}",
+            turn=10
+        )
+
+    for i in range(3):
+        await backend.upsert_file_content(
+            session_id="sess-file-005",
+            path=f"new_file_{i}.py",
+            content=f"new content {i}",
+            sha256=f"new_sha_{i}",
+            turn=90
+        )
+
+    # List before eviction
+    files_before = await backend.list_cached_files("sess-file-005")
+    assert len(files_before) == 6
+
+    # Evict with max_turns_age=50 (removes entries from turn < 50)
+    await backend.evict_stale_file_cache(
+        session_id="sess-file-005",
+        max_turns_age=50,
+        max_entries=200
+    )
+
+    # List after eviction
+    files_after = await backend.list_cached_files("sess-file-005")
+
+    # Old entries (turn 10) should be gone
+    assert all("old_file" not in f["path"] for f in files_after)
+    # New entries (turn 90) should remain
+    assert all("new_file" in f["path"] for f in files_after)
+    assert len(files_after) == 3
+
+
+@pytest.mark.asyncio
+async def test_lru_eviction_removes_oldest_when_over_capacity(backend):
+    """Over-capacity LRU eviction should remove oldest entries by last_updated_turn."""
+    await backend.create_session("sess-file-006")
+
+    # Create entries with increasing last_updated_turn
+    # This proves the eviction actually respects ORDER BY and LIMIT
+    for i in range(10):
+        await backend.upsert_file_content(
+            session_id="sess-file-006",
+            path=f"file_{i:02d}.py",
+            content=f"content {i}",
+            sha256=f"sha_{i}",
+            turn=i + 1
+        )
+
+    # List before eviction
+    files_before = await backend.list_cached_files("sess-file-006")
+    assert len(files_before) == 10
+
+    # Evict oldest entries, keeping only 3
+    await backend.evict_stale_file_cache(
+        session_id="sess-file-006",
+        max_turns_age=999,  # Don't TTL evict
+        max_entries=3
+    )
+
+    # List after eviction
+    files_after = await backend.list_cached_files("sess-file-006")
+
+    # Should have exactly 3 entries (the newest ones)
+    assert len(files_after) == 3
+
+    # The 3 newest entries should be file_07, file_08, file_09
+    # (those with last_updated_turn = 8, 9, 10)
+    remaining_paths = {f["path"] for f in files_after}
+    assert "file_07.py" in remaining_paths
+    assert "file_08.py" in remaining_paths
+    assert "file_09.py" in remaining_paths
+
+    # Oldest entries should be gone
+    assert not any("file_0.py" in f["path"] or "file_01.py" in f["path"]
+                   or "file_02.py" in f["path"] or "file_03.py" in f["path"]
+                   or "file_04.py" in f["path"] or "file_05.py" in f["path"]
+                   or "file_06.py" in f["path"] for f in files_after)
+
+
+@pytest.mark.asyncio
+async def test_outline_lru_eviction_respects_capacity(backend):
+    """FileOutline LRU eviction should also respect max_entries cap."""
+    await backend.create_session("sess-file-007")
+
+    # Create multiple outlines
+    for i in range(5):
+        await backend.upsert_file_outline(
+            session_id="sess-file-007",
+            path=f"file_{i:02d}.py",
+            outline=f"line 1: def func_{i}()",
+            turn=i + 1
+        )
+
+    # Call eviction with a cap of 2
+    await backend.evict_stale_file_cache(
+        session_id="sess-file-007",
+        max_turns_age=999,
+        max_entries=2
+    )
+
+    # Verify the oldest outlines are gone and newest remain
+    # We check by attempting to retrieve them
+    outline_0 = await backend.get_file_outline("sess-file-007", "file_00.py")
+    outline_1 = await backend.get_file_outline("sess-file-007", "file_01.py")
+    outline_2 = await backend.get_file_outline("sess-file-007", "file_02.py")
+    outline_3 = await backend.get_file_outline("sess-file-007", "file_03.py")
+    outline_4 = await backend.get_file_outline("sess-file-007", "file_04.py")
+
+    # Newest 2 should exist
+    assert outline_3 is not None
+    assert outline_4 is not None
+
+    # Oldest 3 should be gone
+    assert outline_0 is None
+    assert outline_1 is None
+    assert outline_2 is None

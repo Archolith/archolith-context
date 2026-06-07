@@ -7,7 +7,21 @@ import json
 import structlog
 
 from archolith_proxy.models.graph_nodes import FileStatus
-from archolith_proxy.rtk import filter_single_tool_result
+from archolith_proxy.filter_adapter import filter_single_tool_result
+
+__all__ = [
+    "_normalize_message_content",
+    "_build_call_map",
+    "_extract_tool_path",
+    "_prefer_stronger_file_status",
+    "_infer_file_touch_statuses",
+    "_extract_file_reads",
+    "_extract_user_message",
+    "_collect_recent_tool_results",
+    "_collect_tool_call_records",
+    "_extract_finish_reason",
+    "_extract_response_text",
+]
 
 logger = structlog.get_logger()
 
@@ -162,8 +176,8 @@ def _collect_tool_call_records(messages: list[dict]) -> list:
     that has tool_calls. Scoped to this turn to avoid re-processing tool calls
     from previous turns (which have already been extracted and stored).
 
-    Applies RTK Layer 1 filter — the messages array passed to extraction is the
-    ORIGINAL (pre-rewrite) array; the outbound RTK filter runs on a copy in
+    Applies Layer 1 filter — the messages array passed to extraction is the
+    ORIGINAL (pre-rewrite) array; the outbound filter filter runs on a copy in
     filter_request_body() and does not mutate the source array.
     """
     from archolith_proxy.extractor.base import ToolCallRecord
@@ -197,7 +211,7 @@ def _collect_tool_call_records(messages: list[dict]) -> list:
             continue
         tool_name, args = current_turn_map[tc_id]
         content = _normalize_message_content(msg.get("content", ""))
-        # Apply RTK Layer 1 filter — same as _collect_recent_tool_results()
+        # Apply Layer 1 filter — same as _collect_recent_tool_results()
         content = filter_single_tool_result(content, tool_name=tool_name)
         records.append(ToolCallRecord(
             tool_call_id=tc_id,
@@ -240,22 +254,23 @@ def _extract_file_reads(messages: list[dict]) -> list[dict]:
     call_map = _build_call_map(messages)
 
     # Debug: log message structure when call_map is empty to diagnose extraction misses
-    role_counts = {}
-    for m in messages:
-        r = m.get("role", "unknown")
-        role_counts[r] = role_counts.get(r, 0) + 1
-    tool_msg_ids = [m.get("tool_call_id", "") for m in messages if m.get("role") == "tool"]
-    sample_args = [(name, list(args.keys())) for name, args in list(call_map.values())[:4]]
-    logger.info(
-        "file_cache_extract_debug",
-        total_messages=len(messages),
-        role_counts=role_counts,
-        call_map_size=len(call_map),
-        tool_result_count=len(tool_msg_ids),
-        sample_call_names=list({v[0] for v in call_map.values()})[:8],
-        sample_tool_ids_match=[tid for tid in tool_msg_ids[:4] if tid in call_map],
-        sample_args=sample_args,
-    )
+    if logger.isEnabledFor(__import__('logging').DEBUG):
+        role_counts = {}
+        for m in messages:
+            r = m.get("role", "unknown")
+            role_counts[r] = role_counts.get(r, 0) + 1
+        tool_msg_ids = [m.get("tool_call_id", "") for m in messages if m.get("role") == "tool"]
+        sample_args = [(name, list(args.keys())) for name, args in list(call_map.values())[:4]]
+        logger.debug(
+            "file_cache_extract_debug",
+            total_messages=len(messages),
+            role_counts=role_counts,
+            call_map_size=len(call_map),
+            tool_result_count=len(tool_msg_ids),
+            sample_call_names=list({v[0] for v in call_map.values()})[:8],
+            sample_tool_ids_match=[tid for tid in tool_msg_ids[:4] if tid in call_map],
+            sample_args=sample_args,
+        )
 
     # Match tool results to calls
     results = []
@@ -306,7 +321,7 @@ def _collect_recent_tool_results(messages: list[dict], max_chars: int = 4000) ->
             continue
 
         tool_name = msg.get("name", "unknown_tool")
-        # Apply RTK Layer 1 filter before packing into the extraction budget —
+        # Apply Layer 1 filter before packing into the extraction budget —
         # strips noise/boilerplate so the extractor LLM sees signal, not lint.
         content = filter_single_tool_result(content, tool_name=tool_name)
         entry = f"Tool [{tool_name}]:\n{content}"

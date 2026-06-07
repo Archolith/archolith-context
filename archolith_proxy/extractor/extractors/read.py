@@ -6,6 +6,8 @@ import httpx
 
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord, ToolExtractor
 
+__all__ = ["ReadExtractor"]
+
 
 def _extract_path(args: dict) -> str:
     return (
@@ -22,7 +24,7 @@ class ReadExtractor(ToolExtractor):
     A second extraction pass is redundant — just emit a provenance fact.
     """
 
-    tool_names = ("Read",)
+    tool_names = ("Read", "read_file")
 
     async def extract(
         self,

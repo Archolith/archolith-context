@@ -18,8 +18,7 @@ Design choices:
 from __future__ import annotations
 
 import asyncio
-import json
-import os
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -48,10 +47,12 @@ class TraceStore:
         max_sessions: int = 1000,
         trace_dir: str | None = None,
         max_bg_passes_per_session: int = DEFAULT_MAX_BG_PASSES_PER_SESSION,
+        retention_days: int = 0,
     ) -> None:
         self._max_turns = max_turns_per_session
         self._max_sessions = max_sessions
         self._max_bg_passes = max_bg_passes_per_session
+        self._retention_days = retention_days
         self._lock = asyncio.Lock()
         # session_id -> list[TurnTrace] (ordered by turn_number)
         self._by_session: dict[str, list[TurnTrace]] = defaultdict(list)
@@ -69,6 +70,37 @@ class TraceStore:
         if self._trace_dir:
             self._trace_dir.mkdir(parents=True, exist_ok=True)
             logger.info("trace_disk_persistence_enabled", dir=str(self._trace_dir))
+            # Run retention cleanup on startup
+            if retention_days > 0:
+                self._cleanup_old_traces()
+
+    def _cleanup_old_traces(self) -> None:
+        """Delete JSONL trace files older than retention_days.
+
+        Runs at startup; skips non-.jsonl files and handles missing dirs gracefully.
+        """
+        if not self._trace_dir or not self._trace_dir.exists() or self._retention_days <= 0:
+            return
+
+        cutoff_time = time.time() - (self._retention_days * 86400)  # days to seconds
+        deleted_count = 0
+
+        try:
+            for jsonl_path in self._trace_dir.glob("*.jsonl"):
+                try:
+                    mtime = jsonl_path.stat().st_mtime
+                    if mtime < cutoff_time:
+                        jsonl_path.unlink()
+                        deleted_count += 1
+                except Exception:
+                    # Skip files that can't be deleted
+                    pass
+        except Exception:
+            logger.warning("trace_retention_cleanup_failed", exc_info=True)
+            return
+
+        if deleted_count > 0:
+            logger.info("trace_retention_cleanup_done", deleted_files=deleted_count, retention_days=self._retention_days)
 
     async def record(self, trace: TurnTrace) -> None:
         """Store a turn trace record.
@@ -132,30 +164,30 @@ class TraceStore:
         self._bg_passes.pop(session_id, None)
         self._session_meta.pop(session_id, None)
 
-    def set_session_metadata(
+    async def set_session_metadata(
         self, session_id: str, key: str, value: object,
     ) -> None:
-        """Store per-session metadata (e.g. harness_env).
+        """Store per-session metadata (e.g. harness_env)."""
+        async with self._lock:
+            meta = self._session_meta.setdefault(session_id, {})
+            meta[key] = value
 
-        Non-async — called from the request path before any awaits.
-        """
-        meta = self._session_meta.setdefault(session_id, {})
-        meta[key] = value
-
-    def has_session_metadata(self, session_id: str, key: str) -> bool:
+    async def has_session_metadata(self, session_id: str, key: str) -> bool:
         """True if metadata ``key`` is present for the session.
 
         Lets the request path repopulate metadata after an LRU eviction so a
         resumed session restores its harness_env / proxy_config rather than
         losing it for the process lifetime.
         """
-        return key in self._session_meta.get(session_id, {})
+        async with self._lock:
+            return key in self._session_meta.get(session_id, {})
 
-    def get_session_metadata(
+    async def get_session_metadata(
         self, session_id: str, key: str,
     ) -> object | None:
         """Retrieve per-session metadata by key."""
-        return self._session_meta.get(session_id, {}).get(key)
+        async with self._lock:
+            return self._session_meta.get(session_id, {}).get(key)
 
     async def record_bg_pass(self, trace: BackgroundPassTrace) -> None:
         """Store a background pass trace record.
@@ -321,12 +353,10 @@ class TraceStore:
         loaded = 0
         skipped_files = 0
         for jsonl_path in sorted(self._trace_dir.glob("*.jsonl")):
-            # Only load files named as hex session IDs — skip other JSONL
-            # files in the same directory (e.g. curator_failures.jsonl).
+            # Skip known non-session files in the same directory
+            # (e.g. curator_failures.jsonl). Accept UUID and named session IDs.
             stem = jsonl_path.stem
-            try:
-                int(stem, 16)
-            except ValueError:
+            if stem in ("curator_failures",):  # Known non-session files
                 skipped_files += 1
                 continue
 
@@ -408,7 +438,9 @@ class TraceStore:
             backend = get_backend()
         orphans = []
         mismatches = []
-        for session_id, turns in self._by_session.items():
+        async with self._lock:
+            sessions_to_check = list(self._by_session.items())
+        for session_id, turns in sessions_to_check:
             if session_id == "__no_session__":
                 continue
             try:
@@ -436,14 +468,18 @@ _instance: TraceStore | None = None
 def get_trace_store() -> TraceStore:
     """Get the process-level TraceStore instance.
 
-    On first call, reads trace_dir from settings. When set, traces are
-    persisted as per-session JSONL files and survive proxy restarts.
+    On first call, reads trace_dir and retention_days from settings. When set,
+    traces are persisted as per-session JSONL files and survive proxy restarts.
+    Old trace files are automatically cleaned up on startup if retention_days > 0.
     """
     global _instance
     if _instance is None:
         from archolith_proxy.config import get_settings
         settings = get_settings()
-        _instance = TraceStore(trace_dir=settings.trace_dir or None)
+        _instance = TraceStore(
+            trace_dir=settings.trace_dir or None,
+            retention_days=settings.trace_retention_days,
+        )
     return _instance
 
 

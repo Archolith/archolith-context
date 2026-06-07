@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 
 import httpx
@@ -11,6 +10,7 @@ import structlog
 
 from archolith_proxy.config import get_settings
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord
+from archolith_proxy.extractor.dedup import deduplicate_facts
 from archolith_proxy.extractor.prompts import (
     SYSTEM_PROMPT,
     TURN_LEVEL_SYSTEM_PROMPT,
@@ -22,6 +22,11 @@ from archolith_proxy.models.dtos import ExtractionResult
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "extract_facts",
+    "extract_facts_per_tool",
+]
+
 
 async def extract_facts(
     http_client: httpx.AsyncClient,
@@ -30,10 +35,11 @@ async def extract_facts(
     assistant_response: str,
     tool_results: str | None = None,
     session_goal: str | None = None,
-) -> ExtractionResult | None:
+) -> ExtractionResult:
     """Call gpt-4.1-mini to extract facts from a turn.
 
-    Returns None if extraction fails (best-effort, non-blocking).
+    Returns ExtractionResult with empty facts/files/decisions if extraction fails
+    (best-effort, non-blocking).
     """
     settings = get_settings()
 
@@ -82,11 +88,25 @@ async def extract_facts(
 
     except Exception as e:
         logger.warning("extraction_failed", turn=turn_number, error=str(e))
-        return None
+        return ExtractionResult(
+            facts=[], files_touched=[], decisions=[],
+            invalidated_fact_ids=[], turn_number=turn_number,
+        )
 
 
-def _parse_extraction_response(content: str, turn_number: int) -> ExtractionResult:
-    """Parse the extraction model's JSON response."""
+def _parse_extraction_response(
+    content: str,
+    turn_number: int,
+    source: str | None = None,
+) -> ExtractionResult:
+    """Parse the extraction model's JSON response.
+
+    Args:
+        content: The JSON or markdown-fenced JSON response from the LLM.
+        turn_number: Current turn number for logging.
+        source: Optional source label (e.g. "Turn-level") to prefix facts with.
+                If provided, facts will be prefixed like "[Turn-level] fact content".
+    """
     # Strip markdown code fences if present
     text = content.strip()
     if text.startswith("```"):
@@ -113,6 +133,12 @@ def _parse_extraction_response(content: str, turn_number: int) -> ExtractionResu
         elif isinstance(f, dict):
             normalized_facts.append(f)
     facts = normalized_facts
+
+    # Add provenance prefix if source is provided
+    if source:
+        for f in facts:
+            content_str = f.get("content", "")
+            f["content"] = f"[{source}] {content_str}"
 
     # Normalize files_touched: model may return bare strings, or dicts with "path"/"file" keys
     raw_files = data.get("files_touched", [])
@@ -219,12 +245,26 @@ _llm_semaphore: asyncio.Semaphore | None = None
 
 
 def _get_llm_semaphore() -> asyncio.Semaphore:
-    """Lazy-init semaphore for LLM-backed extractor concurrency control."""
+    """Lazy-init semaphore for LLM-backed extractor concurrency control.
+
+    The semaphore is built once to match the configured extractor_llm_concurrency.
+    Call _reset_llm_semaphore() if the concurrency setting changes or to rebuild.
+    """
     global _llm_semaphore
     if _llm_semaphore is None:
         settings = get_settings()
         _llm_semaphore = asyncio.Semaphore(settings.extractor_llm_concurrency)
     return _llm_semaphore
+
+
+def _reset_llm_semaphore() -> None:
+    """Reset the global LLM semaphore (for testing or config changes).
+
+    Useful when the configured extractor_llm_concurrency changes and you need
+    to rebuild the semaphore with the new value.
+    """
+    global _llm_semaphore
+    _llm_semaphore = None
 
 
 async def _extract_with_semaphore(
@@ -335,16 +375,13 @@ async def extract_facts_per_tool(
         resp.raise_for_status()
         data = resp.json()
         turn_content = data["choices"][0]["message"]["content"]
-        turn_result = _parse_extraction_response(turn_content, turn_number)
+        turn_result = _parse_extraction_response(turn_content, turn_number, source="Turn-level")
         _turn_level_facts_count = len(turn_result.facts)
 
-        # Step 4: Merge — add turn-level facts that don't duplicate per-tool facts
-        per_tool_hashes = {hashlib.md5(f.get("content", "").encode()).hexdigest() for f in all_facts}
-        for f in turn_result.facts:
-            h = hashlib.md5(f.get("content", "").encode()).hexdigest()
-            if h not in per_tool_hashes:
-                all_facts.append(f)
-                per_tool_hashes.add(h)
+        # Step 4: Merge — add turn-level facts that don't duplicate per-tool facts.
+        # Use Jaccard near-duplicate check (not just exact MD5) to catch similar facts.
+        merged_facts = deduplicate_facts(turn_result.facts, all_facts)
+        all_facts.extend(merged_facts)
 
         # Merge files
         existing_paths = set(all_files)

@@ -23,6 +23,15 @@ from starlette.responses import Response, StreamingResponse
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "ResponseCapture",
+    "StreamingToolCallAccumulator",
+    "StreamingRecallResult",
+    "stream_with_capture",
+    "stream_with_recall_detection",
+    "yield_as_sse",
+]
+
 # Maximum bytes to capture for extraction (512KB).
 # Truncation preserves metadata (tool names, file paths) and drops
 # verbose content (full file reads, long logs).

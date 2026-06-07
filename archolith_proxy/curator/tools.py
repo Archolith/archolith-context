@@ -1,4 +1,4 @@
-"""Curator tool implementations — 10 async tool functions.
+"""Curator tool implementations - async tool functions for context curation.
 
 Each is `async def tool_name(session_id: str, **kwargs) -> str`.
 All call `get_backend()` directly. No LLM calls — pure DB queries
@@ -17,6 +17,33 @@ logger = structlog.get_logger()
 # Threshold for truncating full-file content (use get_file_lines instead)
 _FULL_FILE_LINE_LIMIT = 200
 _FULL_FILE_PREVIEW_LINES = 10
+
+# Module-level lazy httpx client for semantic search
+_semantic_client: object | None = None
+
+
+async def _get_semantic_client():
+    """Get or create a reusable httpx.AsyncClient for semantic search.
+
+    Initializes on first call, reuses thereafter. Gracefully handles
+    closed clients by reinitializing.
+    """
+    global _semantic_client
+    if _semantic_client is None or (hasattr(_semantic_client, 'is_closed') and _semantic_client.is_closed):
+        import httpx
+        _semantic_client = httpx.AsyncClient(timeout=10.0)
+    return _semantic_client
+
+
+async def close_semantic_client() -> None:
+    """Close the module-level semantic client if open.
+
+    Called on app shutdown via lifespan cleanup.
+    """
+    global _semantic_client
+    if _semantic_client is not None and hasattr(_semantic_client, 'is_closed') and not _semantic_client.is_closed:
+        await _semantic_client.aclose()
+    _semantic_client = None
 
 
 async def list_session_files(session_id: str, **kwargs) -> str:
@@ -157,10 +184,9 @@ async def search_facts_semantic(
     query_embedding: list[float] | None = None
     if settings.embedding_api_key:
         try:
-            import httpx
             from archolith_proxy.extractor.embeddings import compute_embeddings_batch
-            async with httpx.AsyncClient(timeout=10.0) as _client:
-                results = await compute_embeddings_batch(_client, [query[:8000]])
+            _client = await _get_semantic_client()
+            results = await compute_embeddings_batch(_client, [query[:8000]])
             query_embedding = results[0] if results else None
         except Exception as exc:
             logger.warning(
@@ -434,25 +460,41 @@ async def prefetch_file(
             return f"(blocked: {path} is outside allowed workspace roots)"
 
     if not file_path.is_absolute():
-        # Try to resolve relative paths against cached file roots
+        # Try to resolve relative paths against cached file roots (optimized)
         existing = await get_backend().list_cached_files(session_id)
         resolved = False
         if existing:
+            # Build a set of parent directories from cached files for faster lookup
+            parent_dirs = set()
             for f in existing:
                 cached = f.get("path", "")
                 if cached and Path(cached).is_absolute():
-                    candidate = Path(cached).parent
-                    for _ in range(8):  # max 8 levels up
-                        attempt = candidate / path
-                        if attempt.exists():
-                            file_path = attempt
-                            resolved = True
-                            break
-                        candidate = candidate.parent
-                    if resolved:
+                    parent_dirs.add(Path(cached).parent)
+
+            # Try to find the path from each parent directory
+            for parent in parent_dirs:
+                candidate = parent
+                for _ in range(8):  # max 8 levels up
+                    attempt = candidate / path
+                    if attempt.exists():
+                        file_path = attempt
+                        resolved = True
                         break
+                    candidate = candidate.parent
+                if resolved:
+                    break
+
         if not resolved:
             return f"(cannot resolve relative path: {path} — use absolute paths or ensure related files are already cached)"
+
+    # Validate final resolved path against allowed roots
+    if settings.prefetch_allowed_roots:
+        resolved = file_path.resolve()
+        if not any(
+            resolved == Path(root).resolve() or resolved.is_relative_to(Path(root).resolve())
+            for root in settings.prefetch_allowed_roots
+        ):
+            return f"(blocked: resolved path {resolved} is outside allowed workspace roots)"
 
     if not file_path.exists():
         return f"(file not found: {file_path})"
@@ -529,7 +571,7 @@ async def prefetch_file(
         preview = [f"{i}: {line}" for i, line in enumerate(all_lines[:preview_count], 1)]
         parts.append("\n" + "\n".join(preview))
         if line_count > 20:
-            parts.append(f"\n[use get_file_lines for specific sections]")
+            parts.append("\n[use get_file_lines for specific sections]")
 
     return "\n".join(parts)
 
@@ -604,3 +646,5 @@ TOOL_HANDLERS: dict[str, callable] = {
     "prefetch_file": prefetch_file,
     "score_file_relevance": score_file_relevance,
 }
+
+__all__ = ["TOOL_HANDLERS"]

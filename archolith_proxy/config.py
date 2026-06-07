@@ -6,12 +6,15 @@ a cached singleton — Settings() is constructed once per process.
 Runtime overrides from PATCH /admin/config are persisted to
 config_overrides.json and re-applied on startup, making them
 survive restarts.
+
+Config loading is synchronous and must complete before async request
+paths begin. The module-level lock guards the first-access race condition.
 """
 
 from __future__ import annotations
 
 import json
-import os
+import threading
 from pathlib import Path
 
 from pydantic import field_validator
@@ -29,6 +32,9 @@ _OVERRIDES_FILE = _PROJECT_ROOT / "config_overrides.json"
 
 # In-memory snapshot of base env values (before overrides applied)
 _base_values: dict[str, object] = {}
+
+# Lock guarding _settings and _base_values during initialization
+_settings_lock = threading.Lock()
 
 
 class Settings(BaseSettings):
@@ -103,8 +109,9 @@ class Settings(BaseSettings):
     per_tool_extraction_enabled: bool = False
     extractor_llm_concurrency: int = 3  # max concurrent LLM-backed extractor calls (turn-level excluded)
 
-    # RTK output filtering for outbound tool-role messages
-    rtk_enabled: bool = False
+    # Output filtering for outbound tool-role messages (via archolith_filter).
+    # Reads the FILTER_ENABLED env var.
+    filter_enabled: bool = False
 
     # Retry / resilience
     upstream_max_retries: int = 3
@@ -115,7 +122,7 @@ class Settings(BaseSettings):
 
     # Graph backend selection
     graph_backend: str = "neo4j"  # "neo4j" or "ladybug"
-    ladybug_db_path: str = "./data/context.lbug"
+    ladybug_db_path: str = str(Path(__file__).parent.parent / "data" / "context.lbug")
     ladybug_max_concurrent: int = 8
 
     # Optional: promotion to long-term memory
@@ -134,6 +141,8 @@ class Settings(BaseSettings):
     # File content cache
     file_cache_enabled: bool = True
     file_cache_max_file_bytes: int = 500_000  # skip caching files larger than this
+    file_cache_ttl_turns: int = 50  # evict entries older than this many turns
+    file_cache_max_entries: int = 200  # evict oldest entries if over this count
 
     # Maximum active facts fetched for dedup, assembly, and recall.
     # Higher values improve dedup coverage in long sessions but increase
@@ -219,6 +228,10 @@ class Settings(BaseSettings):
     # Without this, traces are memory-only and lost on restart.
     trace_dir: str = ""
 
+    # Trace retention — delete JSONL trace files older than this many days.
+    # When 0 (default), no automatic cleanup. Cleanup runs at proxy startup.
+    trace_retention_days: int = 0
+
     # Admin/operator token for protecting non-proxy surfaces
     # When empty (default), admin endpoints are open (localhost-only assumption).
     # When set, all operator endpoints require X-Admin-Token or Authorization: Bearer matching this value.
@@ -275,19 +288,23 @@ def get_settings() -> Settings:
     """Return cached settings instance (singleton per process)."""
     global _settings, _base_values
     if _settings is None:
-        _settings = Settings()
-        # Snapshot base values before applying overrides
-        _base_values = {k: getattr(_settings, k) for k in _settings.model_fields}
-        # Apply persisted overrides from config_overrides.json
-        _apply_overrides(_settings)
+        with _settings_lock:
+            # Double-check pattern: another thread may have initialized while waiting
+            if _settings is None:
+                _settings = Settings()
+                # Snapshot base values before applying overrides
+                _base_values = {k: getattr(_settings, k) for k in _settings.model_fields}
+                # Apply persisted overrides from config_overrides.json
+                _apply_overrides(_settings)
     return _settings
 
 
 def reset_settings() -> None:
     """Reset the cached settings — used in tests."""
     global _settings, _base_values
-    _settings = None
-    _base_values = {}
+    with _settings_lock:
+        _settings = None
+        _base_values = {}
 
 
 def _read_overrides() -> dict[str, object]:

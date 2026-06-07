@@ -9,6 +9,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord, ToolExtractor
@@ -75,6 +76,20 @@ class TestGrepExtractor:
         assert len(result.facts) == 1
         assert "no structured matches" in result.facts[0]["content"]
         assert result.files_touched == []
+
+    @pytest.mark.asyncio
+    async def test_reject_non_path_labels(self):
+        """Grep should reject lines where the 'path' is actually just a label (e.g., 'label:10:content')."""
+        record = ToolCallRecord(
+            tool_call_id="1", tool_name="Grep",
+            args={"pattern": "test"},
+            result="src/main.py:42:match here\nlabel:10:some text\nanother:5:data",
+        )
+        result = await self.ext.extract(record, self.client, 1, None)
+        # Only src/main.py should be included; label:10 and another:5 are rejected (no path separators)
+        assert len(result.facts) == 1
+        assert "src/main.py" in result.facts[0]["content"]
+        assert result.files_touched == ["src/main.py"]
 
     @pytest.mark.asyncio
     async def test_windows_path_parsing(self):
@@ -590,6 +605,36 @@ class TestMemoryRecallExtractor:
 # TestToolExtractorRegistry
 # ---------------------------------------------------------------------------
 
+class TestAliasRouting:
+    def test_read_file_alias_routes_to_read_extractor(self):
+        """read_file alias should route to ReadExtractor."""
+        from archolith_proxy.extractor.extractors.read import ReadExtractor
+        reg = get_registry()
+        ext = reg.get("read_file")
+        assert isinstance(ext, ReadExtractor)
+
+    def test_write_file_alias_routes_to_write_edit_extractor(self):
+        """write_file alias should route to WriteEditExtractor."""
+        from archolith_proxy.extractor.extractors.write_edit import WriteEditExtractor
+        reg = get_registry()
+        ext = reg.get("write_file")
+        assert isinstance(ext, WriteEditExtractor)
+
+    def test_edit_file_alias_routes_to_write_edit_extractor(self):
+        """edit_file alias should route to WriteEditExtractor."""
+        from archolith_proxy.extractor.extractors.write_edit import WriteEditExtractor
+        reg = get_registry()
+        ext = reg.get("edit_file")
+        assert isinstance(ext, WriteEditExtractor)
+
+    def test_notebook_edit_alias_routes_to_write_edit_extractor(self):
+        """notebook_edit alias should route to WriteEditExtractor."""
+        from archolith_proxy.extractor.extractors.write_edit import WriteEditExtractor
+        reg = get_registry()
+        ext = reg.get("notebook_edit")
+        assert isinstance(ext, WriteEditExtractor)
+
+
 class TestToolExtractorRegistry:
     def test_known_tool_routes_correctly(self):
         reg = get_registry()
@@ -707,8 +752,8 @@ class TestCollectToolCallRecords:
         assert records[1].tool_name == "Grep"
         assert records[0].result == "file content here"
 
-    def test_rtk_filter_applied(self):
-        """Verify RTK filter is applied to each record's result."""
+    def test_filter_adapter_applied(self):
+        """Verify filter adapter is applied to each record's result."""
         from archolith_proxy.openai.chat import _collect_tool_call_records
 
         with patch("archolith_proxy.openai.helpers.filter_single_tool_result", side_effect=lambda content, tool_name="": f"filtered_{content}"):
@@ -935,7 +980,7 @@ class TestExtractFactsPerTool:
     @pytest.mark.asyncio
     async def test_semaphore_only_applied_to_llm_backed_extractors(self):
         """No-LLM extractors (Grep, Glob) bypass the semaphore; LLM extractor waits for it."""
-        from archolith_proxy.extractor.client import _extract_with_semaphore, _get_llm_semaphore
+        from archolith_proxy.extractor.client import _extract_with_semaphore
         from archolith_proxy.extractor.extractors.grep import GrepExtractor
         from archolith_proxy.extractor.extractors.default import DefaultExtractor
 
@@ -981,6 +1026,192 @@ class TestExtractFactsPerTool:
 
         # Restore
         client_mod._llm_semaphore = None
+
+
+# ---------------------------------------------------------------------------
+# TestComputeEmbeddingsBatch
+# ---------------------------------------------------------------------------
+
+class TestComputeEmbeddingsBatch:
+    @pytest.mark.asyncio
+    async def test_batch_index_mapping(self):
+        """Embeddings are correctly mapped by explicit batch index, not positional offset."""
+        from archolith_proxy.extractor.embeddings import compute_embeddings_batch
+        import json
+
+        async def mock_handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content.decode())
+            # Return embeddings for each input with explicit index field
+            inputs = body["input"]
+            return httpx.Response(200, json={
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "index": i, "embedding": [float(i), 0.2, 0.3]}
+                    for i in range(len(inputs))
+                ],
+                "model": "text-embedding-3-small",
+            })
+
+        mock_transport = httpx.MockTransport(mock_handler)
+        client = httpx.AsyncClient(transport=mock_transport)
+
+        with patch("archolith_proxy.extractor.embeddings.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                embedding_api_key="sk-test",
+                embedding_base_url="https://api.openai.com/v1",
+                embedding_model="text-embedding-3-small",
+            )
+            result = await compute_embeddings_batch(
+                client, ["fact one", "fact two", "fact three"]
+            )
+
+        # Should have 3 embeddings
+        assert len(result) == 3
+        # Each should map to its correct index (embedding[0] corresponds to its index)
+        assert result[0] == [0.0, 0.2, 0.3]
+        assert result[1] == [1.0, 0.2, 0.3]
+        assert result[2] == [2.0, 0.2, 0.3]
+
+
+# ---------------------------------------------------------------------------
+# TestLlmSemaphoreReset
+# ---------------------------------------------------------------------------
+
+class TestLlmSemaphoreReset:
+    def test_semaphore_reflects_configured_concurrency(self):
+        """The semaphore's limit matches the configured extractor_llm_concurrency."""
+        from archolith_proxy.extractor.client import _get_llm_semaphore, _reset_llm_semaphore
+
+        # Reset to clean state
+        _reset_llm_semaphore()
+
+        with patch("archolith_proxy.extractor.client.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                extractor_model="gpt-4.1-mini",
+                extractor_base_url="https://api.openai.com/v1",
+                extractor_api_key="test",
+                extractor_llm_concurrency=5,
+            )
+            sem = _get_llm_semaphore()
+            # Semaphore._value tracks the current permit count (not the limit directly,
+            # but we can verify that it was initialized with the right value)
+            assert sem._value == 5
+
+        # Cleanup
+        _reset_llm_semaphore()
+
+    def test_reset_clears_semaphore(self):
+        """_reset_llm_semaphore() clears the global semaphore."""
+        from archolith_proxy.extractor.client import _get_llm_semaphore, _reset_llm_semaphore
+
+        _reset_llm_semaphore()
+
+        with patch("archolith_proxy.extractor.client.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                extractor_model="gpt-4.1-mini",
+                extractor_base_url="https://api.openai.com/v1",
+                extractor_api_key="test",
+                extractor_llm_concurrency=3,
+            )
+            sem1 = _get_llm_semaphore()
+            sem1_id = id(sem1)
+
+        # Reset
+        _reset_llm_semaphore()
+
+        # Now get a new semaphore with a different concurrency
+        with patch("archolith_proxy.extractor.client.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                extractor_model="gpt-4.1-mini",
+                extractor_base_url="https://api.openai.com/v1",
+                extractor_api_key="test",
+                extractor_llm_concurrency=7,
+            )
+            sem2 = _get_llm_semaphore()
+            sem2_id = id(sem2)
+
+        # Should be different objects
+        assert sem1_id != sem2_id
+        assert sem2._value == 7
+
+        # Cleanup
+        _reset_llm_semaphore()
+
+
+# ---------------------------------------------------------------------------
+# TestTurnLevelFactProvenance
+# ---------------------------------------------------------------------------
+
+class TestExtractFactsFailure:
+    @pytest.mark.asyncio
+    async def test_extract_facts_returns_empty_on_failure(self):
+        """extract_facts should return ExtractionResult with empty facts on API failure."""
+        from archolith_proxy.extractor.client import extract_facts
+
+        # Mock client that raises an exception
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=Exception("API error"))
+
+        result = await extract_facts(
+            http_client=mock_client,
+            turn_number=1,
+            user_message="test",
+            assistant_response="test response",
+        )
+
+        # Should return an ExtractionResult with empty collections, not None
+        assert result is not None
+        assert result.facts == []
+        assert result.files_touched == []
+        assert result.decisions == []
+        assert result.invalidated_fact_ids == []
+        assert result.turn_number == 1
+
+
+class TestTurnLevelFactProvenance:
+    def test_turn_level_facts_have_provenance_prefix(self):
+        """Turn-level facts extracted should be prefixed with [Turn-level]."""
+        from archolith_proxy.extractor.client import _parse_extraction_response
+
+        json_response = json.dumps({
+            "facts": [
+                {"content": "user is testing the system", "fact_type": "observation", "confidence": 0.8},
+                "inferred decision",
+            ],
+            "files_touched": [],
+            "decisions": [],
+            "session_goal": None,
+            "checkpoint": None,
+            "issues": [],
+            "verifications": [],
+        })
+
+        result = _parse_extraction_response(json_response, turn_number=5, source="Turn-level")
+
+        assert len(result.facts) == 2
+        assert result.facts[0]["content"] == "[Turn-level] user is testing the system"
+        assert result.facts[1]["content"] == "[Turn-level] inferred decision"
+
+    def test_per_tool_facts_no_provenance_when_not_specified(self):
+        """Regular per-tool parsing should not add prefix unless explicitly requested."""
+        from archolith_proxy.extractor.client import _parse_extraction_response
+
+        json_response = json.dumps({
+            "facts": [
+                {"content": "some fact", "fact_type": "observation"},
+            ],
+            "files_touched": [],
+            "decisions": [],
+            "session_goal": None,
+            "checkpoint": None,
+            "issues": [],
+            "verifications": [],
+        })
+
+        result = _parse_extraction_response(json_response, turn_number=1)
+
+        assert len(result.facts) == 1
+        assert result.facts[0]["content"] == "some fact"  # no prefix
 
 
 # ---------------------------------------------------------------------------

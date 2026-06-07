@@ -1,6 +1,6 @@
 """Curator LLM loop — tool-calling context manager adapted from delegate_server.py.
 
-Ports _run_agent_native and _run_agent_nous from cth.mcp.delegate,
+Ports _run_agent_native from cth.mcp.delegate,
 adapted for context curation: 4 max iterations, async tool dispatch,
 returns CuratorResult | None.
 """
@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-import re
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -23,9 +22,8 @@ from openai import (
 
 import structlog
 
-from archolith_proxy.curator.prompts import CURATOR_SYSTEM_PROMPT, build_curator_user_prompt
 from archolith_proxy.curator.result import CuratorFailure, CuratorResult, CuratorToolCall
-from archolith_proxy.curator.schemas import ALL_CURATOR_TOOLS, PREPPER_TOOLS, ASSEMBLER_TOOLS
+from archolith_proxy.curator.schemas import ALL_CURATOR_TOOLS
 from archolith_proxy.curator.tools import TOOL_HANDLERS
 
 logger = structlog.get_logger()
@@ -182,6 +180,7 @@ async def _run_curator_native(
     ]
     error_window: list[tuple[str, str]] = []
     total_tool_calls = 0
+    iterations_used = 0
     curated_paths: set[str] = set()
     retained_turn_numbers: list[int] | None = None
     tool_log: list[CuratorToolCall] = []
@@ -189,6 +188,7 @@ async def _run_curator_native(
     _seen_queries: set[str] = set()
 
     for iteration in range(max_iterations):
+        iterations_used = iteration + 1
         logger.debug(
             "curator_iteration",
             iteration=iteration + 1,
@@ -265,6 +265,7 @@ async def _run_curator_native(
                 curated_paths=curated_paths,
                 retained_turn_numbers=retained_turn_numbers,
                 tool_calls_used=total_tool_calls,
+                iterations_used=iterations_used,
                 estimated_tokens=_estimate_tokens(content),
                 tool_log=tool_log,
             ), tool_log, ""
@@ -298,8 +299,11 @@ async def _run_curator_native(
             logger.debug("curator_tool_dispatch", tool=tool_name, session_id=session_id)
             try:
                 args = json.loads(tc.function.arguments)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
                 result_str = "Error: invalid JSON arguments: " + str(tc.function.arguments)
+                error_window.append((tool_name, "error"))
+                tool_log.append(CuratorToolCall(tool=tool_name, args={}, status="error",
+                    error=f"invalid arguments: {str(exc)[:200]}"))
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_str})
                 continue
 
@@ -406,189 +410,4 @@ async def _run_curator_native(
     return None, tool_log, f"max_iterations ({max_iterations})"
 
 
-# ---------------------------------------------------------------------------
-# Nous-style XML tool call parsing (fallback for models without native tools)
-# ---------------------------------------------------------------------------
-
-_NOUS_TOOL_CALL_RE = re.compile(
-    '(?s)<tool_call>\\s*(\\{.*?\\})\\s*</tool_call>'
-)
-
-
-def parse_nous_tool_calls(content: str) -> list[dict]:
-    """Extract tool calls from Nous-style XML response.
-
-    Returns list of {"name": ..., "arguments": ...} dicts.
-    """
-    calls = []
-    for match in _NOUS_TOOL_CALL_RE.finditer(content):
-        try:
-            data = json.loads(match.group(1))
-            name = data.get("name", "")
-            args = data.get("arguments", {})
-            if isinstance(args, str):
-                args = json.loads(args)
-            if name:
-                calls.append({"name": name, "arguments": args})
-        except (json.JSONDecodeError, TypeError):
-            continue
-    return calls
-
-
-def build_nous_system_prompt(base_prompt: str, tool_schemas: list[dict]) -> str:
-    """Build a Nous-format system prompt with tool descriptions injected."""
-    tool_block = "\n".join(json.dumps(s, indent=2) for s in tool_schemas)
-    return (
-        base_prompt + "\n\n"
-        "# Tools\n\n"
-        "You have access to the following functions:\n\n"
-        "<tools>\n" + tool_block + "\n</tools>\n\n"
-        "If you choose to call a function ONLY reply in the following format "
-        "with NO suffix:\n\n"
-        "<tool_call>\n"
-        '{"name": "function_name", "arguments": {"param": "value"}}\n'
-        "</tool_call>\n\n"
-        "You may call multiple tools. After all tool results are returned, "
-        "provide your final answer as plain text (no tool_call tags)."
-    )
-
-
-_RESULT_OPEN = "<tool_result>"
-_RESULT_CLOSE = "</tool_result>"
-
-
-async def _run_curator_nous(
-    client: AsyncOpenAI,
-    session_id: str,
-    user_prompt: str,
-    max_iterations: int,
-    system_prompt: str,
-    model: str,
-    tool_set: list[dict] | None = None,
-) -> CuratorResult | None:
-    """Curator loop using Nous-style XML tool calling.
-
-    Same adaptation pattern as _run_curator_native but for models
-    that do not support native function calling.
-    """
-    tools = tool_set if tool_set is not None else ALL_CURATOR_TOOLS
-    allowed_tools = {s["function"]["name"] for s in tools}
-    nous_system = build_nous_system_prompt(system_prompt, tools)
-
-    messages: list[dict] = [
-        {"role": "system", "content": nous_system},
-        {"role": "user", "content": user_prompt},
-    ]
-    error_window: list[tuple[str, str]] = []
-    total_tool_calls = 0
-    curated_paths: set[str] = set()
-    retained_turn_numbers: list[int] | None = None
-
-    for iteration in range(max_iterations):
-        logger.debug(
-            "curator_nous_iteration",
-            iteration=iteration + 1,
-            max_iterations=max_iterations,
-            session_id=session_id,
-        )
-        try:
-            response = await _llm_call_with_retry(
-                client,
-                max_retries=2,
-                base_delay=1.0,
-                model=model,
-                messages=messages,
-                temperature=0.2,
-            )
-            if not response.choices:
-                return None
-            choice = response.choices[0]
-        except Exception as exc:
-            logger.warning("curator_nous_llm_error", session_id=session_id, error=str(exc))
-            return None
-
-        content = (choice.message.content or "").strip()
-
-        if choice.finish_reason == "length":
-            return None
-
-        parsed_calls = parse_nous_tool_calls(content)
-
-        if not parsed_calls:
-            # No tool calls found — this is the final answer
-            if not content:
-                if iteration == 0:
-                    logger.info(
-                        "curator_nous_empty_final_retry",
-                        session_id=session_id,
-                        tool_calls=total_tool_calls,
-                    )
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "Please provide the context block now using the format in the system prompt."
-                        ),
-                    })
-                    continue
-                logger.info("curator_nous_empty_final", session_id=session_id, tool_calls=total_tool_calls)
-                return None
-            return CuratorResult(
-                context_text=content,
-                curated_paths=curated_paths,
-                retained_turn_numbers=retained_turn_numbers,
-                tool_calls_used=total_tool_calls,
-                estimated_tokens=_estimate_tokens(content),
-                tool_log=tool_log,
-            )
-
-        messages.append({"role": "assistant", "content": content})
-
-        # Execute parsed tool calls and build combined response
-        response_parts: list[str] = []
-
-        for pc in parsed_calls:
-            tool_name = pc["name"]
-            args = pc["arguments"]
-            logger.debug("curator_nous_tool_dispatch", tool=tool_name, session_id=session_id)
-
-            if tool_name not in allowed_tools:
-                result_str = "Error: unknown tool '" + tool_name + "'"
-                response_parts.append(_RESULT_OPEN + "\n" + result_str + "\n" + _RESULT_CLOSE)
-                error_window.append((tool_name, "error"))
-                continue
-
-            try:
-                handler = TOOL_HANDLERS[tool_name]
-                result_str = await handler(session_id=session_id, **args)
-                total_tool_calls += 1
-                if tool_name in ("get_file", "get_file_lines"):
-                    path = args.get("path", "")
-                    if path:
-                        curated_paths.add(path)
-                if tool_name == "select_relevant_turns":
-                    turn_nums = args.get("turn_numbers", [])
-                    retained_turn_numbers = [int(n) for n in turn_nums] if turn_nums else []
-                    logger.info(
-                        "curator_nous_turn_selection",
-                        session_id=session_id,
-                        retained=retained_turn_numbers,
-                    )
-                error_window.append((tool_name, "ok"))
-            except Exception as exc:
-                result_str = "Error: " + type(exc).__name__ + ": " + str(exc)
-                error_window.append((tool_name, "error"))
-                logger.warning("curator_nous_tool_failed", tool=tool_name, session_id=session_id, error=str(exc))
-
-            # Stuck-loop detection
-            if len(error_window) >= _ERROR_WINDOW_SIZE:
-                recent = error_window[-_ERROR_WINDOW_SIZE:]
-                if all(e[1] == "error" for e in recent) and len(set(e[0] for e in recent)) == 1:
-                    logger.warning("curator_nous_stuck_loop", tool=recent[0][0], session_id=session_id)
-                    return None
-
-            response_parts.append(_RESULT_OPEN + "\n" + result_str + "\n" + _RESULT_CLOSE)
-
-        messages.append({"role": "user", "content": "\n".join(response_parts)})
-
-    logger.info("curator_nous_max_iterations", session_id=session_id, iterations=max_iterations)
-    return None
+__all__ = ["_run_curator_native"]

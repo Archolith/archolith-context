@@ -15,33 +15,25 @@ import time
 import httpx
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from archolith_proxy.config import get_settings
-from archolith_proxy.curator.pipeline import curate_context, run_background_pass
+from archolith_proxy.curator.pipeline import curate_context
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
-from archolith_proxy.metrics import get_metrics, record_metric
-from archolith_proxy.models.dtos import TurnTrace
+from archolith_proxy.metrics import record_metric
 from archolith_proxy.openai.schemas import ChatCompletionRequest
 from archolith_proxy.openai.helpers import (
-    _build_call_map,
-    _collect_recent_tool_results,
-    _collect_tool_call_records,
-    _extract_file_reads,
-    _extract_finish_reason,
+    _build_call_map,  # noqa: F401 — re-exported for test compatibility
+    _collect_tool_call_records,  # noqa: F401 — re-exported for test compatibility
     _extract_response_text,
-    _extract_tool_path,
     _extract_user_message,
-    _infer_file_touch_statuses,
-    _normalize_message_content,
-    _prefer_stronger_file_status,
+    _infer_file_touch_statuses,  # noqa: F401 — re-exported for test compatibility
 )
-from archolith_proxy.openai.extraction import _run_extraction, _build_outline
+from archolith_proxy.openai.extraction import _run_extraction  # noqa: F401 — re-exported for test compatibility
 from archolith_proxy.openai.file_cache import (
-    _extract_file_writes,
-    _invalidate_file_cache,
-    _invalidate_written_files,
-    _upsert_file_cache,
+    _invalidate_file_cache,  # noqa: F401 — re-exported for test compatibility
+    _invalidate_written_files,  # noqa: F401 — re-exported for test compatibility
+    _upsert_file_cache,  # noqa: F401 — re-exported for file cache pipeline
 )
 from archolith_proxy.openai.non_streaming import _handle_non_streaming
 from archolith_proxy.openai.streaming import _handle_streaming
@@ -278,13 +270,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             # for the process lifetime. proxy_config presence is the sentinel
             # (always set; harness_env is conditional on the request).
             store = get_trace_store()
-            if not store.has_session_metadata(session_id, "proxy_config"):
+            if not await store.has_session_metadata(session_id, "proxy_config"):
                 from archolith_proxy.proxy.session import extract_harness_env
                 harness_env = extract_harness_env(messages_raw)
                 if harness_env:
-                    store.set_session_metadata(session_id, "harness_env", harness_env)
+                    await store.set_session_metadata(session_id, "harness_env", harness_env)
                 from archolith_proxy.config import snapshot_config
-                store.set_session_metadata(session_id, "proxy_config", snapshot_config())
+                await store.set_session_metadata(session_id, "proxy_config", snapshot_config())
 
             structlog.contextvars.bind_contextvars(session_id=session_id, turn_number=turn_number)
         except Exception as e:
@@ -434,16 +426,16 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
         has_tools=bool(body.get("tools")),
     )
 
-    # ── RTK filtering ──
-    from archolith_proxy.rtk import filter_request_body, is_available as rtk_is_available
-    _rtk_chars_before = sum(len(json.dumps(m)) for m in body.get("messages", []))
-    body = filter_request_body(body, enabled=settings.rtk_enabled)
-    _rtk_chars_after = sum(len(json.dumps(m)) for m in body.get("messages", []))
-    trace_builder.set_rtk_stats(
-        available=rtk_is_available(),
-        chars_saved=max(0, _rtk_chars_before - _rtk_chars_after),
-        chars_before=_rtk_chars_before,
-        chars_after=_rtk_chars_after,
+    # ── Filtering ──
+    from archolith_proxy.filter_adapter import filter_request_body, is_available as filter_is_available
+    _filter_chars_before = sum(len(json.dumps(m)) for m in body.get("messages", []))
+    body = filter_request_body(body, enabled=settings.filter_enabled)
+    _filter_chars_after = sum(len(json.dumps(m)) for m in body.get("messages", []))
+    trace_builder.set_filter_stats(
+        available=filter_is_available(),
+        chars_saved=max(0, _filter_chars_before - _filter_chars_after),
+        chars_before=_filter_chars_before,
+        chars_after=_filter_chars_after,
     )
 
     # ── Proxy-forced recall for key trigger patterns ──
@@ -470,7 +462,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     _outbound_chars_sent = sum(len(json.dumps(m)) for m in body.get("messages", []))
                     trace_builder.set_outbound_context_stats(
                         outbound_chars_sent=_outbound_chars_sent,
-                        proxy_recall_chars_added=max(0, _outbound_chars_sent - _rtk_chars_after),
+                        proxy_recall_chars_added=max(0, _outbound_chars_sent - _filter_chars_after),
                     )
                     # Rough fact count: count lines that look like fact entries
                     _recall_fact_count = sum(1 for ln in _recall_text.splitlines() if ln.strip().startswith("- "))

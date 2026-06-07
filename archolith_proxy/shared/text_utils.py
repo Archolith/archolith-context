@@ -12,6 +12,19 @@ import re
 # ── Text normalization for deduplication ──────────────────────────────────
 
 
+def slugify(text: str) -> str:
+    """Convert text to a URL/filename-safe slug.
+
+    Lowercases, removes special characters, collapses whitespace to hyphens,
+    and limits to 60 characters.
+    """
+    slug = text.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    slug = re.sub(r"[\s_]+", "-", slug)
+    slug = re.sub(r"-+", "-", slug)
+    return slug[:60].strip("-")
+
+
 def _normalize(text: str) -> str:
     """Normalize fact content for comparison: lowercase, strip punctuation, collapse whitespace."""
     text = text.lower().strip()
@@ -21,9 +34,17 @@ def _normalize(text: str) -> str:
     return text
 
 
+# Public alias for _normalize
+normalize_text = _normalize
+
+
 def _tokenize(text: str) -> set[str]:
     """Split normalized text into a set of word tokens."""
     return set(_normalize(text).split())
+
+
+# Public alias for _tokenize
+tokenize_text = _tokenize
 
 
 def jaccard_similarity(a: str, b: str) -> float:
@@ -58,7 +79,8 @@ def _build_outline(content: str, path: str) -> str:
                     symbols.append((node.lineno, f"def {node.name}"))
                 elif isinstance(node, _ast.ClassDef):
                     symbols.append((node.lineno, f"class {node.name}"))
-        except Exception:
+        except (SyntaxError, ValueError):
+            # Narrow exception: only catch parse errors, not ImportError (missing javalang)
             pass
 
     if not symbols and path.endswith(".java"):
@@ -78,7 +100,9 @@ def _build_outline(content: str, path: str) -> str:
                     ret = node.return_type.name if node.return_type else "void"
                     label = f"{mods} {ret} {node.name}".strip()
                     symbols.append((node.position.line, label))
-        except Exception:
+        except (SyntaxError, ValueError, ImportError):
+            # Catch parse/lexer errors and ImportError if javalang is not installed
+            # Also catches javalang.parser.LexerError since it would be wrapped as an Exception
             pass
 
     if not symbols:
@@ -103,3 +127,20 @@ def _build_outline(content: str, path: str) -> str:
 
     symbols.sort(key=lambda x: x[0])
     return "\n".join(f"line {ln}: {sym}" for ln, sym in symbols)
+
+
+# Public alias for _build_outline
+build_outline = _build_outline
+
+
+__all__ = [
+    "slugify",
+    "normalize_text",
+    "tokenize_text",
+    "build_outline",
+    "jaccard_similarity",
+    # Kept for backward compatibility (prefer public names above)
+    "_normalize",
+    "_tokenize",
+    "_build_outline",
+]

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Proxy restart script with LadybugDB health check.
 
-Kills any existing proxy on port 9801, checks the LadybugDB file for signs
+Kills any existing proxy on port 9800, checks the LadybugDB file for signs
 of WAL corruption from a force-kill, and starts a fresh proxy. Falls back to
 a timestamped fresh DB if the existing one fails graph initialization.
 
 Usage:
-    python scripts/proxy_restart.py [--port 9801] [--fresh] [--db PATH]
+    python scripts/proxy_restart.py [--port 9800] [--fresh] [--db PATH]
 
 Options:
-    --port N        Proxy port (default: 9801)
+    --port N        Proxy port (default: 9800)
     --fresh         Always create a new timestamped DB (skip health check)
     --db PATH       Override LADYBUG_DB_PATH from .env
     --timeout N     Seconds to wait for graph_ready (default: 20)
@@ -246,7 +246,7 @@ def main() -> None:
     dotenv_path = root / ".env"
     dotenv = load_dotenv(dotenv_path)
 
-    port = args.port or int(dotenv.get("PROXY_PORT", "9801"))
+    port = args.port or int(dotenv.get("PROXY_PORT", "9800"))
 
     # Resolve DB path
     db_raw = args.db or dotenv.get("LADYBUG_DB_PATH", "./data/context.lbug")

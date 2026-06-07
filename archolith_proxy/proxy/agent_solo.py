@@ -4,10 +4,10 @@ Delegates all compression logic to ``archolith_filter.agent_solo``.
 This module owns:
 - Per-session ``DedupeTracker`` lifecycle
 - Curator prefix cache (persist curator savings across agent-solo turns)
-- Config → RTK parameter mapping
+- Config → archolith_filter parameter mapping
 - Stats dict formatting for trace recording
 
-The RTK module owns HOW to compress; this module owns WHEN.
+The archolith_filter module owns HOW to compress; this module owns WHEN.
 """
 
 from __future__ import annotations
@@ -18,6 +18,14 @@ from typing import Any
 import structlog
 
 logger = structlog.get_logger()
+
+__all__ = [
+    "cache_curator_rewrite",
+    "clear_curator_cache",
+    "clear_session_hashes",
+    "_reset_agent_solo",
+    "prune_session_state",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +196,17 @@ def clear_session_hashes(session_id: str) -> None:
     _curator_caches.pop(session_id, None)
 
 
+def _reset_agent_solo() -> None:
+    """Reset all agent-solo state — used in tests.
+
+    Thread-safety: Single-threaded proxy event loop. This function is only
+    called during test setup/teardown, never during request handling.
+    """
+    global _session_trackers, _curator_caches
+    _session_trackers.clear()
+    _curator_caches.clear()
+
+
 def prune_session_state(active_session_ids: set[str]) -> int:
     """Drop dedupe and curator-prefix cache state for inactive sessions."""
     stale_ids = {
@@ -216,7 +235,7 @@ def compress_agent_solo(
     coherence_tail_size: int = 10,
     max_tail_messages: int = 20,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Apply enabled agent-solo compression strategies via RTK.
+    """Apply enabled agent-solo compression strategies via archolith-filter.
 
     First applies curator prefix cache (if available), then runs
     mechanical compression strategies on top.
@@ -260,7 +279,7 @@ def compress_agent_solo(
                 from archolith_filter.agent_solo import compress_agent_solo_turn
             except ImportError:
                 if curator_chars_saved == 0:
-                    stats["skipped_reason"] = "rtk_unavailable"
+                    stats["skipped_reason"] = "filter_unavailable"
                 return messages, stats
 
             tracker = _get_tracker(session_id) if dedup_enabled else None
@@ -276,17 +295,17 @@ def compress_agent_solo(
                 tail_shrink_tokens=shrink_max_tokens,
             )
 
-            rtk_stats = result.stats
+            filter_stats = result.stats
             messages = result.messages
 
-            # Merge RTK stats
-            stats["strategies_applied"].extend(rtk_stats.strategies_applied)
-            stats["chars_saved_shrink"] = rtk_stats.chars_saved_shrink
-            stats["chars_saved_dedup"] = rtk_stats.chars_saved_dedup
-            stats["chars_saved_middle"] = rtk_stats.chars_saved_filter
-            stats["chars_saved_compact"] = rtk_stats.chars_saved_compact
-            stats["total_chars_saved"] += rtk_stats.total_chars_saved
-            if rtk_stats.skipped_reason and not stats["strategies_applied"]:
-                stats["skipped_reason"] = rtk_stats.skipped_reason
+            # Merge filter stats
+            stats["strategies_applied"].extend(filter_stats.strategies_applied)
+            stats["chars_saved_shrink"] = filter_stats.chars_saved_shrink
+            stats["chars_saved_dedup"] = filter_stats.chars_saved_dedup
+            stats["chars_saved_middle"] = filter_stats.chars_saved_filter
+            stats["chars_saved_compact"] = filter_stats.chars_saved_compact
+            stats["total_chars_saved"] += filter_stats.total_chars_saved
+            if filter_stats.skipped_reason and not stats["strategies_applied"]:
+                stats["skipped_reason"] = filter_stats.skipped_reason
 
     return messages, stats

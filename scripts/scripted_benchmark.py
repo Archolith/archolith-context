@@ -40,7 +40,7 @@ def _load_dotenv(path: Path) -> dict[str, str]:
 _here = Path(__file__).parent.parent
 _dotenv = _load_dotenv(_here / ".env")
 
-PROXY_URL = os.getenv("PROXY_URL", _dotenv.get("PROXY_URL", "http://localhost:9801"))
+PROXY_URL = os.getenv("PROXY_URL", _dotenv.get("PROXY_URL", "http://localhost:9800"))
 PROXY_BASE = PROXY_URL.rstrip("/").removesuffix("/v1")
 HARNESS_URL = os.getenv("HARNESS_URL", _dotenv.get("HARNESS_URL", "http://localhost:3485"))
 HARNESS_WORKTREE_ROOT = os.getenv("HARNESS_WORKTREE_ROOT", _dotenv.get("HARNESS_WORKTREE_ROOT", "C:/Users/thron/IdeaProjects/.agent/worktrees"))

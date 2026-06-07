@@ -6,6 +6,8 @@ for memory systems that don't merit a dedicated adapter yet.
 
 from __future__ import annotations
 
+__all__ = ["Adapter"]
+
 from typing import TYPE_CHECKING
 
 import httpx
@@ -70,15 +72,24 @@ class Adapter(MemoryAdapterBase):
             healthcheck=True,
         )
 
+    async def close(self) -> None:
+        """Close the httpx client if open."""
+        client = getattr(self, "_client", None)
+        if client is not None and not client.is_closed:
+            await client.aclose()
+
     async def healthcheck(self) -> bool:
-        """Best-effort health check — GET on base_url or GET /health."""
+        """Best-effort health check — GET on base_url or GET /health.
+
+        Returns True only for 2xx status. 401/403/404/429 are considered unhealthy.
+        """
         try:
             client = self._get_client()
             # Try /health first, fall back to base URL
             for path in ("/health", "/"):
                 try:
                     resp = await client.get(path)
-                    if resp.status_code < 500:
+                    if 200 <= resp.status_code < 300:
                         return True
                 except Exception:
                     continue
@@ -152,3 +163,4 @@ class Adapter(MemoryAdapterBase):
 
         # Default: send the full canonical record
         return promotion.model_dump(mode="json")
+

@@ -8,7 +8,7 @@ then compresses growing conversation history by replacing stale middle messages
 with graph-assembled context. It's a drop-in replacement for api.openai.com —
 any client that accepts a base URL override works unchanged with zero code changes.
 
-The project was previously internal as `cth.context-engine`. It has been fully
+The project was previously internal as `cth.context-engine` and has been renamed to `archolith-context`. It has been fully
 migrated: package namespace is `archolith_proxy`, all internal refs are stripped,
 450 tests pass, Docker Compose defaults to the embedded LadybugDB backend (zero
 infrastructure). It's ready for public launch documentation.

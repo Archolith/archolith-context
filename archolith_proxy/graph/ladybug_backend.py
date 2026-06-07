@@ -6,6 +6,8 @@ Domain logic is delegated to sub-modules (ladybug_sessions, ladybug_facts, etc.)
 
 from __future__ import annotations
 
+__all__ = ["LadybugBackend"]
+
 import atexit
 import os
 import time
@@ -55,6 +57,8 @@ from archolith_proxy.graph.ladybug_facts import (
 )
 from archolith_proxy.graph.ladybug_files import (
     delete_file_content,
+    delete_file_outline,
+    evict_stale_file_cache,
     get_file_content,
     get_file_lines,
     get_file_outline,
@@ -73,7 +77,6 @@ from archolith_proxy.graph.ladybug_sessions import (
     touch_session,
     update_goal,
 )
-from archolith_proxy.graph.protocol import GraphBackend
 from archolith_proxy.config import get_settings
 
 logger = structlog.get_logger()
@@ -142,7 +145,8 @@ CREATE NODE TABLE IF NOT EXISTS FileOutline(
     session_id        STRING,
     path              STRING,
     outline           STRING,
-    last_updated_turn INT64
+    last_updated_turn INT64,
+    created_at        TIMESTAMP
 );
 
 CREATE NODE TABLE IF NOT EXISTS Checkpoint(
@@ -199,6 +203,7 @@ class LadybugBackend:
         self._db = None
         self._aconn = None
         self._ready = False
+        self._rotation_depth = 0  # Track rotation attempts to prevent infinite recursion
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -222,6 +227,7 @@ class LadybugBackend:
 
         try:
             await self._aconn.execute("RETURN 1 AS ok")
+            self._rotation_depth = 0  # Reset on successful connection
             if wal_existed:
                 logger.info("ladybug_wal_recovered", path=self._db_path)
             else:
@@ -230,9 +236,15 @@ class LadybugBackend:
             if wal_existed:
                 logger.warning("ladybug_wal_recovery_failed", path=self._db_path, error=str(e),
                                note="rotating to fresh DB path")
+                self._rotation_depth += 1
+                if self._rotation_depth > 3:
+                    logger.error("ladybug_rotation_depth_exceeded", path=self._db_path, depth=self._rotation_depth,
+                                 error=str(e), note="giving up after 3 rotation attempts")
+                    self._rotation_depth = 0
+                    raise RuntimeError(f"LadybugDB connection failed after {self._rotation_depth} rotation attempts: {e}")
                 await self.close()
                 self._db_path = _rotate_db_path(self._db_path)
-                logger.info("ladybug_rotating_to_fresh", new_path=self._db_path)
+                logger.info("ladybug_rotating_to_fresh", new_path=self._db_path, attempt=self._rotation_depth)
                 await self.connect()
             else:
                 logger.warning("ladybug_connected_degraded", path=self._db_path, error=str(e),
@@ -283,6 +295,41 @@ class LadybugBackend:
 
     def is_ready(self) -> bool:
         return self._ready and self._db is not None
+
+    def supported_methods(self) -> set[str]:
+        """Return set of supported method names for LadybugDB backend.
+
+        LadybugDB supports all operations including bulk operations and file caching.
+        """
+        return {
+            # Lifecycle
+            "connect", "close", "ensure_schema", "verify_connectivity", "is_ready",
+            "supported_methods",
+            # Session CRUD
+            "create_session", "find_session_by_id", "find_session_by_fingerprint",
+            "find_or_create_by_fingerprint", "touch_session", "get_turn_number",
+            "update_goal", "list_active_sessions", "get_session_stats",
+            # Fact CRUD
+            "store_fact", "store_facts_batch", "invalidate_facts",
+            "find_matching_fact_ids", "get_active_facts", "get_active_fact_count",
+            "get_facts_filtered", "get_invalidated_facts", "get_supersession_chain",
+            # All edge operations (single and bulk)
+            "create_belongs_to", "create_touches", "bulk_create_touches",
+            "create_supersedes", "bulk_create_supersedes",
+            "get_touched_files", "store_decision", "bulk_store_decisions",
+            "get_decisions",
+            # File content caching (LadybugDB only)
+            "upsert_file_content", "get_file_content", "delete_file_content",
+            "list_cached_files", "get_file_lines",
+            # File outline caching (LadybugDB only)
+            "upsert_file_outline", "get_file_outline", "delete_file_outline",
+            "evict_stale_file_cache",
+            # Checkpoints, Issues, Verifications (LadybugDB only)
+            "upsert_checkpoint", "get_checkpoint",
+            "create_issue", "get_open_issues", "bulk_create_issues",
+            "resolve_issues", "bulk_resolve_issues",
+            "create_verification", "get_last_verification", "bulk_create_verifications",
+        }
 
     def _check_ready(self) -> None:
         if not self._ready or not self._aconn:
@@ -426,11 +473,17 @@ class LadybugBackend:
     async def delete_file_content(self, session_id: str, path: str) -> bool:
         return await delete_file_content(self._execute, session_id, path)
 
+    async def delete_file_outline(self, session_id: str, path: str) -> bool:
+        return await delete_file_outline(self._execute, session_id, path)
+
     async def upsert_file_outline(self, session_id: str, path: str, outline: str, turn: int) -> None:
         return await upsert_file_outline(self._execute, session_id, path, outline, turn)
 
     async def get_file_outline(self, session_id: str, path: str) -> str | None:
         return await get_file_outline(self._execute, session_id, path)
+
+    async def evict_stale_file_cache(self, session_id: str, max_turns_age: int, max_entries: int) -> None:
+        return await evict_stale_file_cache(self._execute, session_id, max_turns_age, max_entries)
 
     # ── Checkpoint / Issues / Verifications (delegated) ────────────────
 

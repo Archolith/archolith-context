@@ -6,7 +6,6 @@ Uses the existing Neo4j instance (Community Edition) with the default
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 
 import neo4j
 import structlog
@@ -37,6 +36,15 @@ async def get_driver() -> neo4j.AsyncDriver:
     if _driver is None:
         raise RuntimeError("Neo4j driver not initialized — call init_driver() first")
     return _driver
+
+
+def is_connected() -> bool:
+    """Check if the Neo4j driver is initialized and connected.
+
+    Non-async check: verifies initialization state only, not connectivity.
+    Use verify_connectivity() for a full health check.
+    """
+    return _driver is not None
 
 
 async def close_driver() -> None:

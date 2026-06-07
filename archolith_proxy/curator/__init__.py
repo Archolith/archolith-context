@@ -4,7 +4,6 @@ from collections.abc import Awaitable, Callable
 import structlog
 from archolith_proxy.config import get_settings
 from archolith_proxy.curator.briefing import SessionBriefing
-from archolith_proxy.curator.pipeline import _build_briefing_from_result, _extract_section
 from archolith_proxy.curator.pipeline import curate_context, get_last_attempt, run_background_pass
 from archolith_proxy.models.dtos import AssembledContext
 logger = structlog.get_logger()

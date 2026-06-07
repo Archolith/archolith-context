@@ -1,7 +1,8 @@
-"""Thin outbound RTK adapter for proxy-side tool-result filtering and shrinking."""
+"""Thin outbound filter adapter for proxy-side tool-result filtering and shrinking."""
 
 from __future__ import annotations
 
+import enum
 from typing import Any, Callable
 
 import structlog
@@ -9,27 +10,36 @@ import structlog
 logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
-# Lazy loaders — each sentinel starts as False (unresolved), becomes a
+# Sentinel type — explicit 3-state for unresolved/callable/unavailable
+# ---------------------------------------------------------------------------
+
+class _LoadState(enum.Enum):
+    UNRESOLVED = enum.auto()
+
+_UNRESOLVED = _LoadState.UNRESOLVED
+
+# ---------------------------------------------------------------------------
+# Lazy loaders — each sentinel starts as UNRESOLVED, becomes a
 # callable on first successful import, or None if the package is absent.
 # ---------------------------------------------------------------------------
 
-_filter_output_fn: Callable[..., Any] | None | bool = False
-_shrink_args_fn: Callable[..., Any] | None | bool = False
-_shrink_results_fn: Callable[..., Any] | None | bool = False
+_filter_output_fn: Callable[..., Any] | None | _LoadState = _UNRESOLVED
+_shrink_args_fn: Callable[..., Any] | None | _LoadState = _UNRESOLVED
+_shrink_results_fn: Callable[..., Any] | None | _LoadState = _UNRESOLVED
 
 
 def _load_filter_output() -> Callable[..., Any] | None:
     """Lazy-load archolith_filter.filter_output and fail open if unavailable."""
     global _filter_output_fn
-    if _filter_output_fn is False:
+    if _filter_output_fn is _UNRESOLVED:
         try:
             from archolith_filter import filter_output as loaded
 
             _filter_output_fn = loaded
         except ImportError:
             logger.warning(
-                "rtk_dependency_missing",
-                message="archolith_filter is not installed; RTK filtering disabled",
+                "filter_dependency_missing",
+                message="archolith_filter is not installed; filter disabled",
             )
             _filter_output_fn = None
     return _filter_output_fn if callable(_filter_output_fn) else None
@@ -41,7 +51,7 @@ def _load_shrink_functions() -> tuple[Callable[..., Any] | None, Callable[..., A
     Returns (shrink_args_fn, shrink_results_fn).
     """
     global _shrink_args_fn, _shrink_results_fn
-    if _shrink_args_fn is False:
+    if _shrink_args_fn is _UNRESOLVED:
         try:
             from archolith_filter.shrink import (
                 shrink_oversized_tool_call_args_by_tokens,
@@ -67,14 +77,14 @@ def _load_shrink_functions() -> tuple[Callable[..., Any] | None, Callable[..., A
 def is_available() -> bool:
     """Return True if archolith_filter is installed and the filter function is callable.
 
-    Used by the trace builder to distinguish 'RTK enabled but package missing
-    (fail-open)' from 'RTK enabled and active'.
+    Used by the trace builder to distinguish 'filter enabled but package missing
+    (fail-open)' from 'filter enabled and active'.
     """
     return _load_filter_output() is not None
 
 
 def filter_tool_messages(messages: list[dict[str, Any]], enabled: bool) -> list[dict[str, Any]]:
-    """Apply RTK Layer 1 filtering to outbound tool-role messages."""
+    """Apply Layer 1 filtering to outbound tool-role messages."""
     if not enabled:
         return messages
 
@@ -97,7 +107,7 @@ def filter_tool_messages(messages: list[dict[str, Any]], enabled: bool) -> list[
         try:
             result = filter_output(content, tool=tool_name)
         except Exception as exc:
-            logger.warning("rtk_filter_failed", tool=tool_name, error=str(exc))
+            logger.warning("filter_failed", tool=tool_name, error=str(exc))
             filtered_messages.append(message)
             continue
 
@@ -109,10 +119,10 @@ def filter_tool_messages(messages: list[dict[str, Any]], enabled: bool) -> list[
 
 
 def filter_single_tool_result(content: str, tool_name: str = "unknown") -> str:
-    """Apply RTK Layer 1 filter to a single tool result string.
+    """Apply Layer 1 filter to a single tool result string.
 
     Used by the extraction pipeline to strip noise before the extractor LLM
-    processes tool results.  Fail-open: returns content unchanged if RTK is
+    processes tool results.  Fail-open: returns content unchanged if filter is
     unavailable or the filter raises.
     """
     filter_output = _load_filter_output()
@@ -122,14 +132,14 @@ def filter_single_tool_result(content: str, tool_name: str = "unknown") -> str:
         result = filter_output(content, tool=tool_name)
         return result.output
     except Exception as exc:
-        logger.debug("rtk_filter_single_failed", tool=tool_name, error=str(exc))
+        logger.debug("filter_single_failed", tool=tool_name, error=str(exc))
         return content
 
 
 def _unwrap_shrink_result(result: Any) -> list[dict[str, Any]]:
-    """Normalise RTK shrink return values to list[dict].
+    """Normalise filter shrink return values to list[dict].
 
-    RTK shrink functions return ShrinkTokensResult / ShrinkCharsResult dataclasses
+    filter shrink functions return ShrinkTokensResult / ShrinkCharsResult dataclasses
     with a ``.messages`` field.  Earlier versions returned list[ChatMessage] directly.
     This helper handles both cases and converts ChatMessage → dict when needed.
     """
@@ -153,7 +163,7 @@ def shrink_tool_call_args(
 
     Collapses large Write/Edit args (file content, patch bodies) that bloat
     history once the file is already in the content cache.
-    Fail-open: returns messages unchanged if RTK unavailable or shrink raises.
+    Fail-open: returns messages unchanged if filter unavailable or shrink raises.
     """
     if not enabled:
         return messages
@@ -164,7 +174,7 @@ def shrink_tool_call_args(
         result = shrink_args(messages, max_tokens=max_tokens)
         return _unwrap_shrink_result(result)
     except Exception as exc:
-        logger.debug("rtk_shrink_args_failed", error=str(exc))
+        logger.debug("filter_shrink_args_failed", error=str(exc))
         return messages
 
 
@@ -176,7 +186,7 @@ def shrink_tail_tool_results(
 
     Prevents large file reads and command outputs from dominating the context
     window when retained in the tail for structural integrity.
-    Fail-open: returns messages unchanged if RTK unavailable or shrink raises.
+    Fail-open: returns messages unchanged if filter unavailable or shrink raises.
     """
     _, shrink_results = _load_shrink_functions()
     if shrink_results is None:
@@ -185,14 +195,14 @@ def shrink_tail_tool_results(
         result = shrink_results(messages, max_tokens=max_tokens_per_result)
         return _unwrap_shrink_result(result)
     except Exception as exc:
-        logger.debug("rtk_shrink_tail_failed", error=str(exc))
+        logger.debug("filter_shrink_tail_failed", error=str(exc))
         return messages
 
 
 def filter_request_body(body: dict[str, Any], enabled: bool) -> dict[str, Any]:
     """Return a request body with outbound tool messages filtered and args shrunk.
 
-    Applies two RTK passes when enabled:
+    Applies two filter passes when enabled:
     1. Layer 1 filter on tool-role messages (noise/boilerplate removal)
     2. Shrink oversized tool_call arguments in assistant messages
     """

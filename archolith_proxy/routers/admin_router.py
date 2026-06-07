@@ -30,7 +30,7 @@ TUNABLE_FIELDS = {
     "compaction_enabled",
     "query_rewrite_enabled",
     "session_recall_tool_enabled",
-    "rtk_enabled",
+    "filter_enabled",
     "pricing_input_per_million",
     "pricing_input_cached_per_million",
     "pricing_output_per_million",
@@ -86,7 +86,19 @@ async def update_config(
             continue
         expected_type = type(getattr(settings, key))
         try:
-            coerced = expected_type(value)
+            # Special handling for bool fields: parse string booleans properly
+            if expected_type is bool:
+                if isinstance(value, str):
+                    if value.lower() in ("true", "1", "yes"):
+                        coerced = True
+                    elif value.lower() in ("false", "0", "no"):
+                        coerced = False
+                    else:
+                        raise ValueError(f"Cannot parse '{value}' as boolean")
+                else:
+                    coerced = bool(value)
+            else:
+                coerced = expected_type(value)
             setattr(settings, key, coerced)
             updated[key] = coerced
             logger.info("config_updated", field=key, value=coerced)

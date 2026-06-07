@@ -6,6 +6,7 @@ import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 import structlog
@@ -14,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from archolith_proxy import __version__
 from archolith_proxy.admin import require_admin_token
 from archolith_proxy.config import get_settings
 from archolith_proxy.graph.backend import close_backend, get_backend, init_backend, is_graph_ready
@@ -155,25 +157,38 @@ async def lifespan(app: FastAPI):
     if proxy_missing:
         logger.warning("missing_required_env_vars", vars=proxy_missing, note="proxy calls will fail")
 
-    # Loud startup check: RTK_ENABLED but the package missing from THIS env means
-    # agent-solo compression and RTK filtering silently no-op (the failure that
+    # Loud startup check: the RTK_ENABLED env var was renamed to FILTER_ENABLED and is
+    # no longer read. If a stale environment still sets RTK_ENABLED without FILTER_ENABLED,
+    # filtering would silently turn off. Refuse to start rather than fail silently.
+    if os.environ.get("RTK_ENABLED") is not None and os.environ.get("FILTER_ENABLED") is None:
+        logger.error(
+            "rtk_enabled_env_removed",
+            note="RTK_ENABLED is no longer read; it was renamed to FILTER_ENABLED.",
+        )
+        raise RuntimeError(
+            "RTK_ENABLED is set but is no longer read (renamed to FILTER_ENABLED). "
+            "Filtering would silently be disabled. Set FILTER_ENABLED instead and unset RTK_ENABLED."
+        )
+
+    # Loud startup check: FILTER_ENABLED but the package missing from THIS env means
+    # agent-solo compression and filtering silently no-op (the failure that
     # made the proxy look 100% passthrough on real sessions). Surface it now.
-    if settings.rtk_enabled:
-        from archolith_proxy.rtk import is_available as _rtk_is_available
-        if _rtk_is_available():
-            logger.info("rtk_available", note="archolith_filter loaded")
+    if settings.filter_enabled:
+        from archolith_proxy.filter_adapter import is_available as _filter_is_available
+        if _filter_is_available():
+            logger.info("filter_available", note="archolith_filter loaded")
         else:
             logger.error(
-                "rtk_enabled_but_unavailable",
-                note="RTK_ENABLED=true but archolith_filter is not importable; refusing to start.",
+                "filter_enabled_but_unavailable",
+                note="FILTER_ENABLED=true but archolith_filter is not importable; refusing to start.",
             )
             # Fail fast: a proxy that silently does no curation is worse than one
-            # that won't boot. If RTK is explicitly enabled it must be importable.
+            # that won't boot. If filter is explicitly enabled it must be importable.
             raise RuntimeError(
-                "RTK_ENABLED=true but archolith_filter is not importable in this environment. "
-                "Agent-solo compression and RTK filtering would silently do nothing. "
+                "FILTER_ENABLED=true but archolith_filter is not importable in this environment. "
+                "Agent-solo compression and filter would silently do nothing. "
                 "Install it into the active venv (pip install -e ../archolith-filter) "
-                "or set RTK_ENABLED=false."
+                "or set FILTER_ENABLED=false."
             )
 
     graph_missing = settings.check_required_for_graph()
@@ -238,8 +253,9 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass  # Non-fatal; trace/graph drift does not block startup
 
-    from archolith_proxy.memory.registry import get_registry, reset_registry
+    from archolith_proxy.memory.registry import get_registry, reset_registry, init_plugins
 
+    init_plugins()
     reset_registry()
     registry = get_registry()
     if settings.promotion_enabled:
@@ -283,6 +299,18 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    from archolith_proxy.curator.tools import close_semantic_client
+    await close_semantic_client()
+
+    # Close all registered memory adapters
+    from archolith_proxy.memory.registry import get_registry
+    registry = get_registry()
+    for adapter in registry.get_all_adapters():
+        try:
+            await adapter.close()
+        except Exception as e:
+            logger.warning("adapter_close_failed", adapter_id=adapter.config.id, error=str(e))
+
     await app.state.http_client.aclose()
     await app.state.extractor_client.aclose()
     await close_backend()
@@ -294,7 +322,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="archolith-proxy",
         description="OpenAI-compatible proxy with graph-assembled context",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 
@@ -336,9 +364,9 @@ def create_app() -> FastAPI:
     app.include_router(trace_router, dependencies=[Depends(require_admin_token)])
 
     # Dashboard static files
-    static_dir = os.path.join(os.path.dirname(__file__), "static")
-    if os.path.isdir(static_dir):
-        app.mount("/dashboard", StaticFiles(directory=static_dir, html=True), name="dashboard")
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.is_dir():
+        app.mount("/dashboard", StaticFiles(directory=str(static_dir), html=True), name="dashboard")
 
     @app.get("/", include_in_schema=False)
     async def root_redirect():
@@ -351,7 +379,7 @@ def create_app() -> FastAPI:
         """Liveness probe — is the process alive?"""
         return {
             "status": "alive",
-            "version": "0.1.0",
+            "version": __version__,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0)
             if get_metrics()["start_time"]
             else 0,
@@ -402,7 +430,7 @@ def create_app() -> FastAPI:
             "status": "ready" if ready else "not_ready",
             "graph": graph_status,
             "upstream": upstream_status,
-            "version": "0.1.0",
+            "version": __version__,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0)
             if get_metrics()["start_time"]
             else 0,
@@ -443,7 +471,7 @@ def create_app() -> FastAPI:
             "status": "ok",
             "graph": graph_status,
             "upstream": upstream_status,
-            "version": "0.1.0",
+            "version": __version__,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0)
             if get_metrics()["start_time"]
             else 0,

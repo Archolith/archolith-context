@@ -8,12 +8,39 @@ import httpx
 
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord, ToolExtractor
 
+__all__ = ["GrepExtractor"]
+
 # Lazy path match before :line_number: — handles both Unix (/path/file.py:42:match)
 # and Windows (C:\path\file.py:42:match) paths. The lazy .+? naturally finds the
 # first :digits: boundary, correctly treating the Windows drive colon as path content.
 _GREP_LINE_RE = re.compile(r"^(.+?):(\d+):(.+)$", re.MULTILINE)
 _MAX_LINES_PER_FILE = 5
 _MAX_FILES = 10
+
+
+def _is_valid_path(s: str) -> bool:
+    """Check if a string looks like a real file path (not just a label:line:text pattern).
+
+    Heuristics (accept if ANY holds):
+    - Contains a path separator (/ or \\)
+    - Starts with a Windows drive letter (e.g. C:)
+    - Is a bare filename with a file extension (e.g. main.py, a.py, README.md)
+    Reject bare words with no separator and no extension (e.g. "label", "another"),
+    which are how non-path "label:line:text" output gets shaped.
+    """
+    if not s:
+        return False
+    # Path separators are a good sign
+    if "/" in s or "\\" in s:
+        return True
+    # Windows drive letter (e.g. C:\...)
+    if len(s) >= 2 and s[1] == ":" and s[0].isalpha():
+        return True
+    # Bare filename with an extension (dot not in leading position)
+    if re.search(r"[^.]\.[A-Za-z0-9]+$", s):
+        return True
+    # Otherwise it looks like a plain label, not a path
+    return False
 
 
 class GrepExtractor(ToolExtractor):
@@ -44,10 +71,12 @@ class GrepExtractor(ToolExtractor):
                 used_llm=False,
             )
 
-        # Group by file path
+        # Group by file path (filter out non-path strings)
         by_file: dict[str, list[int]] = {}
         for path, line, _content in matches:
-            by_file.setdefault(path, []).append(int(line))
+            # Validate that the path looks like a real file path
+            if _is_valid_path(path):
+                by_file.setdefault(path, []).append(int(line))
 
         facts = []
         files_touched = []

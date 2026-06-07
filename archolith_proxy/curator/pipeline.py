@@ -12,9 +12,10 @@ import structlog
 from openai import AsyncOpenAI
 
 from archolith_proxy.config import get_settings
-from archolith_proxy.curator.briefing import SessionBriefing, format_briefing_for_prompt
+from archolith_proxy.curator.briefing import (
+    SessionBriefing, format_briefing_for_prompt, build_briefing_from_result,
+)
 from archolith_proxy.curator.prompts import CURATOR_SYSTEM_PROMPT, build_curator_user_prompt
-from archolith_proxy.curator.result import CuratorResult
 from archolith_proxy.curator.state import (
     CuratorSnapshot,
     cache_briefing,
@@ -28,6 +29,7 @@ from archolith_proxy.models.dtos import AssembledContext
 logger = structlog.get_logger()
 
 # Side-channel for curator failure data
+# THREAD-SAFETY: safe under single asyncio event loop
 _last_attempt: dict[str, dict] = {}
 
 
@@ -47,79 +49,6 @@ def prune_last_attempts(active_session_ids: set[str]) -> int:
     return len(stale)
 
 
-def _extract_section(context_text: str, section_name: str) -> str:
-    """Extract a named section from the curator's context block."""
-    import re
-
-    pattern = rf"=== {section_name} ===\s*\n(.*?)(?=\n=== .+? ===|$)"
-    match = re.search(pattern, context_text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return ""
-
-
-def _build_briefing_from_result(
-    result: CuratorResult,
-    session_id: str,
-    turn_number: int,
-    latency_ms: float,
-    session_goal: str | None,
-    messages: list[dict],
-) -> SessionBriefing:
-    """Parse a CuratorResult into a SessionBriefing for the inline pass."""
-    from archolith_proxy.curator.briefing import PreFetchedFile
-
-    files: dict[str, list[tuple[int, int, str]]] = {}
-    file_outlines: dict[str, str] = {}
-    file_relevance: dict[str, str] = {}
-
-    for tc in result.tool_log:
-        if tc.tool in ("get_file", "get_file_lines") and tc.status == "ok":
-            path = tc.args.get("path", "")
-            if not path:
-                continue
-            if path not in files:
-                files[path] = []
-            content = tc.raw_result or tc.result_preview or ""
-            start = tc.args.get("start_line", tc.args.get("offset", 0))
-            end = tc.args.get("end_line", tc.args.get("limit", 0))
-            if isinstance(start, int) and isinstance(end, int) and end > start:
-                files[path].append((start, end, content))
-            else:
-                files[path].append((0, 0, content))
-        elif tc.tool == "get_file_outline" and tc.status == "ok":
-            path = tc.args.get("path", "")
-            if path:
-                file_outlines[path] = tc.raw_result or tc.result_preview or ""
-
-    prefetched = []
-    for path, sections in files.items():
-        prefetched.append(PreFetchedFile(
-            path=path,
-            outline=file_outlines.get(path, ""),
-            sections=sections,
-            relevance=file_relevance.get(path, "retrieved by background pass"),
-        ))
-
-    context_text = result.context_text
-    return SessionBriefing(
-        session_id=session_id,
-        source_turn=turn_number,
-        timestamp=time.time(),
-        checkpoint_text=_extract_section(context_text, "CURRENT STATE"),
-        open_issues_text=_extract_section(context_text, "OPEN ISSUES"),
-        last_verification_text=_extract_section(context_text, "LAST VERIFICATION"),
-        decisions_text=_extract_section(context_text, "DECISIONS"),
-        session_goal=session_goal or "",
-        facts_text=_extract_section(context_text, "KEY FACTS"),
-        files=prefetched,
-        retained_turns=result.retained_turn_numbers,
-        context_block=context_text,
-        mode="two_pass",
-        tool_calls_used=result.tool_calls_used,
-        iterations_used=result.tool_calls_used,
-        latency_ms=latency_ms,
-    )
 
 
 async def _run_background_pass_inner(
@@ -209,9 +138,10 @@ async def _run_background_pass_inner(
         bp_trace.completed_at = time.time()
         return
 
-    briefing = _build_briefing_from_result(
+    briefing = build_briefing_from_result(
         result=result, session_id=session_id, turn_number=turn_number,
         latency_ms=latency_ms, session_goal=session_goal, messages=messages,
+        mode="two_pass",
     )
     cache_briefing(session_id, briefing)
 
@@ -362,6 +292,9 @@ async def _run_with_briefing(
     )
 
 
+__all__ = ["curate_context", "run_background_pass", "get_last_attempt", "prune_last_attempts"]
+
+
 async def curate_context(
     session_id: str, turn_number: int, user_message: str,
     session_goal: str | None, http_client, messages: list[dict],
@@ -488,3 +421,6 @@ async def curate_context(
         retained_turn_numbers=result.retained_turn_numbers,
         curator_tool_log=[tc.to_dict() for tc in result.tool_log],
     )
+
+
+__all__ = ["curate_context", "run_background_pass", "get_last_attempt", "prune_last_attempts"]

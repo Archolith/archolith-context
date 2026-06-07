@@ -85,6 +85,23 @@ python scripts/contextbench_harness.py
 Structured evaluation harness for measuring context assembly quality across
 predefined scenarios.
 
+### `scripted_benchmark.py` — Scripted harness benchmark
+```bash
+python scripts/scripted_benchmark.py setup --scenario scripts/scenarios/harness/config_doc.json
+python scripts/scripted_benchmark.py start --proxy-worktree <path> --passthrough-worktree <path>
+python scripts/scripted_benchmark.py monitor
+python scripts/scripted_benchmark.py report
+```
+Dual-session comparison (proxy vs passthrough) through isolated git worktrees.
+Filesystem checkpoints provide objective pass/fail signals for gated benchmark execution.
+
+### `harness_benchmark.py` — Harness integration benchmark
+```bash
+python scripts/harness_benchmark.py
+```
+Benchmark runner for harness integration testing. Measures token savings, latency, and
+context quality in isolated worktree sessions.
+
 ---
 
 ## Testing and Diagnostics
@@ -144,6 +161,26 @@ python scripts/neo4j_diagnostic.py
 ```
 Tests Neo4j connection, schema, and basic graph queries. Use when switching to or
 troubleshooting the Neo4j backend (not needed for LadybugDB).
+
+### `test_synthetic_tools.py` — Synthetic tools test
+```bash
+python scripts/test_synthetic_tools.py
+```
+Tests the synthetic tools system (recall_session_work, recall_files_read) that allow
+agents to query session state and file access logs.
+
+### `redundancy.py` — Redundancy analysis
+```bash
+python scripts/redundancy.py
+```
+Analyzes extracted facts for redundancy and deduplication quality.
+
+### `opencode_export.py` — OpenCode export
+```bash
+python scripts/opencode_export.py
+```
+Exports proxy configuration and benchmark results for external OpenCode-compatible
+client testing.
 
 ---
 

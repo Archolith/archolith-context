@@ -7,6 +7,20 @@ from archolith_proxy.config import get_settings
 
 router = APIRouter()
 
+# Hop-by-hop headers per RFC 7230 that must not be forwarded
+HOP_BY_HOP_HEADERS = frozenset({
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "content-encoding",
+    "content-length",
+})
+
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def passthrough(request: Request, path: str) -> Response:
@@ -18,7 +32,7 @@ async def passthrough(request: Request, path: str) -> Response:
     headers = {
         k: v
         for k, v in request.headers.items()
-        if k.lower() not in ("host", "content-length", "transfer-encoding")
+        if k.lower() not in HOP_BY_HOP_HEADERS and k.lower() != "host"
     }
     headers["Authorization"] = f"Bearer {settings.upstream_api_key}"
 
@@ -31,8 +45,14 @@ async def passthrough(request: Request, path: str) -> Response:
         content=body,
     ) as resp:
         content = await resp.aread()
+        # Filter response headers to remove hop-by-hop headers
+        response_headers = {
+            k: v
+            for k, v in resp.headers.items()
+            if k.lower() not in HOP_BY_HOP_HEADERS
+        }
         return Response(
             content=content,
             status_code=resp.status_code,
-            headers=dict(resp.headers),
+            headers=response_headers,
         )

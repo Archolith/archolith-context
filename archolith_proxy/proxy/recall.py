@@ -24,9 +24,19 @@ import httpx
 import structlog
 
 from archolith_proxy.metrics import get_metrics, record_metric
-from archolith_proxy.rtk import filter_request_body
+from archolith_proxy.filter_adapter import filter_request_body
 
 logger = structlog.get_logger()
+
+__all__ = [
+    "RecallResult",
+    "execute_recall",
+    "build_resend_messages",
+    "resend_with_recall",
+    "detect_recall_trigger",
+    "inject_proxy_recall_into_body",
+    "handle_non_streaming_recall",
+]
 
 
 @dataclass
@@ -160,7 +170,7 @@ async def resend_with_recall(
             "stream": False,
             "messages": current_messages,
         }
-        resend_payload = filter_request_body(resend_payload, enabled=settings.rtk_enabled)
+        resend_payload = filter_request_body(resend_payload, enabled=settings.filter_enabled)
         # Debug: log the message structure being sent for the resend
         msg_summary = []
         for m in current_messages:

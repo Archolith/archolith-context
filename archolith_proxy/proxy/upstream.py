@@ -15,8 +15,13 @@ import structlog
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "RETRYABLE_STATUS_CODES",
+    "upstream_request_with_retry",
+]
+
 # HTTP status codes that trigger a retry (transient errors, rate limits)
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 
 async def upstream_request_with_retry(

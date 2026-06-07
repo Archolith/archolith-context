@@ -255,9 +255,9 @@ class TestTraceBuilder:
         trace = builder.build()
         assert trace.recall_trigger == "proxy_forced:user_phrase"
 
-    def test_set_rtk_and_outbound_context_stats(self):
+    def test_set_filter_and_outbound_context_stats(self):
         builder = TraceBuilder()
-        builder.set_rtk_stats(
+        builder.set_filter_stats(
             available=True,
             chars_saved=120,
             chars_before=1000,
@@ -265,13 +265,13 @@ class TestTraceBuilder:
         )
         builder.set_outbound_context_stats(outbound_chars_sent=930, proxy_recall_chars_added=50)
         trace = builder.build()
-        assert trace.rtk_available is True
-        assert trace.rtk_chars_saved == 120
-        assert trace.rtk_chars_before == 1000
-        assert trace.rtk_chars_after == 880
+        assert trace.filter_available is True
+        assert trace.filter_chars_saved == 120
+        assert trace.filter_chars_before == 1000
+        assert trace.filter_chars_after == 880
         assert trace.outbound_chars_sent == 930
         assert trace.proxy_recall_chars_added == 50
-        assert trace.rtk_strategy_savings == {"request_filter": 120}
+        assert trace.filter_strategy_savings == {"request_filter": 120}
 
     def test_set_solo_stats_adds_strategy_breakdown(self):
         builder = TraceBuilder()
@@ -287,7 +287,7 @@ class TestTraceBuilder:
         assert trace.solo_chars_saved_compact == 400
         assert trace.solo_chars_saved_dedup == 250
         assert trace.solo_chars_saved_curator == 100
-        assert trace.rtk_strategy_savings == {
+        assert trace.filter_strategy_savings == {
             "curator_cache": 100,
             "compact": 400,
             "dedup": 250,

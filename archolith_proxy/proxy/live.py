@@ -14,6 +14,12 @@ Architecture: asyncio.PubSub pattern with per-client queues.
 
 from __future__ import annotations
 
+__all__ = [
+    "LiveStream",
+    "get_live_stream",
+    "reset_live_stream",
+]
+
 import asyncio
 import json
 import time

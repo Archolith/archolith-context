@@ -63,7 +63,7 @@ def _load_dotenv(path: Path) -> dict[str, str]:
 
 _dotenv = _load_dotenv(_here / ".env")
 
-_port = os.getenv("PROXY_PORT", _dotenv.get("PROXY_PORT", "9801"))
+_port = os.getenv("PROXY_PORT", _dotenv.get("PROXY_PORT", "9800"))
 PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{_port}/v1")
 ADMIN_URL = PROXY_URL.rsplit("/v1", 1)[0]
 

@@ -222,7 +222,7 @@ async def test_streaming_forwards_sse_format(client_with_mock, mock_upstream):
     )
 
     text = resp.text
-    lines = [l for l in text.split("\n") if l.startswith("data: ")]
+    lines = [line for line in text.split("\n") if line.startswith("data: ")]
 
     # Each data line should contain valid JSON (except [DONE])
     for line in lines:
@@ -361,3 +361,97 @@ async def test_tool_calls_forwarded(client_with_mock, mock_upstream):
     data = resp.json()
     assert data["choices"][0]["message"]["tool_calls"] is not None
     assert data["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "read_file"
+
+
+@pytest.mark.asyncio
+async def test_hop_by_hop_headers_filtered_from_response(client_with_mock, mock_upstream):
+    """Hop-by-hop headers are removed from upstream response."""
+    mock_upstream.set_non_stream_response(MOCK_NON_STREAM_RESPONSE)
+
+    resp = await client_with_mock.post(
+        "/v1/chat/completions",
+        json={
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+
+    # Check that normal headers are preserved
+    assert "content-type" in resp.headers or "Content-Type" in resp.headers
+
+    # Check that hop-by-hop headers are stripped (case-insensitive)
+    headers_lower = {k.lower(): v for k, v in resp.headers.items()}
+    assert "connection" not in headers_lower
+    assert "keep-alive" not in headers_lower
+    assert "transfer-encoding" not in headers_lower
+    assert "content-encoding" not in headers_lower
+
+    # Response should still be valid
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == "chatcmpl-test123"
+
+
+@pytest.mark.asyncio
+async def test_hop_by_hop_headers_filtered_with_chunked_transfer(client_with_mock, mock_upstream):
+    """Transfer-Encoding: chunked header is removed from response."""
+    mock_upstream.set_non_stream_response(MOCK_NON_STREAM_RESPONSE)
+
+    resp = await client_with_mock.post(
+        "/v1/chat/completions",
+        json={
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "test"}],
+        },
+    )
+
+    assert resp.status_code == 200
+
+    # Check headers
+    headers_lower = {k.lower(): v for k, v in resp.headers.items()}
+
+    # Hop-by-hop headers should not be present
+    assert "transfer-encoding" not in headers_lower
+    assert "connection" not in headers_lower
+    assert "keep-alive" not in headers_lower
+    assert "proxy-authenticate" not in headers_lower
+    assert "proxy-authorization" not in headers_lower
+
+    # Normal headers should be present
+    assert "content-type" in headers_lower
+
+
+@pytest.mark.asyncio
+async def test_passthrough_filters_request_headers(client_with_mock, mock_upstream):
+    """Request hop-by-hop headers are also filtered before sending to upstream."""
+    mock_upstream.set_non_stream_response(MOCK_NON_STREAM_RESPONSE)
+
+    # Make a request with hop-by-hop headers
+    resp = await client_with_mock.post(
+        "/v1/chat/completions",
+        json={
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "test"}],
+        },
+        headers={
+            "Connection": "close",
+            "Keep-Alive": "false",
+            "X-Custom": "value",
+        },
+    )
+
+    assert resp.status_code == 200
+
+    # Check that request headers were filtered at upstream
+    assert mock_upstream.last_request is not None
+    req_headers_lower = {k.lower(): v for k, v in mock_upstream.last_request["headers"].items()}
+
+    # Connection and Keep-Alive should have been filtered
+    # Note: These might be added by the client library, but they should not appear
+    # in the forwarded request
+    assert "connection" not in req_headers_lower or req_headers_lower["connection"] != "close"
+    assert "keep-alive" not in req_headers_lower or req_headers_lower["keep-alive"] != "false"
+
+    # Custom headers should be preserved
+    # (unless they're hop-by-hop)
+    assert "authorization" in req_headers_lower  # Should be rewritten with API key

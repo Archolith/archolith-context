@@ -90,13 +90,14 @@ class TurnTrace(BaseModel):
 
     # Prompt payloads (original vs rewritten)
     original_messages: list[dict] = Field(default_factory=list)
+    original_messages_count: int = 0
     rewritten_messages: list[dict] = Field(default_factory=list)
 
     # Turn-level timing
     request_timestamp: float = 0.0       # Wall clock (time.time) at request arrival
     total_latency_ms: float = 0.0        # Wall clock from request entry to response start
     proxy_overhead_ms: float = 0.0       # total_latency - upstream_latency
-    rtk_latency_ms: float = 0.0          # Time in archolith-filter (filter + agent-solo compression)
+    filter_latency_ms: float = 0.0  # Time in archolith-filter (filter + agent-solo compression)
 
     # Upstream response
     upstream_status: int = 0
@@ -148,14 +149,14 @@ class TurnTrace(BaseModel):
     solo_chars_saved_curator: int = 0     # Curator prefix cache reuse
     solo_chars_saved_total: int = 0       # Sum of all strategies
 
-    # RTK filter status — populated every request after filter_request_body runs
-    rtk_available: bool | None = None   # True = package present; False = fail-open; None = not yet measured
-    rtk_chars_saved: int = 0            # Characters removed by RTK filter on this turn
-    rtk_chars_before: int = 0          # Characters in messages before RTK filter
-    rtk_chars_after: int = 0           # Characters after RTK filtering, before later proxy injections
+    # Filter status — populated every request after filter_request_body runs
+    filter_available: bool | None = None  # True = package present; False = fail-open; None = not yet measured
+    filter_chars_saved: int = 0        # Characters removed by filter on this turn
+    filter_chars_before: int = 0       # Characters in messages before filter
+    filter_chars_after: int = 0        # Characters after filtering, before later proxy injections
     proxy_recall_chars_added: int = 0  # Characters injected back via [PROXY-RECALL]
     outbound_chars_sent: int = 0       # Final outbound message chars after all proxy rewrites
-    rtk_strategy_savings: dict[str, int] = Field(default_factory=dict)
+    filter_strategy_savings: dict[str, int] = Field(default_factory=dict)
 
     # Curator skip reason — populated on user turns when curator was eligible but did not succeed
     curator_skip_reason: str = ""       # e.g. "cold_start", "disabled", "timeout", "no_api_key", "no_result"

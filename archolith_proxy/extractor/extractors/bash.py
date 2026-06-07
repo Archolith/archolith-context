@@ -14,6 +14,8 @@ from archolith_proxy.config import get_settings
 
 logger = structlog.get_logger()
 
+__all__ = ["BashExtractor"]
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _ENV_VAR_RE = re.compile(r"^[A-Z_]+=\S*$")
 
@@ -164,18 +166,22 @@ class BashExtractor(ToolExtractor):
         # No regex match → LLM fallback
         return await self._llm_extract(record, command, output, http_client, turn_number, session_goal)
 
+    @staticmethod
+    def _extract_git_subcommand(command: str) -> str:
+        """Extract the git subcommand (e.g. 'status', 'diff', 'log') from a git command."""
+        tokens = command.split()
+        for i, t in enumerate(tokens):
+            if t == "git" and i + 1 < len(tokens):
+                return tokens[i + 1]
+        return ""
+
     def _apply_regex(self, cmd_name: str, command: str, output: str) -> list[dict]:
         """Apply regex patterns for the classified command. Returns empty list if no match."""
         facts = []
 
         if cmd_name == "git":
             # Sub-dispatch by git subcommand
-            tokens = command.split()
-            subcmd = ""
-            for i, t in enumerate(tokens):
-                if t == "git" and i + 1 < len(tokens):
-                    subcmd = tokens[i + 1]
-                    break
+            subcmd = self._extract_git_subcommand(command)
 
             if subcmd == "status":
                 for match in _GIT_STATUS_RE.findall(output):
@@ -238,12 +244,7 @@ class BashExtractor(ToolExtractor):
         """Extract file paths from git commands for files_touched."""
         if cmd_name != "git":
             return []
-        tokens = command.split()
-        subcmd = ""
-        for i, t in enumerate(tokens):
-            if t == "git" and i + 1 < len(tokens):
-                subcmd = tokens[i + 1]
-                break
+        subcmd = self._extract_git_subcommand(command)
         if subcmd == "status":
             return [m.strip() for m in _GIT_STATUS_RE.findall(output)]
         if subcmd == "diff":

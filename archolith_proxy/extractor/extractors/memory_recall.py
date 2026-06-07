@@ -8,6 +8,8 @@ import httpx
 
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord, ToolExtractor
 
+__all__ = ["MemoryRecallExtractor"]
+
 _MAX_ITEMS = 20
 _MIN_SCORE = 0.5
 _DEFAULT_CONFIDENCE = 0.75

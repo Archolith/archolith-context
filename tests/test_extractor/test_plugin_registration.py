@@ -73,16 +73,19 @@ def test_plugin_overrides_builtin():
     """A plugin extractor with the same tool_name overrides the built-in."""
     from archolith_proxy.extractor import register_extractor
 
-    # The built-in BashExtractor is already registered via build_default()
-    reg = get_registry()
-    builtin = reg.get("Bash")
-    assert builtin.__class__.__name__ == "BashExtractor"
+    # Patch entry_points to return empty so we test against pure builtins,
+    # not real venv plugins that may have been installed.
+    with patch("importlib.metadata.entry_points", return_value=[]):
+        # The built-in BashExtractor is now registered via build_default()
+        reg = get_registry()
+        builtin = reg.get("Bash")
+        assert builtin.__class__.__name__ == "BashExtractor"
 
-    # Register override — last-registered wins
-    register_extractor(_BashOverrideExtractor())
+        # Register override — last-registered wins
+        register_extractor(_BashOverrideExtractor())
 
-    overridden = reg.get("Bash")
-    assert isinstance(overridden, _BashOverrideExtractor)
+        overridden = reg.get("Bash")
+        assert isinstance(overridden, _BashOverrideExtractor)
 
 
 def test_entry_point_discovery():
@@ -132,3 +135,26 @@ def test_engine_api_surface_importable():
     assert extract_facts_per_tool is not None
     assert get_memory_registry is not None
     assert register_memory_adapter is not None
+
+
+def test_registry_clear_removes_custom_extractors():
+    """Registry.clear() removes all registered extractors."""
+    from archolith_proxy.extractor import register_extractor
+    from archolith_proxy.extractor.registry import ToolExtractorRegistry
+
+    # Register a custom extractor
+    register_extractor(_CustomExtractor())
+
+    reg = get_registry()
+    # Verify it's registered
+    ext = reg.get("custom_tool")
+    assert isinstance(ext, _CustomExtractor)
+
+    # Clear the registry
+    reg.clear()
+
+    # Now custom_tool should not be in the map (but get() will fall back to default)
+    # Verify the internal map is empty
+    assert len(reg._map) == 0
+    # And default is cleared too
+    assert reg._default is None

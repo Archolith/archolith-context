@@ -17,11 +17,12 @@ import structlog
 from openai import AsyncOpenAI
 
 from archolith_proxy.config import get_settings
-from archolith_proxy.curator.briefing import SessionBriefing, format_briefing_for_prompt
+from archolith_proxy.curator.briefing import (
+    SessionBriefing, build_briefing_from_result,
+)
 from archolith_proxy.curator.loop import _run_curator_native
 from archolith_proxy.curator.schemas import PREPPER_TOOLS
 from archolith_proxy.curator.state import get_snapshot
-from archolith_proxy.curator.tools import TOOL_HANDLERS
 from archolith_proxy.curator.prompts import build_curator_user_prompt
 
 logger = structlog.get_logger()
@@ -84,88 +85,6 @@ Critical output rules:
   structure without calling get_file_outline again.
 - Write plain prose context blocks — do NOT emit tool calls, XML tags, or JSON in your final response.
 """
-
-
-def _extract_section(context_text: str, section_name: str) -> str:
-    """Extract a named section from the curator's context block."""
-    import re
-    pattern = rf"=== {section_name} ===\s*\n(.*?)(?=\n=== .+? ===|$)"
-    match = re.search(pattern, context_text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return ""
-
-
-def _build_briefing_from_prepper_result(
-    result,
-    session_id: str,
-    turn_number: int,
-    latency_ms: float,
-    session_goal: str | None,
-    messages: list[dict],
-    tool_log: list,
-) -> SessionBriefing:
-    """Parse a CuratorResult into a SessionBriefing with mode='two_curator'."""
-    from archolith_proxy.curator.briefing import PreFetchedFile
-
-    # Extract per-file sections from the tool log
-    files: dict[str, list[tuple[int, int, str]]] = {}
-    file_outlines: dict[str, str] = {}
-    file_relevance: dict[str, str] = {}
-
-    for tc in tool_log:
-        if tc.tool in ("get_file", "get_file_lines") and tc.status == "ok":
-            path = tc.args.get("path", "")
-            if not path:
-                continue
-            if path not in files:
-                files[path] = []
-            content = tc.raw_result or tc.result_preview or ""
-            start = tc.args.get("start_line", tc.args.get("offset", 0))
-            end = tc.args.get("end_line", tc.args.get("limit", 0))
-            if isinstance(start, int) and isinstance(end, int) and end > start:
-                files[path].append((start, end, content))
-            else:
-                files[path].append((0, 0, content))
-        elif tc.tool == "get_file_outline" and tc.status == "ok":
-            path = tc.args.get("path", "")
-            if path:
-                file_outlines[path] = tc.raw_result or tc.result_preview or ""
-
-    prefetched = []
-    for path, sections in files.items():
-        prefetched.append(PreFetchedFile(
-            path=path,
-            outline=file_outlines.get(path, ""),
-            sections=sections,
-            relevance=file_relevance.get(path, "retrieved by prepper"),
-        ))
-
-    context_text = result.context_text
-    checkpoint_text = _extract_section(context_text, "CURRENT STATE")
-    open_issues_text = _extract_section(context_text, "OPEN ISSUES")
-    last_verification_text = _extract_section(context_text, "LAST VERIFICATION")
-    facts_text = _extract_section(context_text, "KEY FACTS")
-    decisions_text = _extract_section(context_text, "DECISIONS")
-
-    return SessionBriefing(
-        session_id=session_id,
-        source_turn=turn_number,
-        timestamp=time.time(),
-        checkpoint_text=checkpoint_text,
-        open_issues_text=open_issues_text,
-        last_verification_text=last_verification_text,
-        decisions_text=decisions_text,
-        session_goal=session_goal or "",
-        facts_text=facts_text,
-        files=prefetched,
-        retained_turns=None,  # prepper does not do turn selection
-        context_block=context_text,
-        mode="two_curator",
-        tool_calls_used=result.tool_calls_used,
-        iterations_used=result.tool_calls_used,
-        latency_ms=latency_ms,
-    )
 
 
 async def run_prepper(
@@ -251,14 +170,15 @@ async def run_prepper(
 
     latency_ms = (time.monotonic() - t0) * 1000
 
-    briefing = _build_briefing_from_prepper_result(
+    briefing = build_briefing_from_result(
         result=result,
         session_id=session_id,
         turn_number=turn_number,
         latency_ms=latency_ms,
         session_goal=session_goal,
         messages=messages,
-        tool_log=tool_log,
+        mode="two_curator",
+        retained_turns=None,  # prepper does not do turn selection
     )
 
     logger.info(
@@ -271,3 +191,6 @@ async def run_prepper(
     )
 
     return briefing
+
+
+__all__ = ["run_prepper"]

@@ -104,8 +104,9 @@ async def retry_promotion(
             content={"error": f"Promotion {promotion_id} not found"},
         )
     return JSONResponse(
-        status_code=200,
+        status_code=501,
         content={
+            "error": "Not Implemented",
             "note": "Retry requires resubmission with the original PromotionRecord"
         },
     )
