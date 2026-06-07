@@ -142,19 +142,21 @@ Used by curator `get_file_outline()` before targeted `get_file_lines()` fetches.
 
 ## Graph Relationships
 
-The logical edge vocabulary used across backends:
+The logical edge vocabulary used across backends (`archolith_proxy/models/graph_edges.py`):
 
-| Edge Type | Meaning |
-|-----------|---------|
-| `BELONGS_TO` | Ownership edge from a session artifact back to its session |
-| `TOUCHES` | Session touched a file |
-| `SUPERSEDES` | A newer fact invalidated an older fact |
-| `MODIFIES` | A fact describes a file mutation |
-| `SUPPORTS` | A fact supports a decision |
-| `CAUSED_BY` | Causal link such as error -> follow-up state |
+| Edge Type | From | To | Meaning |
+|-----------|------|-----|---------|
+| `TOUCHES` | Session | File | Session touched a file (read or write) |
+| `MODIFIES` | Session | File | Session modified a file (write/create/delete) |
+| `IMPORTS` | File | File | File A imports/includes File B |
+| `CAUSED_BY` | Fact | Fact | Causal link such as error → follow-up state |
+| `SUPERSEDES` | Fact | Fact | A newer fact invalidated an older fact |
+| `SUPPORTS` | Fact | Decision | A fact supports a decision |
+| `BELONGS_TO` | Any artifact | Session | Ownership edge (node carries `session_id` field instead) |
 
 Backends may materialize these differently, but application code treats them as
-the same logical relationships.
+the same logical relationships. Neo4j uses label-based isolation; LadybugDB uses
+foreign-key relationships with `session_id` scoping.
 
 ## Enums
 
@@ -239,35 +241,182 @@ Structured output from either legacy extraction or per-tool extraction.
 
 ### TurnTrace
 
-Primary observability record for one proxied request.
+Primary observability record for one proxied request. **67 fields total.**
 
-Key fields:
+**Identity:**
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `turn_id` | `str` | Unique trace identifier |
+| `turn_id` | `str` | Unique trace identifier (hex[:16]) |
 | `session_id` | `str \| None` | Session owning the turn |
 | `turn_number` | `int` | Session turn counter |
+| `trace_version` | `int` | Format version (currently 1) |
+| `created_at` | `float` | Unix timestamp at record creation |
+
+**Request:**
+
+| Property | Type | Description |
+|----------|------|-------------|
 | `model` | `str` | Upstream model name |
 | `stream` | `bool` | Whether the client requested streaming |
 | `input_tokens` | `int` | Estimated inbound tokens |
-| `message_count` | `int` | Raw message count |
+| `message_count` | `int` | Raw message count before rewriting |
 | `user_turn_count` | `int` | Number of user-role turns seen so far |
 | `is_user_turn` | `bool` | Distinguishes user turns from agent-solo continuations |
-| `assembly_mode` | `str` | `passthrough`, `graph`, `curator`, `agent_solo`, etc. |
+
+**Assembly:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `assembly_mode` | `str` | `passthrough`, `graph`, `curator`, `agent_solo_compressed`, `briefing`, `briefing_stale`, etc. |
 | `assembly_reason` | `str` | Human-readable rationale for the chosen path |
+| `assembly_latency_ms` | `float` | Time in assembler/curator, excluding filter |
+
+**Token economics:**
+
+| Property | Type | Description |
+|----------|------|-------------|
 | `rewritten_tokens` | `int` | Estimated rewritten payload size |
-| `savings_tokens` | `int` | Estimated tokens saved |
+| `savings_tokens` | `int` | Estimated tokens saved by rewriting |
+| `savings_ratio` | `float` | Ratio of savings_tokens / input_tokens |
+
+**Assembly decisions (from assembler/curator):**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `facts_selected` | `list[dict]` | Facts injected into context |
+| `files_selected` | `list[dict]` | File snippets chosen for injection |
+| `decisions_selected` | `list[dict]` | Decision records chosen for injection |
 | `original_messages` | `list[dict]` | Original payload snapshot |
+| `original_messages_count` | `int` | Count of messages in original |
 | `rewritten_messages` | `list[dict]` | Rewritten payload snapshot |
+
+**Timing:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `request_timestamp` | `float` | Wall clock at request arrival |
+| `total_latency_ms` | `float` | Total wall clock from request to response start |
+| `proxy_overhead_ms` | `float` | total_latency - upstream_latency |
+| `filter_latency_ms` | `float` | Time in archolith-filter; accepts alias `rtk_latency_ms` |
+
+**Upstream response:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `upstream_status` | `int` | HTTP status from upstream |
+| `upstream_latency_ms` | `float` | Time waiting for upstream response |
+| `output_tokens` | `int \| None` | Tokens in upstream response (when reported) |
+| `upstream_response_summary` | `str` | First 500 chars of response text |
+
+**Extraction:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `extraction_latency_ms` | `float` | Time in fact extraction |
 | `facts_stored` | `int` | Facts written after extraction |
 | `duplicates_skipped` | `int` | Deduped facts skipped |
 | `invalidations_attempted` | `int` | Supersession descriptions produced |
 | `invalidations_matched` | `int` | Supersession descriptions matched to fact ids |
+| `extracted_facts` | `list[dict]` | Facts extracted from turn |
+
+**Compression:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `compression_ratio` | `float` | Output-size ratio for rewrite |
+
+**Recall:**
+
+| Property | Type | Description |
+|----------|------|-------------|
 | `recall_used` | `bool` | Whether recall interception executed |
+| `recall_question` | `str` | Query string if recall was used |
+| `recall_facts_returned` | `int` | Number of facts recalled |
+| `recall_trigger` | `str` | Trigger source ("proxy_forced:...", "model_invoked", etc.) |
+
+**Fallback:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `fallback_reason` | `str` | Why fallback occurred (curator timeout, etc.) |
+
+**Upstream cache (DeepSeek prompt_cache tokens):**
+
+| Property | Type | Description |
+|----------|------|-------------|
 | `cache_hit_tokens` | `int` | Upstream prompt-cache hits when reported |
 | `cache_miss_tokens` | `int` | Upstream prompt-cache misses when reported |
-| `curator_tool_log` | `list[dict]` | Curator tool-dispatch record |
+
+**Curator decisions (when assembly_mode includes curator):**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `curator_retained_turns` | `list[int] \| None` | Middle turns kept by turn selection (None = all) |
+| `curator_context_block` | `str \| None` | The curator's assembled context text |
+| `curator_tool_log` | `list[dict]` | Per-tool call dispatch log |
+| `curator_failure_reason` | `str` | Why curator failed (empty on success) |
+
+**Briefing metrics (when assembly_mode is "briefing" or "briefing_stale"):**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `briefing_source_turn` | `int \| None` | Turn the briefing was built after |
+| `briefing_chars` | `int` | Total chars in formatted briefing |
+| `briefing_files` | `int` | Number of pre-fetched files in briefing |
+
+**Agent-solo compression breakdown (when assembly_mode == "agent_solo_compressed"):**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `solo_strategies` | `list[str]` | e.g. ["shrink", "dedup", "curator_cache"] |
+| `solo_chars_saved_shrink` | `int` | Strategy A: per-result shrink savings |
+| `solo_chars_saved_dedup` | `int` | Strategy B: byte-identical dedup savings |
+| `solo_chars_saved_middle` | `int` | Strategy C: compressible middle-turn filter savings |
+| `solo_chars_saved_compact` | `int` | Strategy D: compact argument savings |
+| `solo_chars_saved_curator` | `int` | Curator prefix cache reuse savings |
+| `solo_chars_saved_total` | `int` | Sum of all agent-solo strategies |
+
+**Filter status (archolith-filter; populated every request after filter_request_body):**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `filter_available` | `bool \| None` | True = package present; False = fail-open; None = not yet measured; accepts alias `rtk_available` |
+| `filter_chars_saved` | `int` | Characters removed by filter on this turn; alias `rtk_chars_saved` |
+| `filter_chars_before` | `int` | Characters in messages before filter; alias `rtk_chars_before` |
+| `filter_chars_after` | `int` | Characters after filtering, before proxy injections; alias `rtk_chars_after` |
+| `filter_strategy_savings` | `dict[str, int]` | Per-strategy breakdown; alias `rtk_strategy_savings` |
+| `proxy_recall_chars_added` | `int` | Characters injected back via [PROXY-RECALL] |
+| `outbound_chars_sent` | `int` | Final outbound message chars after all proxy rewrites |
+
+**Curator eligibility:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `curator_skip_reason` | `str` | e.g. "cold_start", "disabled", "timeout", "no_api_key", "no_result" |
+
+### BackgroundPassTrace
+
+Record for a single background curator pass (prepper) run post-turn.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `record_type` | `str` | Discriminator: always `"bg_pass"` for JSONL parsing |
+| `pass_id` | `str` | Unique pass identifier (hex[:16]) |
+| `session_id` | `str` | Session owning this pass |
+| `trigger_turn` | `int` | Turn number that triggered this pass |
+| `started_at` | `float` | Unix timestamp at pass start |
+| `completed_at` | `float \| None` | Unix timestamp at pass completion (None if pending) |
+| `latency_ms` | `float` | Total pass latency |
+| `debounce_ms` | `float` | How long debounce sleep lasted before running |
+| `outcome` | `str` | `success`, `cancelled`, `timeout`, `failed`, `no_result` |
+| `cancel_reason` | `str` | Reason if cancelled (e.g., "superseded_by_next_turn") |
+| `failure_detail` | `str` | Exception message if outcome is `failed` |
+| `tool_calls_count` | `int` | Number of curator tool calls made |
+| `tool_log` | `list[dict]` | Per-tool dispatch log (name, args, result_preview) |
+| `files_fetched` | `int` | Number of files pre-fetched via `prefetch_file` |
+| `context_chars` | `int` | Length of context block produced |
+| `briefing_cached` | `bool` | Whether a `SessionBriefing` was written to cache |
 
 ### SessionTraceSummary
 
@@ -278,6 +427,8 @@ Aggregated trace summary per session.
 | `session_id` | `str` | Session identifier |
 | `goal` | `str \| None` | Current session goal |
 | `turn_count` | `int` | Recorded turn count |
+| `first_turn_at` | `float \| None` | Unix timestamp of first turn |
+| `last_turn_at` | `float \| None` | Unix timestamp of last turn |
 | `total_input_tokens` | `int` | Sum of observed input tokens |
 | `total_savings_tokens` | `int` | Aggregate estimated savings |
 | `avg_savings_ratio` | `float` | Savings over all input |
@@ -288,6 +439,8 @@ Aggregated trace summary per session.
 | `total_invalidations_attempted` | `int` | All invalidation attempts |
 | `total_recalls` | `int` | Count of recall events |
 | `max_user_turns` | `int` | Highest user-turn count observed |
+| `harness_env` | `dict[str, str]` | Environment metadata (extracted from system prompt `<env>` block) |
+| `proxy_config` | `dict[str, object]` | Proxy feature flags and key thresholds at session start |
 
 ## Storage Layout
 
@@ -308,6 +461,65 @@ Aggregated trace summary per session.
 - `LadybugBackend` is the preferred zero-infra local/bootstrap path
 - file-content caching is richest on LadybugDB; Neo4j paths exist mainly for graph/session operations
 - `TraceStore` is separate from graph storage and can optionally persist JSONL traces to disk
+
+## OpenAI-Compatible Schema Models
+
+Live in `archolith_proxy/openai/schemas.py`. **15 Pydantic models total:**
+
+| Model | Purpose |
+|-------|---------|
+| `ChatMessage` | Single message in a request (system/user/assistant/tool role) |
+| `ToolCallFunction` | Function name + arguments string for a tool call |
+| `ToolCall` | Tool call with id, type, and function details |
+| `ToolFunction` | Tool schema: name, description, parameters |
+| `ToolDefinition` | Tool definition wrapper (type: "function", function: ToolFunction) |
+| `ChatCompletionRequest` | OpenAI-compatible `/v1/chat/completions` request |
+| `ChatMessageResponse` | Response message (assistant role with content/tool_calls) |
+| `Choice` | Single choice in completion response (message + finish_reason) |
+| `Usage` | Token counts (prompt, completion, total) |
+| `ChatCompletionResponse` | Full non-streaming response (choices + usage + model) |
+| `DeltaMessage` | Streaming delta message (role + content + tool_calls) |
+| `ChunkChoice` | Streaming choice (delta + finish_reason + index) |
+| `ChatCompletionChunk` | Streaming response chunk (choices + model) |
+| `ModelObject` | Model info (id, owned_by, created, object) |
+| `ModelListResponse` | `/v1/models` response (data: list[ModelObject]) |
+
+## Curator Support Models
+
+Live in `archolith_proxy/curator/`:
+
+### CuratorResult (`curator/result.py`)
+
+Result of a single curator loop invocation.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `context_text` | `str` | Formatted context block (system message content) |
+| `curated_paths` | `set[str]` | File paths the curator selected |
+| `tool_calls_used` | `int` | Number of tool calls made |
+| `estimated_tokens` | `int` | Rough token estimate of context_text |
+
+### SessionBriefing (`curator/briefing.py`)
+
+Pre-fetched context built by prepper (background pass) and injected into inline assembler.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `files` | `list[PreFetchedFile]` | Files with full content, outline, and metadata |
+| `key_facts` | `list[str]` | Key facts distilled from the session |
+| `decisions` | `list[dict]` | Decision records with summary and rationale |
+
+### PreFetchedFile (`curator/briefing.py`)
+
+Single file entry in a briefing.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `path` | `str` | File path |
+| `content` | `str` | Full file content |
+| `outline` | `str` | Symbol index (functions/classes with line numbers) |
+| `line_count` | `int` | Total lines in file |
+| `source_turn` | `int` | Turn the file was cached |
 
 ## Promotion Models
 
@@ -350,12 +562,35 @@ Canonical outbound payload for one promoted fact.
 | Property | Type | Description |
 |----------|------|-------------|
 | `id` | `str` | Unique engine identifier |
-| `type` | `str` | Adapter type |
+| `type` | `str` | Adapter type (see adapters below) |
 | `enabled` | `bool` | Whether the engine is active |
 | `priority` | `int` | Higher value wins default selection |
-| `base_url` | `str` | Engine endpoint |
-| `api_key_env` | `str` | Env var containing the credential |
+| `base_url` | `str` | Engine endpoint (when applicable) |
+| `api_key_env` | `str` | Env var name containing the credential |
 | `extra` | `dict` | Adapter-specific config |
+| `resolved_api_key` (property) | `str \| None` | Resolved credential from environment (read-only) |
+
+**Concrete adapter implementations** (`archolith_proxy/memory/adapters/`):
+- `archolith_memory.py` — integration with archolith-memory library (sister project)
+- `basic_memory.py` — minimal in-memory adapter for local/dev use
+- `claude_mem.py` — placeholder adapter (reference only)
+- `cognee.py` — Cognee knowledge graph adapter
+- `generic_http.py` — HTTP POST adapter for custom backend APIs
+- `mem0.py` — Mem0 memory service adapter
+- `nocturne_memory.py` — Nocturne memory adapter
+- `openmemory.py` — OpenMemory protocol adapter
+- `zep.py` — Zep memory service adapter
+
+**Base contract** (`adapters/base.py`):
+- `validate_config()` — check engine config validity
+- `capabilities()` → `EngineCapabilities`
+- `healthcheck()` → `bool`
+- `promote_fact()` → `PromotionResult`
+- `promote_batch()` (optional)
+- `dedupe_lookup()` (optional)
+- `list_by_source()` (optional)
+- `update_promoted()` (optional)
+- `delete_promoted()` (optional)
 
 ### EngineCapabilities
 

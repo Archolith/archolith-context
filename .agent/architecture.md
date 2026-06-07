@@ -129,27 +129,69 @@ Harness → POST /v1/chat/completions → Proxy
 │     Also cache Write/create_file tool_call args directly (no re-read needed)
 │ 10. Invalidate superseded facts
 │
+├─ BACKGROUND CLEANUP (periodic, every N seconds):
+│  - Expire sessions past TTL
+│  - Clean up old trace records (retention_days policy)
+│  - Invalidate stale cached briefings
+│  - Optional: compact session fact graph
+│
 └─ LIFECYCLE:
   - Session created on first request (keyed by conversation fingerprint)
   - Sessions expire after configurable TTL (default 24h)
   - Optional: promote high-confidence facts to long-term memory
+  - Graph cleanup runs via `graph/cleanup.py` scheduled tasks
+  - Trace cleanup runs via `trace/store.py` retention policy (default: keep 30 days)
 ```
 
 ## Component Breakdown
 
 ### Proxy Layer (`archolith_proxy/proxy/`, `archolith_proxy/openai/`, `archolith_proxy/routers/`)
-- FastAPI app factory in `main.py` with extracted operator routers for admin, sessions, metrics, memory admin, and live streaming
-- OpenAI-facing request handling split across `openai/chat.py`, `streaming.py`, `non_streaming.py`, `extraction.py`, `file_cache.py`, and `helpers.py`
-- SSE streaming pass-through and retry handling
-- Session identification (fingerprint from system prompt + first user message)
-- Request rewriting (linear → graph-assembled)
-- Response capture (for post-hoc extraction) plus trace-store consistency checks during startup when trace persistence is enabled
+
+**Core proxy files** (`archolith_proxy/proxy/`):
+- `main.py` — FastAPI app factory with extracted operator routers for admin, sessions, metrics, memory admin, and live streaming
+- `live.py` — live stream handlers for SSE/streaming response pass-through and retry handling
+- `session.py` — session identification (fingerprint from system prompt + first user message)
+- `rewrite.py` — request rewriting orchestration (linear → graph-assembled)
+- `recall.py` — synthetic memory recall injection and fact-selection logic
+- `locks.py` — session-level locking primitives for concurrent turn handling
+- `streaming.py` — SSE streaming pass-through and chunk buffering
+- `agent_solo.py` — agent-solo turn compression and curator prefix-cache logic (covered separately below)
+- `tool_injection.py` — synthetic tool registration (memory_recall, file_read intercepts, prefetch)
+- `tool_intercept.py` — interception handlers for native file reads and tool-call dispatch
+- `upstream.py` — upstream API passthrough, rate-limit handling, response capture
+- `circuit_breaker.py` — adaptive circuit breaker for upstream failures and synthetic tool fallbacks
+- `synthetic_tools.py` — tool implementations (memory_recall, file_read, prefetch_file wrappers)
+
+**OpenAI-compatible layer** (`archolith_proxy/openai/`):
+- `chat.py` — main `/v1/chat/completions` endpoint handler; routes to streaming or non-streaming paths
+- `streaming.py` — streaming response parsing, SSE chunk handling, delta accumulation
+- `non_streaming.py` — non-streaming response collection and finalization
+- `extraction.py` — post-response async extraction pipeline and fact indexing
+- `file_cache.py` — file content cache population from tool results
+- `helpers.py` — token counting, model resolution, payload formatting utilities
+- `schemas.py` — OpenAI-compatible Pydantic models (15 total; see Data Models section)
+- `models.py` — model catalog and upstream model delegation logic
+- `errors.py` — error handling and upstream error translation
+- `passthrough.py` — identity passthrough for non-curated requests (fallback mode)
+- `router.py` — routing decisions and mode classification (user turn vs agent-solo vs error recovery)
 
 ### Context Assembler (`archolith_proxy/assembler/`)
-- Queries session graph for relevant facts given current user intent
-- Budgets output to configurable token limit (default ~15K)
+
+Queries session graph and briefing state for relevant facts given current user intent.
+
+**Core modules:**
+- `context.py` — main entry point: `assemble_context()` that queries graph, applies budgets, returns `AssembledContext`
+- `intent.py` — parse current turn intent from latest user message (project/goal/action keywords)
+- `query_rewrite.py` — convert intent into graph query shape (keyword expansion, synonym mapping)
+- `compress.py` — apply token budgets to facts/files/decisions; handle overflow
+- `tail.py` — preserve coherence tail messages (last N turns always kept)
+- `compaction.py` — optional message compaction for middle section facts
+
+**Output contract:**
+- Budgets output to configurable token limit (default ~15K tokens)
 - Always includes: session goal, active files, recent decisions
 - Formats as synthetic assistant/system messages for the upstream model
+- Returns `AssembledContext` with: `system_message`, `graph_context`, `coherence_tail`, token estimates, facts/files/decisions selected
 
 ### Curator LLM (`archolith_proxy/curator/`)
 
@@ -208,23 +250,59 @@ class CuratorResult:
     estimated_tokens: int   # rough token estimate of context_text
 ```
 
-**13 curator tools** (`curator/tools.py`):
+**14 curator tools** in `ALL_CURATOR_TOOLS` (`curator/tools.py` + `curator/schemas.py`):
 
 | Tool | What it returns |
 |------|----------------|
-| `get_checkpoint` | Current session checkpoint (summary, next_step, confidence) |
-| `get_open_issues` | Active issues (open blockers and errors) |
-| `get_last_verification` | Most recent command run + pass/fail/partial status |
 | `list_session_files` | Markdown table: path, lines, last-turn |
 | `get_file` | Full content (≤200 lines) or 10-line preview + hint to use `get_file_lines` |
-| `get_file_lines` | 1-indexed line slice with line numbers; clamps to EOF |
 | `get_file_outline` | Symbol index (functions/classes with line numbers) for large files — use before `get_file_lines` |
+| `get_file_lines` | 1-indexed line slice with line numbers; clamps to EOF |
 | `search_facts` | Keyword substring match over active facts, up to 20 results |
 | `search_facts_semantic` | Cosine similarity search over fact embeddings; falls back to substring when embeddings unavailable |
 | `get_session_goal` | Session goal string |
 | `get_recent_decisions` | Numbered list of decisions with turn numbers |
 | `get_touched_files` | Path / status / turn table for all files touched in session |
+| `get_checkpoint` | Current session checkpoint (summary, next_step, confidence) |
+| `get_open_issues` | Active issues (open blockers and errors) |
+| `get_last_verification` | Most recent command run + pass/fail/partial status |
 | `select_relevant_turns` | Prune the middle-section turn inventory — mark which historical turns to retain |
+| `prefetch_file` | Read a file from disk and cache it for the session (with optional focus synopsis) |
+
+**Tool set specialization** (`curator/schemas.py`):
+- **PREPPER_TOOLS** (background pass): `ALL_CURATOR_TOOLS` (14) + `score_file_relevance` (prepper-only) = 15 total
+  - `score_file_relevance` — ranks all cached files by relevance to a given query; prepper-only optimization for anticipating next-turn requirements
+- **ASSEMBLER_TOOLS** (inline assembler): minimal set = `select_relevant_turns` + `get_file_lines` (2 tools)
+- **ALL_CURATOR_TOOLS** (full single-bot curator): 14 tools (default)
+
+**Curator support modules:**
+- `prompts.py` — system prompts and turn-specific prompt templates for curator invocations
+- `result.py` — `CuratorResult` dataclass and result builder; tracks `raw_result` (full text) vs `result_preview`
+- `schemas.py` — OpenAI-compatible tool schemas (function definitions + parameters) for ALL/PREPPER/ASSEMBLER tool sets
+- `state.py` — session briefing cache (store/retrieve/staleness checks)
+- `briefing.py` — `SessionBriefing` model, `PreFetchedFile` items, briefing formatting for prompt injection
+
+**Two-curator mode** (when `curation_mode="two_curator"` — `config.py`):
+
+Decouples briefing generation (background prepper) from context assembly (inline assembler):
+
+1. **Prepper** (`curator/prepper.py`):
+   - Runs post-turn in background via `run_prepper()` (spawned from `_run_extraction()`)
+   - Receives PREPPER_TOOLS (14 base + `score_file_relevance`)
+   - Iterates up to `CURATOR_MAX_ITERATIONS` (default 4, same as full curator)
+   - Builds and caches a `SessionBriefing` (file contents, outlines, facts, decisions) with turn metadata
+   - Gated by `BACKGROUND_PASS_LATENCY_BUDGET_MS` (default 30s); logs and returns silently on timeout
+
+2. **Assembler** (`curator/assembler.py`):
+   - Runs inline on user turns with ASSEMBLER_TOOLS (minimal: `select_relevant_turns`, `get_file_lines`)
+   - If a fresh briefing exists, receives it pre-formatted in the system prompt
+   - Quick 1–2 iteration runs to just refine turn selection; briefing provides most context
+   - Falls back to full single-curator run if briefing is stale or missing
+
+3. **Briefing state management** (`curator/state.py`):
+   - `cache_briefing(session_id, briefing, turn)`: store after prepper
+   - `get_briefing(session_id)`: retrieve for assembler
+   - `is_briefing_fresh(briefing, current_turn)`: staleness check (default threshold: source_turn >= turn_number - 2)
 
 **System prompt** (`curator/prompts.py`):
 - Pre-loaded checkpoint in user prompt — skip `get_checkpoint` unless a refresh is needed
@@ -238,11 +316,23 @@ class CuratorResult:
 - `shared/text_utils.py` is the cross-layer utility home for `_build_outline()`, `_normalize()`, `_tokenize()`, and `jaccard_similarity()`
 - This breaks the earlier `curator -> openai.chat` and `graph -> extractor.dedup` dependency leaks
 
+### Filter Startup Gate
+
+When `FILTER_ENABLED=true` (or legacy `RTK_ENABLED=true`), the proxy performs a fail-fast check
+at startup: if the `archolith_filter` package is imported but not installed, the proxy raises
+`RuntimeError("archolith_filter package not found — cannot honor FILTER_ENABLED=true")` and exits.
+
+This prevents silent fail-open behavior that would mask configuration errors. Operators must either:
+- Set `FILTER_ENABLED=false` (default safe mode), or
+- Ensure `archolith_filter` is installed and importable in the Python environment
+
+The gate runs in `main.py` during app initialization, before the FastAPI server binds to a port.
+
 ### Operator Surfaces
 
 - `GET /admin/config` and `PATCH /admin/config` expose runtime-tunable settings
 - `GET /admin/config-delta` shows the persisted override delta relative to base env settings
-- Runtime override persistence uses `config_overrides.json` at the project root and reloads on startup
+- Runtime override persistence uses `config_overrides.json` at the project root and reloads on startup via `_load_config_overrides()` + watcher polling
 
 ### Agent-Solo Compression (`archolith_proxy/proxy/agent_solo.py`)
 
@@ -346,11 +436,27 @@ and `upstream_base_url` to DeepSeek. The repo README and `.env.example` are opti
 public/local bootstrap path (`ladybug` + OpenAI-compatible upstream). Keep both realities explicit
 when updating docs or helping operators.
 
+### Trace Observability (`archolith_proxy/trace/`)
+
+Per-turn observability records and session-level telemetry.
+
+**Core modules:**
+- `builder.py` — `TraceBuilder` incremental constructor: populate TurnTrace fields across request/assembly/response/extraction phases
+- `store.py` — `TraceStore` persistence (local JSONL or HTTP POST endpoint); retention policy (trace_retention_days, default 30)
+- `router.py` — trace initialization middleware; builder injection into request context
+
+**Trace records:**
+- `TurnTrace` (67 fields) — canonical single-turn record with: request metadata, assembly mode/latency, compression stats, curator decisions, filter metrics, recall usage, extraction results
+- `BackgroundPassTrace` — separate record for background curator passes (timing, outcome, tool usage, briefing cached)
+- `SessionTraceSummary` — aggregated view of session: turns, tokens, savings ratios, mode distribution, facts stored, harness env, proxy config snapshot
+
+**File format (JSONL):** one record per line, session_id in filename (`<session_id>.jsonl`). Session-id sanitization converts non-hex/UUID chars to underscores for safe filenames. Trace records are accumulated in-memory, flushed to disk periodically or on session expiry.
+
 ### Memory Engine & Promotion (`archolith_proxy/memory/`)
 - **Registry** (`registry.py`): Config-driven engine registration, lazy adapter instantiation, priority-based default resolution
 - **Canonical models** (`models.py`): `PromotionRecord`, `PromotionResult`, `EngineCapabilities`, `MemoryEngineConfig`
 - **Adapter base** (`adapters/base.py`): Abstract contract — validate_config, capabilities, healthcheck, promote_fact, optional batch/dedupe/CRUD
-- **Concrete adapters** (`adapters/`): cth_mcp_memory, mem0, zep, generic_http
+- **Concrete adapters** (`adapters/`): 9 total — `archolith_memory`, `basic_memory`, `claude_mem`, `cognee`, `generic_http`, `mem0`, `nocturne_memory`, `openmemory`, `zep`
 - **Promotion service** (`promotion.py`): Policy layer (confidence threshold, fact type allowlist, multi-turn survival), dedupe, dry-run, audit trail
 
 ### Synthetic Session-Summary Tools (`archolith_proxy/proxy/synthetic_tools.py`)
@@ -412,6 +518,15 @@ State is in-memory only (resets on proxy restart).
 
 **Also tracks per-session token budget:** `add_session_tokens()` / `is_session_over_budget()`
 for the `MAX_INPUT_TOKENS_PER_SESSION` hard cap.
+
+### Dashboard (`archolith_proxy/static/`)
+
+- `dashboard.html` — interactive trace viewer and session inspector
+  - Real-time turn timeline with turn metrics (input/output tokens, savings ratio, assembly mode)
+  - Per-turn drill-down: original messages, rewritten messages, facts selected, curator tool log
+  - Background pass timeline (parallel lane showing prepper latency, briefing size)
+  - Session-level aggregates: total tokens, cumulative savings, mode distribution
+  - Filter availability indicator and strategy breakdown
 
 ## Isolation from Long-term Memory
 
