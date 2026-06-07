@@ -163,6 +163,12 @@ async def upsert_file_outline(execute, session_id: str, path: str, outline: str,
 
 
 async def get_file_outline(execute, session_id: str, path: str) -> str | None:
+    """Get a file's outline, with fallback matching on partial paths.
+
+    First tries exact path match. If not found, normalizes path (Windows -> Unix),
+    and retrieves outline for matching entries in a single query.
+    """
+    # Exact path match
     rows = await execute(
         "MATCH (fo:FileOutline {session_id: $session_id, path: $path}) RETURN fo.outline AS outline",
         {"session_id": session_id, "path": path},
@@ -170,19 +176,20 @@ async def get_file_outline(execute, session_id: str, path: str) -> str | None:
     if rows:
         return rows[0].get("outline") or None
 
+    # Fallback: normalize and find matches
     norm_query = path.replace("\\", "/").lstrip("/")
     if not norm_query:
         return None
-    all_files = await list_cached_files(execute, session_id)
-    for f in all_files:
-        stored = f.get("path", "").replace("\\", "/").lstrip("/")
+
+    # Get all outlines in single query, filter in-process
+    all_outlines = await execute(
+        "MATCH (fo:FileOutline {session_id: $session_id}) RETURN fo.path AS path, fo.outline AS outline",
+        {"session_id": session_id},
+    )
+    for row in all_outlines:
+        stored = row.get("path", "").replace("\\", "/").lstrip("/")
         if stored.endswith(norm_query) or norm_query.endswith(stored):
-            rows2 = await execute(
-                "MATCH (fo:FileOutline {session_id: $session_id, path: $path}) RETURN fo.outline AS outline",
-                {"session_id": session_id, "path": f.get("path", "")},
-            )
-            if rows2:
-                return rows2[0].get("outline") or None
+            return row.get("outline") or None
     return None
 
 
