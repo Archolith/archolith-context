@@ -18,7 +18,7 @@ import os
 import threading
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Module-level singleton
@@ -114,7 +114,8 @@ class Settings(BaseSettings):
     # Accepts FILTER_ENABLED or RTK_ENABLED (deprecated alias)
     filter_enabled: bool = Field(
         default=False,
-        validation_alias="RTK_ENABLED",  # Accept RTK_ENABLED env var for back-compat
+        # FILTER_ENABLED is canonical; RTK_ENABLED is accepted as a deprecated alias.
+        validation_alias=AliasChoices("FILTER_ENABLED", "RTK_ENABLED"),
     )
 
     # Retry / resilience
