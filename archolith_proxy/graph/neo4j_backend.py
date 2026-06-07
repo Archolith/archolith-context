@@ -14,8 +14,9 @@ from archolith_proxy.graph import decisions as _decisions
 from archolith_proxy.graph import edges as _edges
 from archolith_proxy.graph import facts as _facts
 from archolith_proxy.graph import session as _session
-from archolith_proxy.graph.driver import close_driver, ensure_indexes, get_driver, init_driver
+from archolith_proxy.graph.driver import close_driver, ensure_indexes, get_driver, init_driver, is_connected
 from archolith_proxy.graph.protocol import GraphBackend
+from archolith_proxy.models.graph_nodes import FactType
 
 logger = structlog.get_logger()
 
@@ -54,15 +55,29 @@ class Neo4jBackend:
 
     def is_ready(self) -> bool:
         """Check if the driver is initialized and connected."""
-        try:
-            # get_driver() raises RuntimeError if not initialized
-            import asyncio
+        return is_connected()
 
-            # Can't call async verify from sync context, just check driver existence
-            from archolith_proxy.graph.driver import _driver
-            return _driver is not None
-        except Exception:
-            return False
+    def supported_methods(self) -> set[str]:
+        """Return set of supported method names for Neo4j backend.
+
+        Neo4j backend does not support bulk operations or file content caching.
+        """
+        return {
+            # Lifecycle
+            "connect", "close", "ensure_schema", "verify_connectivity", "is_ready",
+            "supported_methods",
+            # Session CRUD
+            "create_session", "find_session_by_id", "find_session_by_fingerprint",
+            "find_or_create_by_fingerprint", "touch_session", "get_turn_number",
+            "update_goal", "list_active_sessions", "get_session_stats",
+            # Fact CRUD
+            "store_fact", "store_facts_batch", "invalidate_facts",
+            "find_matching_fact_ids", "get_active_facts", "get_active_fact_count",
+            "get_facts_filtered", "get_invalidated_facts", "get_supersession_chain",
+            # Basic edge operations (single, not bulk)
+            "create_belongs_to", "create_touches", "create_supersedes",
+            "get_touched_files", "store_decision", "get_decisions",
+        }
 
     # ── Session CRUD ───────────────────────────────────────────────────
 
@@ -103,11 +118,14 @@ class Neo4jBackend:
         self,
         session_id: str,
         content: str,
-        fact_type: str,
+        fact_type: str | FactType,
         source_turn: int,
         confidence: float = 0.5,
         embedding: list[float] | None = None,
     ) -> str:
+        # Convert str to FactType if needed
+        if isinstance(fact_type, str):
+            fact_type = FactType(fact_type)
         return await _facts.store_fact(
             session_id=session_id,
             content=content,

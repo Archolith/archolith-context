@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from archolith_proxy.models.graph_nodes import FactType
+
 
 @runtime_checkable
 class GraphBackend(Protocol):
@@ -41,6 +43,16 @@ class GraphBackend(Protocol):
 
     def is_ready(self) -> bool:
         """Return True if the backend is connected and ready."""
+        ...
+
+    def supported_methods(self) -> set[str]:
+        """Return set of supported method names.
+
+        Methods not in this set will raise NotImplementedError.
+        Allows callers to check capability before calling. Example:
+        if 'bulk_create_touches' in backend.supported_methods():
+            ...
+        """
         ...
 
     # ── Session CRUD ───────────────────────────────────────────────────
@@ -97,7 +109,7 @@ class GraphBackend(Protocol):
         self,
         session_id: str,
         content: str,
-        fact_type: str,
+        fact_type: str | FactType,
         source_turn: int,
         confidence: float = 0.5,
         embedding: list[float] | None = None,
