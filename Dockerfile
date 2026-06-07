@@ -6,14 +6,13 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 WORKDIR /app
 
 # Copy dependency files first (for layer caching)
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 
-# Install dependencies
-RUN uv pip install --system -e ".[dev]" 2>/dev/null || uv pip install --system .
+# Install production dependencies only (no dev)
+RUN uv pip install --system .
 
 # Copy source code
 COPY archolith_proxy/ archolith_proxy/
-COPY tests/ tests/
 
 # Create logs directory
 RUN mkdir -p logs

@@ -15,6 +15,10 @@ services:
       - GRAPH_BACKEND=ladybug
       - LADYBUG_DB_PATH=/app/data/context.lbug
       - LADYBUG_MAX_CONCURRENT=8
+      # Embeddings (optional)
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
     volumes:
       - archolith_data:/app/data
     healthcheck:

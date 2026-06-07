@@ -28,7 +28,6 @@ dependencies = [
     "pydantic-settings>=2.7.0",
     "structlog>=24.4.0",
     "ladybug>=0.16.0",
-    "javalang>=0.13.0",
 ]
 
 [project.urls]
@@ -38,11 +37,13 @@ Documentation = "https://github.com/Archolith/archolith-context#readme"
 Benchmarks = "https://github.com/ctharvey/archolith-bench"
 
 [project.optional-dependencies]
+java = [
+    "javalang>=0.13.0",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "pytest-httpx>=0.35.0",
-    "httpx",
     "ruff>=0.8.0",
 ]
 

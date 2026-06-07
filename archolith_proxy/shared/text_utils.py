@@ -100,8 +100,9 @@ def _build_outline(content: str, path: str) -> str:
                     ret = node.return_type.name if node.return_type else "void"
                     label = f"{mods} {ret} {node.name}".strip()
                     symbols.append((node.position.line, label))
-        except (SyntaxError, ValueError, javalang.parser.LexerError):
-            # Narrow exception: only catch parse/lexer errors, not ImportError
+        except (SyntaxError, ValueError, ImportError):
+            # Catch parse/lexer errors and ImportError if javalang is not installed
+            # Also catches javalang.parser.LexerError since it would be wrapped as an Exception
             pass
 
     if not symbols:
