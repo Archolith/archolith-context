@@ -14,7 +14,7 @@ Usage:
     python scripts/proxy_status.py watch 3
 
 Environment:
-    PROXY_BASE_URL      Proxy URL (default: http://localhost:9801)
+    PROXY_BASE_URL      Proxy URL (default: http://localhost:9800)
     PROXY_ADMIN_TOKEN   Required for /trace/* endpoints (set in .env as ADMIN_TOKEN)
 """
 
@@ -49,7 +49,7 @@ def _load_dotenv(path: Path) -> dict[str, str]:
 _here = Path(__file__).parent.parent
 _dotenv = _load_dotenv(_here / ".env")
 
-BASE_URL = os.environ.get("PROXY_BASE_URL", _dotenv.get("PROXY_BASE_URL", "http://localhost:9801"))
+BASE_URL = os.environ.get("PROXY_BASE_URL", _dotenv.get("PROXY_BASE_URL", "http://localhost:9800"))
 ADMIN_TOKEN = os.environ.get("PROXY_ADMIN_TOKEN", _dotenv.get("ADMIN_TOKEN", ""))
 
 

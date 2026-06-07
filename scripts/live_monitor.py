@@ -34,7 +34,7 @@ def _load_dotenv(path: Path) -> dict[str, str]:
 
 
 _dotenv = _load_dotenv(Path(__file__).parent.parent / ".env")
-_DEFAULT_PORT = int(_dotenv.get("PROXY_PORT", "9801"))
+_DEFAULT_PORT = int(_dotenv.get("PROXY_PORT", "9800"))
 
 try:
     import websockets

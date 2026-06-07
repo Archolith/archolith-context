@@ -38,7 +38,7 @@ from dotenv import load_dotenv
 # These constants read process env only at import; main() refreshes them from
 # .env via _load_env_config().
 
-_proxy_port = os.getenv("PROXY_PORT", "9801")
+_proxy_port = os.getenv("PROXY_PORT", "9800")
 PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{_proxy_port}/v1")
 DIRECT_URL = os.getenv("UPSTREAM_BASE_URL", "https://integrate.api.nvidia.com/v1")
 API_KEY = os.getenv("UPSTREAM_API_KEY", "")
@@ -49,7 +49,7 @@ def _load_env_config() -> None:
     """Load .env and refresh env-derived module globals. Called from main()."""
     load_dotenv()
     global PROXY_URL, DIRECT_URL, API_KEY, MODEL
-    port = os.getenv("PROXY_PORT", "9801")
+    port = os.getenv("PROXY_PORT", "9800")
     PROXY_URL = os.getenv("PROXY_URL", f"http://localhost:{port}/v1")
     DIRECT_URL = os.getenv("UPSTREAM_BASE_URL", "https://integrate.api.nvidia.com/v1")
     API_KEY = os.getenv("UPSTREAM_API_KEY", "")

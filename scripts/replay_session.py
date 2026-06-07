@@ -26,7 +26,7 @@ from pathlib import Path
 
 import httpx
 
-PROXY = "http://127.0.0.1:9801"
+PROXY = "http://127.0.0.1:9800"
 
 
 def load_prefixes(fixture: Path) -> list[list[dict]]:
