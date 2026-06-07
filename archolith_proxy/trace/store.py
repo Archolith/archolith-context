@@ -18,8 +18,6 @@ Design choices:
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -132,30 +130,30 @@ class TraceStore:
         self._bg_passes.pop(session_id, None)
         self._session_meta.pop(session_id, None)
 
-    def set_session_metadata(
+    async def set_session_metadata(
         self, session_id: str, key: str, value: object,
     ) -> None:
-        """Store per-session metadata (e.g. harness_env).
+        """Store per-session metadata (e.g. harness_env)."""
+        async with self._lock:
+            meta = self._session_meta.setdefault(session_id, {})
+            meta[key] = value
 
-        Non-async — called from the request path before any awaits.
-        """
-        meta = self._session_meta.setdefault(session_id, {})
-        meta[key] = value
-
-    def has_session_metadata(self, session_id: str, key: str) -> bool:
+    async def has_session_metadata(self, session_id: str, key: str) -> bool:
         """True if metadata ``key`` is present for the session.
 
         Lets the request path repopulate metadata after an LRU eviction so a
         resumed session restores its harness_env / proxy_config rather than
         losing it for the process lifetime.
         """
-        return key in self._session_meta.get(session_id, {})
+        async with self._lock:
+            return key in self._session_meta.get(session_id, {})
 
-    def get_session_metadata(
+    async def get_session_metadata(
         self, session_id: str, key: str,
     ) -> object | None:
         """Retrieve per-session metadata by key."""
-        return self._session_meta.get(session_id, {}).get(key)
+        async with self._lock:
+            return self._session_meta.get(session_id, {}).get(key)
 
     async def record_bg_pass(self, trace: BackgroundPassTrace) -> None:
         """Store a background pass trace record.
@@ -321,12 +319,10 @@ class TraceStore:
         loaded = 0
         skipped_files = 0
         for jsonl_path in sorted(self._trace_dir.glob("*.jsonl")):
-            # Only load files named as hex session IDs — skip other JSONL
-            # files in the same directory (e.g. curator_failures.jsonl).
+            # Skip known non-session files in the same directory
+            # (e.g. curator_failures.jsonl). Accept UUID and named session IDs.
             stem = jsonl_path.stem
-            try:
-                int(stem, 16)
-            except ValueError:
+            if stem in ("curator_failures",):  # Known non-session files
                 skipped_files += 1
                 continue
 
@@ -408,7 +404,9 @@ class TraceStore:
             backend = get_backend()
         orphans = []
         mismatches = []
-        for session_id, turns in self._by_session.items():
+        async with self._lock:
+            sessions_to_check = list(self._by_session.items())
+        for session_id, turns in sessions_to_check:
             if session_id == "__no_session__":
                 continue
             try:

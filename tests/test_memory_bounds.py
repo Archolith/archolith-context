@@ -27,8 +27,8 @@ class TestBgPassBounds:
         # Populate s1 with a turn, a bg-pass, and metadata
         await store.record(TurnTrace(session_id="s1", turn_number=1))
         await store.record_bg_pass(BackgroundPassTrace(session_id="s1"))
-        store.set_session_metadata("s1", "harness_env", {"AGENT": "x"})
-        assert store.has_session_metadata("s1", "harness_env")
+        await store.set_session_metadata("s1", "harness_env", {"AGENT": "x"})
+        assert await store.has_session_metadata("s1", "harness_env")
 
         # Push two more sessions → s1 (LRU) is evicted
         await store.record(TurnTrace(session_id="s2", turn_number=1))
@@ -36,24 +36,24 @@ class TestBgPassBounds:
 
         assert await store.get_session_turns("s1") == []
         assert await store.get_bg_passes("s1") == []
-        assert not store.has_session_metadata("s1", "harness_env")
+        assert not await store.has_session_metadata("s1", "harness_env")
         # Survivors intact
         assert await store.get_session_turns("s3") != []
 
     async def test_resume_after_eviction_rebuilds(self) -> None:
         store = TraceStore(max_sessions=2)
         await store.record(TurnTrace(session_id="s1", turn_number=1))
-        store.set_session_metadata("s1", "harness_env", {"AGENT": "x"})
+        await store.set_session_metadata("s1", "harness_env", {"AGENT": "x"})
         await store.record(TurnTrace(session_id="s2", turn_number=1))
         await store.record(TurnTrace(session_id="s3", turn_number=1))  # evicts s1
-        assert not store.has_session_metadata("s1", "harness_env")
+        assert not await store.has_session_metadata("s1", "harness_env")
 
         # s1 resumes: new turn + metadata repopulate cleanly
         await store.record(TurnTrace(session_id="s1", turn_number=2))
-        store.set_session_metadata("s1", "harness_env", {"AGENT": "y"})
+        await store.set_session_metadata("s1", "harness_env", {"AGENT": "y"})
         assert await store.get_session_turns("s1") != []
-        assert store.has_session_metadata("s1", "harness_env")
-        assert store.get_session_metadata("s1", "harness_env") == {"AGENT": "y"}
+        assert await store.has_session_metadata("s1", "harness_env")
+        assert await store.get_session_metadata("s1", "harness_env") == {"AGENT": "y"}
 
 
 class TestPruneLastAttempts:

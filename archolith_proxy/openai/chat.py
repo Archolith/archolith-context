@@ -270,13 +270,13 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             # for the process lifetime. proxy_config presence is the sentinel
             # (always set; harness_env is conditional on the request).
             store = get_trace_store()
-            if not store.has_session_metadata(session_id, "proxy_config"):
+            if not await store.has_session_metadata(session_id, "proxy_config"):
                 from archolith_proxy.proxy.session import extract_harness_env
                 harness_env = extract_harness_env(messages_raw)
                 if harness_env:
-                    store.set_session_metadata(session_id, "harness_env", harness_env)
+                    await store.set_session_metadata(session_id, "harness_env", harness_env)
                 from archolith_proxy.config import snapshot_config
-                store.set_session_metadata(session_id, "proxy_config", snapshot_config())
+                await store.set_session_metadata(session_id, "proxy_config", snapshot_config())
 
             structlog.contextvars.bind_contextvars(session_id=session_id, turn_number=turn_number)
         except Exception as e:
