@@ -15,7 +15,7 @@ import asyncio
 import structlog
 from openai import AsyncOpenAI
 
-from archolith_proxy.config import get_settings
+from archolith_proxy.config import get_settings  # noqa: F401 - used in tests for mocking
 from archolith_proxy.curator.briefing import SessionBriefing, format_briefing_for_prompt
 from archolith_proxy.curator.loop import _run_curator_native
 from archolith_proxy.curator.prompts import build_curator_user_prompt
