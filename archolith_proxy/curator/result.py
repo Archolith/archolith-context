@@ -14,7 +14,7 @@ class CuratorToolCall:
 
     tool: str
     args: dict = field(default_factory=dict)
-    status: str = "ok"        # "ok" or "error"
+    status: str = "ok"        # "ok", "error", or "soft_error"
     error: str = ""           # error message if status == "error"
     result_preview: str = ""  # first 200 chars of result (for debugging)
     raw_result: str = ""      # full result text (for briefing fidelity)

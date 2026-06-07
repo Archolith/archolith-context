@@ -1,9 +1,10 @@
 """SessionBriefing — pre-built context snapshot from the background curator pass.
 
 The background pass runs the same curator bot with a generous iteration budget
-(12 iterations) and captures its output into a SessionBriefing. The next inline
-pass reads the briefing and can produce a context block in ~1 iteration instead
-of 4-6, cutting latency from 3-6s to <1.5s.
+(configurable via background_pass_max_iterations or prepper_max_iterations) and
+captures its output into a SessionBriefing. The next inline pass reads the briefing
+and can produce a context block in ~1 iteration instead of 4-6, cutting latency from
+3-6s to <1.5s.
 """
 
 from __future__ import annotations
@@ -218,7 +219,13 @@ def format_briefing_for_prompt(briefing: SessionBriefing) -> str:
     # Cap total size
     combined = "\n".join(parts)
     if len(combined) > _BRIEFING_MAX_CHARS:
-        combined = combined[:_BRIEFING_MAX_CHARS] + "\n... [briefing truncated at 30K chars]"
+        truncated = combined[:_BRIEFING_MAX_CHARS]
+        # If truncated text has an odd count of ``` fences, append a closing ```
+        # to avoid leaving an open code block
+        fence_count = truncated.count("```")
+        if fence_count % 2 == 1:
+            truncated += "\n```"
+        combined = truncated + "\n... [briefing truncated at 30K chars]"
 
     combined += (
         f"\nThis context was built after turn {briefing.source_turn}. "

@@ -121,7 +121,7 @@ async def run_assembler(
         return None
 
     # Create assembler-specific client if the model differs from the caller's model
-    if asm_base_url != client._base_url or asm_api_key != client.api_key:
+    if asm_base_url != str(client.base_url).rstrip("/") or asm_api_key != client.api_key:
         client = AsyncOpenAI(base_url=asm_base_url, api_key=asm_api_key)
 
     # Format briefing for assembler prompt

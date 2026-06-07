@@ -1,4 +1,10 @@
-"""Curator system prompt — instructions for the tool-calling context manager LLM."""
+"""Curator system prompt — instructions for the tool-calling context manager LLM.
+
+NOTE: Token-budget enforcement is the LLM's responsibility via this prompt's
+guidance on tool call count and turn retention. Programmatic truncation is applied
+downstream in briefing.py (format_briefing_for_prompt) and assembler.py when
+formatting context blocks for injection into the agent prompt.
+"""
 
 from __future__ import annotations
 
@@ -117,7 +123,7 @@ def build_curator_user_prompt(
         summary = checkpoint.get("summary", "")
         next_step = checkpoint.get("next_step", "")
         confidence = checkpoint.get("confidence", 0.5)
-        cp_lines = [f"Checkpoint (pre-loaded — skip get_checkpoint):"]
+        cp_lines = ["Checkpoint (pre-loaded — skip get_checkpoint):"]
         cp_lines.append(f"  State (confidence {confidence:.0%}): {summary}")
         if next_step:
             cp_lines.append(f"  Next step: {next_step}")

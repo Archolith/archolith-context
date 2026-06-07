@@ -283,6 +283,9 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    from archolith_proxy.curator.tools import close_semantic_client
+    await close_semantic_client()
+
     await app.state.http_client.aclose()
     await app.state.extractor_client.aclose()
     await close_backend()
