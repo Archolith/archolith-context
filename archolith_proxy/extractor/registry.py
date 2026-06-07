@@ -13,6 +13,12 @@ from archolith_proxy.extractor.base import ToolExtractor
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "ToolExtractorRegistry",
+    "get_registry",
+    "register_extractor",
+]
+
 
 class ToolExtractorRegistry:
     """Routes a tool name to the correct ToolExtractor subclass.
@@ -36,6 +42,11 @@ class ToolExtractorRegistry:
 
     def set_default(self, extractor: ToolExtractor) -> None:
         self._default = extractor
+
+    def clear(self) -> None:
+        """Clear all registered extractors (for testing and reset)."""
+        self._map.clear()
+        self._default = None
 
     def get(self, tool_name: str) -> ToolExtractor:
         # Exact match first
@@ -107,9 +118,9 @@ def _discover_extractor_plugins(reg: ToolExtractorRegistry) -> None:
         try:
             extractor = ep.load()()
             reg.register(extractor)
-            logger.info("rtk_plugin_loaded", entry_point=ep.name, tool_names=extractor.tool_names)
+            logger.info("extractor_plugin_loaded", entry_point=ep.name, tool_names=extractor.tool_names)
         except Exception:
-            logger.exception("rtk_plugin_load_failed", entry_point=ep.name)
+            logger.exception("extractor_plugin_load_failed", entry_point=ep.name)
 
 
 def get_registry() -> ToolExtractorRegistry:
