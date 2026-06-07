@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from archolith_proxy import __version__
 from archolith_proxy.admin import require_admin_token
 from archolith_proxy.config import get_settings
 from archolith_proxy.graph.backend import close_backend, get_backend, init_backend, is_graph_ready
@@ -307,7 +308,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="archolith-proxy",
         description="OpenAI-compatible proxy with graph-assembled context",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 
@@ -364,7 +365,7 @@ def create_app() -> FastAPI:
         """Liveness probe — is the process alive?"""
         return {
             "status": "alive",
-            "version": "0.1.0",
+            "version": __version__,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0)
             if get_metrics()["start_time"]
             else 0,
@@ -415,7 +416,7 @@ def create_app() -> FastAPI:
             "status": "ready" if ready else "not_ready",
             "graph": graph_status,
             "upstream": upstream_status,
-            "version": "0.1.0",
+            "version": __version__,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0)
             if get_metrics()["start_time"]
             else 0,
@@ -456,7 +457,7 @@ def create_app() -> FastAPI:
             "status": "ok",
             "graph": graph_status,
             "upstream": upstream_status,
-            "version": "0.1.0",
+            "version": __version__,
             "uptime_s": round(time.time() - get_metrics()["start_time"], 0)
             if get_metrics()["start_time"]
             else 0,

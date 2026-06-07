@@ -6,6 +6,7 @@ import time
 
 from fastapi import APIRouter, Depends, Request
 
+from archolith_proxy import __version__
 from archolith_proxy.admin import require_admin_token
 from archolith_proxy.config import get_settings
 from archolith_proxy.graph.backend import is_graph_ready
@@ -145,7 +146,7 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
 
     return {
         "proxy": "archolith-proxy",
-        "version": "0.1.0",
+        "version": __version__,
         "graph_ready": is_graph_ready(),
         "total_requests": get_metrics()["total_requests"],
         "assembly_modes": dict(get_metrics()["assembly_modes"]),
