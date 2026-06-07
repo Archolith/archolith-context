@@ -20,6 +20,9 @@ _metrics: dict = {
         "fallback": 0,
         "passthrough": 0,
         "agent_solo": 0,
+        "agent_solo_compressed": 0,
+        "briefing": 0,
+        "briefing_stale": 0,
         "skipped_low_tokens": 0,
         "skipped_low_savings": 0,
         "skipped_inflation": 0,
@@ -36,6 +39,8 @@ _metrics: dict = {
     "promotions_succeeded": 0,
     "promotions_failed": 0,
     "promotions_skipped": 0,
+    "proxy_recall_injections": 0,
+    "background_pass_successes": 0,
     "curator_calls": 0,
     "curator_timeouts": 0,
     "curator_fallbacks": 0,
@@ -68,6 +73,11 @@ def record_metric(key: str, delta: int | float = 1) -> None:
         current = _metrics[key]
         if isinstance(current, (int, float)):
             _metrics[key] = current + delta
+    else:
+        # Warn on unregistered metric key (likely a typo or missing registration)
+        import structlog
+        logger = structlog.get_logger()
+        logger.warning("unregistered_metric_key", key=key)
 
 
 def record_start_time() -> None:
