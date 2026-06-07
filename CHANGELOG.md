@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-07 — Chunk 7: Cross-cutting hygiene and version metadata
+
+Port and version standardization, docker/pyproject hardening, optional javalang:
+- **Port alignment:** All scripts default to 9800 (canonical port matching config.py and docker-compose.yml). Deployment must migrate from 9801 to 9800.
+- **Version metadata:** `__version__` now read from installed package (pyproject 0.3.0) via `importlib.metadata`, with "0.0.0-dev" fallback. Replaces hardcoded "0.1.0" in main.py health endpoints + metrics_router.py.
+- **Dockerfile:** Copies `uv.lock` for reproducible builds; installs production deps only (no dev); removes test/ from runtime image.
+- **pyproject.toml:** Removed `httpx` duplication from dev deps (already in main). Moved `javalang` to optional `[project.optional-dependencies]` `java = [...]`.
+- **text_utils.py:** `_build_outline()` now catches `ImportError` for missing javalang, gracefully falling back to regex-based outline.
+- **Trace retention:** Added `trace_retention_days` config setting (default 0 = no cleanup); TraceStore now runs cleanup on startup to delete JSONL files older than the retention window.
+- **gitignore:** Added `.ruff_cache/` and `config_overrides.json` (runtime override file, not for repo).
+- **scripts/README.md:** Documented missing scripts (scripted_benchmark.py, harness_benchmark.py, test_synthetic_tools.py, redundancy.py, opencode_export.py).
+- **docker-compose.yml:** Added EMBEDDING_BASE_URL, EMBEDDING_API_KEY, EMBEDDING_MODEL env vars.
+
 ## 2026-06-05 — Fix: proxy was inert on real sessions (RTK missing + trace mislabel)
 
 Root-caused via replaying a real captured coding session: the proxy did NO context
