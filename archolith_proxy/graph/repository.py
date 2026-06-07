@@ -46,29 +46,51 @@ class LabelGuardViolation(Exception):
 def _validate_cypher(cypher: str) -> None:
     """Validate that a Cypher query is label-scoped to :ContextSession.
 
-    Raises LabelGuardViolation if no MATCH clause contains the label.
+    Policy:
+    - Queries targeting only :Memory are allowed (no isolation needed).
+    - Session queries MUST explicitly include :ContextSession (not other session labels alone).
+    - Queries mixing Memory and session labels are rejected (ambiguous isolation).
+
+    Raises LabelGuardViolation if the query violates this policy.
     """
     # Skip validation for simple parameter-only queries or internal admin
     if not cypher or not cypher.strip():
         return
 
-    # If query explicitly targets memory label, it's not our concern
-    if _MEMORY_LABEL_PATTERN.search(cypher):
-        return
+    # Check for memory label queries
+    has_memory_label = _MEMORY_LABEL_PATTERN.search(cypher) is not None
+    has_context_session = _LABEL_PATTERN.search(cypher) is not None
 
-    # Check if any MATCH/CREATE/MERGE clause includes a session-scoped label
-    if _SESSION_LABEL_PATTERN.search(cypher):
-        return
-
-    # Check for MERGE/CREATE with any session label
-    create_pattern = re.compile(
-        rf"(?:CREATE|MERGE)\s*\([^)]*:\s*(?:{'|'.join(_SESSION_LABELS)})\b", re.IGNORECASE
+    # Check for other session labels (Session, Fact, File, Decision without ContextSession)
+    other_session_pattern = re.compile(
+        rf":\s*(?:Session|Fact|File|Decision)\b", re.IGNORECASE
     )
-    if create_pattern.search(cypher):
+    has_other_session_label = other_session_pattern.search(cypher) is not None
+
+    # If query uses only Memory label, allow it (no context isolation needed)
+    if has_memory_label and not has_context_session and not has_other_session_label:
+        return
+
+    # If query mixes Memory and session labels, reject (ambiguous isolation)
+    if has_memory_label and (has_context_session or has_other_session_label):
+        raise LabelGuardViolation(
+            f"Cypher query cannot mix :{MEMORY_LABEL} and session labels. "
+            f"Use either memory-only or session-scoped queries. "
+            f"Query: {cypher[:120]}..."
+        )
+
+    # Session queries MUST have :ContextSession
+    if has_context_session or has_other_session_label:
+        if not has_context_session:
+            raise LabelGuardViolation(
+                f"Session queries must include :{CONTEXT_SESSION_LABEL} label explicitly. "
+                f"Use :Fact, :Session, :File, :Decision with :{CONTEXT_SESSION_LABEL}, not alone. "
+                f"Query: {cypher[:120]}..."
+            )
         return
 
     raise LabelGuardViolation(
-        f"Cypher query must include :{CONTEXT_SESSION_LABEL} label. "
+        f"Cypher query must include :{CONTEXT_SESSION_LABEL} label or be memory-only. "
         f"Query: {cypher[:120]}..."
     )
 

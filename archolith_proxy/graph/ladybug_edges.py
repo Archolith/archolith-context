@@ -130,14 +130,22 @@ async def store_decision(execute, session_id: str, summary: str, rationale: str 
 
 
 async def get_decisions(execute, session_id: str, include_superseded: bool = False) -> list[dict]:
-    filter_clause = "" if include_superseded else "WHERE d.superseded_by IS NULL"
-    return await execute(
-        f"""
-        MATCH (d:Decision {{session_id: $session_id}}) {filter_clause}
+    """Get decisions for a session, optionally filtering out superseded ones."""
+    if include_superseded:
+        cypher = """
+        MATCH (d:Decision {session_id: $session_id})
         RETURN d.decision_id AS decision_id, d.summary AS summary,
                d.rationale AS rationale, d.turn AS turn,
                d.superseded_by AS superseded_by
         ORDER BY d.turn ASC
-        """,
-        {"session_id": session_id},
-    )
+        """
+    else:
+        cypher = """
+        MATCH (d:Decision {session_id: $session_id})
+        WHERE d.superseded_by IS NULL
+        RETURN d.decision_id AS decision_id, d.summary AS summary,
+               d.rationale AS rationale, d.turn AS turn,
+               d.superseded_by AS superseded_by
+        ORDER BY d.turn ASC
+        """
+    return await execute(cypher, {"session_id": session_id})

@@ -6,6 +6,8 @@ Domain logic is delegated to sub-modules (ladybug_sessions, ladybug_facts, etc.)
 
 from __future__ import annotations
 
+__all__ = ["LadybugBackend"]
+
 import atexit
 import os
 import time
@@ -201,6 +203,7 @@ class LadybugBackend:
         self._db = None
         self._aconn = None
         self._ready = False
+        self._rotation_depth = 0  # Track rotation attempts to prevent infinite recursion
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -224,6 +227,7 @@ class LadybugBackend:
 
         try:
             await self._aconn.execute("RETURN 1 AS ok")
+            self._rotation_depth = 0  # Reset on successful connection
             if wal_existed:
                 logger.info("ladybug_wal_recovered", path=self._db_path)
             else:
@@ -232,9 +236,15 @@ class LadybugBackend:
             if wal_existed:
                 logger.warning("ladybug_wal_recovery_failed", path=self._db_path, error=str(e),
                                note="rotating to fresh DB path")
+                self._rotation_depth += 1
+                if self._rotation_depth > 3:
+                    logger.error("ladybug_rotation_depth_exceeded", path=self._db_path, depth=self._rotation_depth,
+                                 error=str(e), note="giving up after 3 rotation attempts")
+                    self._rotation_depth = 0
+                    raise RuntimeError(f"LadybugDB connection failed after {self._rotation_depth} rotation attempts: {e}")
                 await self.close()
                 self._db_path = _rotate_db_path(self._db_path)
-                logger.info("ladybug_rotating_to_fresh", new_path=self._db_path)
+                logger.info("ladybug_rotating_to_fresh", new_path=self._db_path, attempt=self._rotation_depth)
                 await self.connect()
             else:
                 logger.warning("ladybug_connected_degraded", path=self._db_path, error=str(e),
