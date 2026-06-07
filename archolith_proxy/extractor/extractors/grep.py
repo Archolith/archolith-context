@@ -21,20 +21,25 @@ _MAX_FILES = 10
 def _is_valid_path(s: str) -> bool:
     """Check if a string looks like a real file path (not just a label:line:text pattern).
 
-    Heuristics:
-    - Contains at least one path separator (/, \) or starts with drive letter (C:)
-    - Doesn't look like a simple label (e.g. "label:line:content")
-    - Has reasonable path characters
+    Heuristics (accept if ANY holds):
+    - Contains a path separator (/ or \\)
+    - Starts with a Windows drive letter (e.g. C:)
+    - Is a bare filename with a file extension (e.g. main.py, a.py, README.md)
+    Reject bare words with no separator and no extension (e.g. "label", "another"),
+    which are how non-path "label:line:text" output gets shaped.
     """
     if not s:
         return False
-    # Path separators are good sign
+    # Path separators are a good sign
     if "/" in s or "\\" in s:
         return True
     # Windows drive letter (e.g. C:\...)
     if len(s) >= 2 and s[1] == ":" and s[0].isalpha():
         return True
-    # Likely just a label if it has no path separators
+    # Bare filename with an extension (dot not in leading position)
+    if re.search(r"[^.]\.[A-Za-z0-9]+$", s):
+        return True
+    # Otherwise it looks like a plain label, not a path
     return False
 
 

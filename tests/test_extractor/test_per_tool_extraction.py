@@ -980,7 +980,7 @@ class TestExtractFactsPerTool:
     @pytest.mark.asyncio
     async def test_semaphore_only_applied_to_llm_backed_extractors(self):
         """No-LLM extractors (Grep, Glob) bypass the semaphore; LLM extractor waits for it."""
-        from archolith_proxy.extractor.client import _extract_with_semaphore, _get_llm_semaphore
+        from archolith_proxy.extractor.client import _extract_with_semaphore
         from archolith_proxy.extractor.extractors.grep import GrepExtractor
         from archolith_proxy.extractor.extractors.default import DefaultExtractor
 
@@ -1055,7 +1055,7 @@ class TestComputeEmbeddingsBatch:
         mock_transport = httpx.MockTransport(mock_handler)
         client = httpx.AsyncClient(transport=mock_transport)
 
-        with patch("archolith_proxy.extractor.client.get_settings") as mock_settings:
+        with patch("archolith_proxy.extractor.embeddings.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(
                 embedding_api_key="sk-test",
                 embedding_base_url="https://api.openai.com/v1",
@@ -1081,7 +1081,6 @@ class TestLlmSemaphoreReset:
     def test_semaphore_reflects_configured_concurrency(self):
         """The semaphore's limit matches the configured extractor_llm_concurrency."""
         from archolith_proxy.extractor.client import _get_llm_semaphore, _reset_llm_semaphore
-        import archolith_proxy.extractor.client as client_mod
 
         # Reset to clean state
         _reset_llm_semaphore()
@@ -1104,7 +1103,6 @@ class TestLlmSemaphoreReset:
     def test_reset_clears_semaphore(self):
         """_reset_llm_semaphore() clears the global semaphore."""
         from archolith_proxy.extractor.client import _get_llm_semaphore, _reset_llm_semaphore
-        import archolith_proxy.extractor.client as client_mod
 
         _reset_llm_semaphore()
 

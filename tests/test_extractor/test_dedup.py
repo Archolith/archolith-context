@@ -142,29 +142,35 @@ class TestDeduplicateFacts:
     def test_some_duplicates(self):
         new = [
             {"content": "src/app.py has 340 lines of code", "fact_type": "tool_result"},
-            {"content": "src/app.py has 340 lines", "fact_type": "observation"},
+            {"content": "src/app.py has 340 lines of code total", "fact_type": "observation"},
             {"content": "a completely different fact", "fact_type": "state"},
         ]
         existing = []
-        # First two are near-duplicates of each other (within-batch dedup)
-        # The second should be dropped, leaving only the first two
+        # First two are near-duplicates of each other (Jaccard ~0.86 > 0.85), so the
+        # second is dropped by within-batch dedup; the distinct fact is kept.
         result = deduplicate_facts(new, existing)
         assert len(result) == 2
         assert result[0]["fact_type"] == "tool_result"
         assert result[1]["fact_type"] == "state"
 
     def test_within_batch_dedup(self):
-        """Near-duplicates within a single batch collapse to one."""
+        """Near-duplicates within a single batch collapse; distinct facts survive.
+
+        The two main.py facts have Jaccard ~0.875 (above the 0.85 threshold) so the
+        second is dropped as a within-batch near-duplicate; the JWT fact is distinct
+        and must be kept.
+        """
         new = [
-            {"content": "file X has 500 lines of code", "fact_type": "observation"},
-            {"content": "file X has 500 lines", "fact_type": "observation"},
-            {"content": "file X has 500", "fact_type": "observation"},
+            {"content": "src/main.py is a FastAPI application entry point module", "fact_type": "observation"},
+            {"content": "src/main.py is a FastAPI application entry point", "fact_type": "observation"},
+            {"content": "Auth module uses JWT tokens for sessions", "fact_type": "decision"},
         ]
         existing = []
         result = deduplicate_facts(new, existing)
-        # Only the first should be kept; the rest are within-batch near-duplicates
-        assert len(result) == 1
-        assert result[0]["content"] == "file X has 500 lines of code"
+        # Near-duplicate collapsed (3 -> 2); first occurrence + distinct fact kept.
+        assert len(result) == 2
+        assert result[0]["content"] == "src/main.py is a FastAPI application entry point module"
+        assert result[1]["content"] == "Auth module uses JWT tokens for sessions"
 
     def test_dedup_against_existing(self):
         existing = [{"content": "src/main.py is a FastAPI application entry point module"}]
