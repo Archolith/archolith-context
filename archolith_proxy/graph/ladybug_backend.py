@@ -75,7 +75,6 @@ from archolith_proxy.graph.ladybug_sessions import (
     touch_session,
     update_goal,
 )
-from archolith_proxy.graph.protocol import GraphBackend
 from archolith_proxy.config import get_settings
 
 logger = structlog.get_logger()
@@ -286,6 +285,41 @@ class LadybugBackend:
 
     def is_ready(self) -> bool:
         return self._ready and self._db is not None
+
+    def supported_methods(self) -> set[str]:
+        """Return set of supported method names for LadybugDB backend.
+
+        LadybugDB supports all operations including bulk operations and file caching.
+        """
+        return {
+            # Lifecycle
+            "connect", "close", "ensure_schema", "verify_connectivity", "is_ready",
+            "supported_methods",
+            # Session CRUD
+            "create_session", "find_session_by_id", "find_session_by_fingerprint",
+            "find_or_create_by_fingerprint", "touch_session", "get_turn_number",
+            "update_goal", "list_active_sessions", "get_session_stats",
+            # Fact CRUD
+            "store_fact", "store_facts_batch", "invalidate_facts",
+            "find_matching_fact_ids", "get_active_facts", "get_active_fact_count",
+            "get_facts_filtered", "get_invalidated_facts", "get_supersession_chain",
+            # All edge operations (single and bulk)
+            "create_belongs_to", "create_touches", "bulk_create_touches",
+            "create_supersedes", "bulk_create_supersedes",
+            "get_touched_files", "store_decision", "bulk_store_decisions",
+            "get_decisions",
+            # File content caching (LadybugDB only)
+            "upsert_file_content", "get_file_content", "delete_file_content",
+            "list_cached_files", "get_file_lines",
+            # File outline caching (LadybugDB only)
+            "upsert_file_outline", "get_file_outline", "delete_file_outline",
+            "evict_stale_file_cache",
+            # Checkpoints, Issues, Verifications (LadybugDB only)
+            "upsert_checkpoint", "get_checkpoint",
+            "create_issue", "get_open_issues", "bulk_create_issues",
+            "resolve_issues", "bulk_resolve_issues",
+            "create_verification", "get_last_verification", "bulk_create_verifications",
+        }
 
     def _check_ready(self) -> None:
         if not self._ready or not self._aconn:
