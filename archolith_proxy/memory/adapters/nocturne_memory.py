@@ -22,6 +22,7 @@ from archolith_proxy.memory.models import (
     PromotionOutcome,
     PromotionResult,
 )
+from archolith_proxy.shared.text_utils import slugify
 
 if TYPE_CHECKING:
     from archolith_proxy.memory.models import MemoryEngineConfig, PromotionRecord
@@ -220,7 +221,7 @@ class Adapter(MemoryAdapterBase):
     def _build_payload(self, promotion: PromotionRecord) -> dict:
         """Build Nocturne Memory create payload."""
         # Generate a URI-safe slug for the child node
-        slug = self._slugify(f"{promotion.fact_type}-{promotion.promotion_id}")
+        slug = slugify(f"{promotion.fact_type}-{promotion.promotion_id}")
         child_uri = f"{self._parent_uri}/{slug}"
 
         return {
@@ -243,11 +244,3 @@ class Adapter(MemoryAdapterBase):
             },
         }
 
-    @staticmethod
-    def _slugify(text: str) -> str:
-        import re
-        slug = text.lower().strip()
-        slug = re.sub(r"[^\w\s-]", "", slug)
-        slug = re.sub(r"[\s_]+", "-", slug)
-        slug = re.sub(r"-+", "-", slug)
-        return slug[:60].strip("-")

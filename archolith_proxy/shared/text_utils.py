@@ -12,6 +12,19 @@ import re
 # ── Text normalization for deduplication ──────────────────────────────────
 
 
+def slugify(text: str) -> str:
+    """Convert text to a URL/filename-safe slug.
+
+    Lowercases, removes special characters, collapses whitespace to hyphens,
+    and limits to 60 characters.
+    """
+    slug = text.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    slug = re.sub(r"[\s_]+", "-", slug)
+    slug = re.sub(r"-+", "-", slug)
+    return slug[:60].strip("-")
+
+
 def _normalize(text: str) -> str:
     """Normalize fact content for comparison: lowercase, strip punctuation, collapse whitespace."""
     text = text.lower().strip()

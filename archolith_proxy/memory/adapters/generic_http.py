@@ -71,14 +71,17 @@ class Adapter(MemoryAdapterBase):
         )
 
     async def healthcheck(self) -> bool:
-        """Best-effort health check — GET on base_url or GET /health."""
+        """Best-effort health check — GET on base_url or GET /health.
+
+        Returns True only for 2xx status. 401/403/404/429 are considered unhealthy.
+        """
         try:
             client = self._get_client()
             # Try /health first, fall back to base URL
             for path in ("/health", "/"):
                 try:
                     resp = await client.get(path)
-                    if resp.status_code < 500:
+                    if 200 <= resp.status_code < 300:
                         return True
                 except Exception:
                     continue
