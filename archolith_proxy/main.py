@@ -238,8 +238,9 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass  # Non-fatal; trace/graph drift does not block startup
 
-    from archolith_proxy.memory.registry import get_registry, reset_registry
+    from archolith_proxy.memory.registry import get_registry, reset_registry, init_plugins
 
+    init_plugins()
     reset_registry()
     registry = get_registry()
     if settings.promotion_enabled:
@@ -285,6 +286,15 @@ async def lifespan(app: FastAPI):
 
     from archolith_proxy.curator.tools import close_semantic_client
     await close_semantic_client()
+
+    # Close all registered memory adapters
+    from archolith_proxy.memory.registry import get_registry
+    registry = get_registry()
+    for adapter in registry.get_all_adapters():
+        try:
+            await adapter.close()
+        except Exception as e:
+            logger.warning("adapter_close_failed", adapter_id=adapter.config.id, error=str(e))
 
     await app.state.http_client.aclose()
     await app.state.extractor_client.aclose()
