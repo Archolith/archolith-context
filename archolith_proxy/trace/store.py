@@ -18,6 +18,7 @@ Design choices:
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -46,10 +47,12 @@ class TraceStore:
         max_sessions: int = 1000,
         trace_dir: str | None = None,
         max_bg_passes_per_session: int = DEFAULT_MAX_BG_PASSES_PER_SESSION,
+        retention_days: int = 0,
     ) -> None:
         self._max_turns = max_turns_per_session
         self._max_sessions = max_sessions
         self._max_bg_passes = max_bg_passes_per_session
+        self._retention_days = retention_days
         self._lock = asyncio.Lock()
         # session_id -> list[TurnTrace] (ordered by turn_number)
         self._by_session: dict[str, list[TurnTrace]] = defaultdict(list)
@@ -67,6 +70,37 @@ class TraceStore:
         if self._trace_dir:
             self._trace_dir.mkdir(parents=True, exist_ok=True)
             logger.info("trace_disk_persistence_enabled", dir=str(self._trace_dir))
+            # Run retention cleanup on startup
+            if retention_days > 0:
+                self._cleanup_old_traces()
+
+    def _cleanup_old_traces(self) -> None:
+        """Delete JSONL trace files older than retention_days.
+
+        Runs at startup; skips non-.jsonl files and handles missing dirs gracefully.
+        """
+        if not self._trace_dir or not self._trace_dir.exists() or self._retention_days <= 0:
+            return
+
+        cutoff_time = time.time() - (self._retention_days * 86400)  # days to seconds
+        deleted_count = 0
+
+        try:
+            for jsonl_path in self._trace_dir.glob("*.jsonl"):
+                try:
+                    mtime = jsonl_path.stat().st_mtime
+                    if mtime < cutoff_time:
+                        jsonl_path.unlink()
+                        deleted_count += 1
+                except Exception:
+                    # Skip files that can't be deleted
+                    pass
+        except Exception:
+            logger.warning("trace_retention_cleanup_failed", exc_info=True)
+            return
+
+        if deleted_count > 0:
+            logger.info("trace_retention_cleanup_done", deleted_files=deleted_count, retention_days=self._retention_days)
 
     async def record(self, trace: TurnTrace) -> None:
         """Store a turn trace record.
@@ -434,14 +468,18 @@ _instance: TraceStore | None = None
 def get_trace_store() -> TraceStore:
     """Get the process-level TraceStore instance.
 
-    On first call, reads trace_dir from settings. When set, traces are
-    persisted as per-session JSONL files and survive proxy restarts.
+    On first call, reads trace_dir and retention_days from settings. When set,
+    traces are persisted as per-session JSONL files and survive proxy restarts.
+    Old trace files are automatically cleaned up on startup if retention_days > 0.
     """
     global _instance
     if _instance is None:
         from archolith_proxy.config import get_settings
         settings = get_settings()
-        _instance = TraceStore(trace_dir=settings.trace_dir or None)
+        _instance = TraceStore(
+            trace_dir=settings.trace_dir or None,
+            retention_days=settings.trace_retention_days,
+        )
     return _instance
 
 

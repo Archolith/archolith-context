@@ -232,6 +232,10 @@ class Settings(BaseSettings):
     # Without this, traces are memory-only and lost on restart.
     trace_dir: str = ""
 
+    # Trace retention — delete JSONL trace files older than this many days.
+    # When 0 (default), no automatic cleanup. Cleanup runs at proxy startup.
+    trace_retention_days: int = 0
+
     # Admin/operator token for protecting non-proxy surfaces
     # When empty (default), admin endpoints are open (localhost-only assumption).
     # When set, all operator endpoints require X-Admin-Token or Authorization: Bearer matching this value.
