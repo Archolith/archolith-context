@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from archolith_proxy.memory.models import (
-    MemoryEngineConfig,
     PromotionOutcome,
     PromotionRecord,
 )

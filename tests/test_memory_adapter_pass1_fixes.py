@@ -7,7 +7,7 @@ import httpx
 
 from archolith_proxy.memory.adapters.generic_http import Adapter as GenericHttpAdapter
 from archolith_proxy.memory.adapters.basic_memory import Adapter as BasicMemoryAdapter
-from archolith_proxy.memory.models import MemoryEngineConfig, PromotionOutcome
+from archolith_proxy.memory.models import MemoryEngineConfig
 
 
 # ---------------------------------------------------------------------------
