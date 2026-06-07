@@ -205,6 +205,31 @@ async def test_create_touches_and_files(backend):
 
 
 @pytest.mark.asyncio
+async def test_get_file_content_suffix_fallback(backend):
+    """get_file_content resolves a relative/suffix path via the fuzzy fallback.
+
+    Regression: the fallback query used kuzu length(STRING), which raises a binder
+    error (LENGTH expects RECURSIVE_REL), breaking the curator's get_file /
+    get_file_lines whenever it passed a relative path. The exact-match path used by
+    most tests never hit this fallback, so it slipped through. Fixed with size().
+    """
+    await backend.create_session("sess-suffix")
+    await backend.upsert_file_content(
+        "sess-suffix", "/repo/src/auth/handler.py", "def handler():\n    return 1\n", "sha-1", 1,
+    )
+    # exact match (no fallback)
+    exact = await backend.get_file_content("sess-suffix", "/repo/src/auth/handler.py")
+    assert exact and "def handler" in exact["content"]
+    # relative/suffix match MUST resolve via the fallback (size() query)
+    fuzzy = await backend.get_file_content("sess-suffix", "auth/handler.py")
+    assert fuzzy is not None, "suffix fallback failed (kuzu length/size binder bug?)"
+    assert "def handler" in fuzzy["content"]
+    # get_file_lines routes through get_file_content, so it must resolve too
+    lines = await backend.get_file_lines("sess-suffix", "auth/handler.py", 1, 1)
+    assert lines and "def handler" in lines
+
+
+@pytest.mark.asyncio
 async def test_decisions(backend):
     """Store and retrieve decisions."""
     await backend.create_session("sess-009")
