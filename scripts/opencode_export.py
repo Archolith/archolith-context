@@ -5,7 +5,7 @@ OpenCode stores a session as message rows (role) whose content lives in ordered
 (``{tool, callID, state:{input, output}}``). This script flattens that into a
 standard OpenAI chat array so a real tool-using coding session can be analyzed
 (scripts/redundancy.py) or replayed as a benchmark fixture — the synthetic
-scenarios have no tool messages and cannot exercise RTK/agent-solo/curator.
+scenarios have no tool messages and cannot exercise filter/agent-solo/curator.
 
 Each OpenCode tool part becomes two OpenAI messages:
   assistant {tool_calls:[{id:callID, function:{name:tool, arguments:input}}]}

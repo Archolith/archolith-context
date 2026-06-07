@@ -1,12 +1,12 @@
 """Replay a captured real session through the proxy to get a true baseline.
 
 The synthetic benchmark scenarios are user/assistant text only — no tool
-messages — so the proxy never enters the agent-solo/RTK path and the curator has
+messages — so the proxy never enters the agent-solo/filter path and the curator has
 nothing to assemble (every turn is passthrough). This replays a REAL exported
 session (scripts/opencode_export.py) by sending each growing message prefix to
 the proxy under a pinned X-Session-ID, so the proxy accumulates the session and
 its curation machinery actually engages. We then read the proxy trace and report
-what it did (assembly mode, savings, RTK firing, curator skip reasons).
+what it did (assembly mode, savings, filter firing, curator skip reasons).
 
 Output tokens are capped low — we care about what the proxy DID to the context,
 not the model's reply. Sends real upstream calls (budget); use --max-turns.
