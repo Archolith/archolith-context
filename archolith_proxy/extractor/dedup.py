@@ -12,12 +12,22 @@ from __future__ import annotations
 import structlog
 
 from archolith_proxy.shared.text_utils import (
-    _normalize,  # noqa: F401 — re-exported for backward compat
-    _tokenize,  # noqa: F401 — re-exported for backward compat
-    jaccard_similarity,  # noqa: F401 — re-exported for backward compat
+    _normalize,
+    _tokenize,
+    jaccard_similarity,
 )
 
 logger = structlog.get_logger()
+
+__all__ = [
+    "DEFAULT_SIMILARITY_THRESHOLD",
+    "is_duplicate",
+    "deduplicate_facts",
+    # Re-exported from shared.text_utils for backward compat
+    "_normalize",
+    "_tokenize",
+    "jaccard_similarity",
+]
 
 # Default similarity threshold — skip if Jaccard > this value
 DEFAULT_SIMILARITY_THRESHOLD = 0.85
@@ -61,27 +71,54 @@ def deduplicate_facts(
 ) -> list[dict]:
     """Filter a list of new facts, removing any that duplicate existing facts.
 
+    Also deduplicates within the batch: if two new facts are near-duplicates
+    of each other, only the first is kept.
+
     Args:
         new_facts: Candidate facts to store.
         existing_facts: Already-stored active facts.
         threshold: Jaccard similarity threshold.
 
     Returns:
-        Filtered list of new facts with duplicates removed.
+        Filtered list of new facts with duplicates (internal and external) removed.
     """
-    kept = []
-    skipped = 0
+    # First pass: dedup within the new_facts batch
+    batch_kept = []
+    batch_skipped = 0
     for fact in new_facts:
         content = fact.get("content", "")
+        # Check if this fact duplicates any fact already in batch_kept
+        if is_duplicate(content, batch_kept, threshold):
+            batch_skipped += 1
+        else:
+            batch_kept.append(fact)
+
+    if batch_skipped > 0:
+        logger.debug(
+            "facts_within_batch_dedup",
+            input_count=len(new_facts),
+            kept=len(batch_kept),
+            skipped=batch_skipped,
+        )
+
+    # Second pass: dedup batch_kept against existing_facts
+    kept = []
+    external_skipped = 0
+    for fact in batch_kept:
+        content = fact.get("content", "")
         if is_duplicate(content, existing_facts, threshold):
-            skipped += 1
+            external_skipped += 1
         else:
             kept.append(fact)
-    if skipped > 0:
+
+    total_skipped = batch_skipped + external_skipped
+    if total_skipped > 0:
         logger.info(
             "facts_deduplicated",
             new_count=len(new_facts),
             kept=len(kept),
-            skipped=skipped,
+            skipped=total_skipped,
+            within_batch=batch_skipped,
+            vs_existing=external_skipped,
         )
     return kept

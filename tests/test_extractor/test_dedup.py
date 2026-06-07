@@ -146,11 +146,25 @@ class TestDeduplicateFacts:
             {"content": "a completely different fact", "fact_type": "state"},
         ]
         existing = []
-        # First two are near-duplicates of each other
-        # deduplicate_facts checks against EXISTING facts, not other new facts
-        # So without existing, all pass
+        # First two are near-duplicates of each other (within-batch dedup)
+        # The second should be dropped, leaving only the first two
         result = deduplicate_facts(new, existing)
-        assert len(result) == 3
+        assert len(result) == 2
+        assert result[0]["fact_type"] == "tool_result"
+        assert result[1]["fact_type"] == "state"
+
+    def test_within_batch_dedup(self):
+        """Near-duplicates within a single batch collapse to one."""
+        new = [
+            {"content": "file X has 500 lines of code", "fact_type": "observation"},
+            {"content": "file X has 500 lines", "fact_type": "observation"},
+            {"content": "file X has 500", "fact_type": "observation"},
+        ]
+        existing = []
+        result = deduplicate_facts(new, existing)
+        # Only the first should be kept; the rest are within-batch near-duplicates
+        assert len(result) == 1
+        assert result[0]["content"] == "file X has 500 lines of code"
 
     def test_dedup_against_existing(self):
         existing = [{"content": "src/main.py is a FastAPI application entry point module"}]
@@ -202,3 +216,26 @@ class TestDeduplicateFacts:
 
     def test_default_threshold_constant(self):
         assert DEFAULT_SIMILARITY_THRESHOLD == 0.85
+
+
+# ── Merge-level dedup ──────────────────────────────────────────────────────
+
+class TestMergeLevelDedup:
+    def test_merge_dedup_near_duplicates_across_batches(self):
+        """When merging turn-level facts with per-tool facts, near-duplicates collapse."""
+        per_tool_facts = [
+            {"content": "src/main.py is a FastAPI application entry point module"},
+        ]
+        turn_level_facts = [
+            # This is a near-duplicate (>0.85 Jaccard with per-tool fact)
+            {"content": "src/main.py is a FastAPI application entry point", "fact_type": "observation"},
+            # This is distinct
+            {"content": "Auth module uses JWT tokens for authentication", "fact_type": "observation"},
+        ]
+
+        # Deduplicate turn-level against per-tool
+        result = deduplicate_facts(turn_level_facts, per_tool_facts)
+
+        # Should drop the first (near-dup) and keep the second
+        assert len(result) == 1
+        assert result[0]["content"] == "Auth module uses JWT tokens for authentication"
