@@ -7,6 +7,8 @@ index creation, and driver lifecycle while exposing the protocol interface.
 
 from __future__ import annotations
 
+__all__ = ["Neo4jBackend"]
+
 import structlog
 
 from archolith_proxy.graph import cleanup as _cleanup

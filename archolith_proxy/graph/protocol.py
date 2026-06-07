@@ -7,6 +7,8 @@ this interface, enabling pluggable backends (Neo4j, LadybugDB, etc.).
 
 from __future__ import annotations
 
+__all__ = ["GraphBackend"]
+
 from typing import Protocol, runtime_checkable
 
 from archolith_proxy.models.graph_nodes import FactType

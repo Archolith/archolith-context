@@ -6,6 +6,8 @@ type, or default target. Adapters are instantiated lazily on first access.
 
 from __future__ import annotations
 
+__all__ = ["MemoryEngineRegistry", "get_registry", "reset_registry"]
+
 import importlib
 import structlog
 from typing import TYPE_CHECKING
