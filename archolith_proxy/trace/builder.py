@@ -91,10 +91,12 @@ class TraceBuilder:
         monotonically growing and dominates trace storage (~99%); agent-solo
         turns just append 2-3 messages to the previous state.
         """
+        # Set count unconditionally (both user and agent-solo turns)
+        self._data["original_messages_count"] = len(messages)
+
         if not is_user_turn and len(messages) > 4:
             # Store lightweight summary: count + last 2 messages for debugging
             self._data["original_messages"] = _truncate_messages(messages[-2:])
-            self._data["original_messages_count"] = len(messages)
         else:
             self._data["original_messages"] = _truncate_messages(messages)
 

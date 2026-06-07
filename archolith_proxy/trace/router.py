@@ -11,11 +11,11 @@ recall hits, and filtering.
 
 from __future__ import annotations
 
+import asyncio
 import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from archolith_proxy.config import get_settings
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
 from archolith_proxy.proxy.session import (
     clear_benchmark_session_id,
@@ -30,6 +30,10 @@ from archolith_proxy.trace.store import get_trace_store
 logger = structlog.get_logger()
 
 router = APIRouter(prefix="/trace", tags=["trace"])
+
+# Module-level rate limiting: non-reentrant flag + lock for POST /qa/extract
+_extraction_in_flight = False
+_extraction_lock = asyncio.Lock()
 
 
 # ── Benchmark session-ID override endpoints ───────────────────────────────────
@@ -147,7 +151,7 @@ async def graph_facts(
     """List facts for a session with optional filtering.
 
     Query params:
-    - fact_type: filter by fact type (observation, preference, procedure, etc.)
+    - fact_type: filter by fact type (file_state, error, tool_result, decision, state, goal, observation)
     - min_confidence: minimum confidence threshold (0.0-1.0)
     - from_turn: minimum source turn (inclusive)
     - to_turn: maximum source turn (inclusive)
@@ -292,129 +296,143 @@ async def qa_extract(request: Request) -> dict:
     - turn_number: Optional turn number (default 0)
     - session_id: Optional session_id to run dedup/invalidation against
     """
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
-
-    user_message = body.get("user_message", "")
-    assistant_response = body.get("assistant_response", "")
-    if not user_message and not assistant_response:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "At least one of user_message or assistant_response is required"},
-        )
-
-    tool_results = body.get("tool_results")
-    session_goal = body.get("session_goal")
-    turn_number = body.get("turn_number", 0)
-    session_id = body.get("session_id")
-
-    # Step 1: Run extraction
-    try:
-        from archolith_proxy.config import get_settings
-        settings = get_settings()
-        extractor_client = getattr(request.app.state, "extractor_client", None)
-        if not extractor_client:
-            return JSONResponse(status_code=503, content={"error": "Extractor client not available"})
-
-        from archolith_proxy.extractor.client import extract_facts
-        import time
-
-        start = time.monotonic()
-        result = await extract_facts(
-            http_client=extractor_client,
-            turn_number=turn_number,
-            user_message=user_message,
-            assistant_response=assistant_response,
-            tool_results=tool_results,
-            session_goal=session_goal,
-        )
-        extraction_latency_ms = (time.monotonic() - start) * 1000
-
-        if not result or not result.facts:
-            return {
-                "status": "extraction_failed",
-                "extraction_latency_ms": round(extraction_latency_ms, 1),
-                "raw_result": None,
-                "normalized": None,
-                "dedup": None,
-                "invalidation_candidates": None,
-                "graph_write_set": None,
-            }
-
-    except Exception as e:
-        logger.warning("qa_extract_failed", error=str(e))
-        return JSONResponse(status_code=503, content={"error": f"Extraction call failed: {e}"})
-
-    # Step 2: Normalize the result
-    normalized = result.model_dump()
-
-    # Step 3: Run dedup check if session_id provided
-    dedup_info = None
-    if session_id and is_graph_ready():
-        try:
-            from archolith_proxy.extractor.dedup import deduplicate_facts
-            from archolith_proxy.graph.backend import get_backend
-
-            existing_facts = await get_backend().get_active_facts(
-                session_id,
-                limit=get_settings().fact_pool_limit,
+    # Check in-flight rate limit (only one extraction at a time)
+    global _extraction_in_flight
+    async with _extraction_lock:
+        if _extraction_in_flight:
+            return JSONResponse(
+                status_code=429,
+                content={"error": "Extraction already in flight — try again shortly"},
             )
-            before_count = len(result.facts)
-            kept_facts = deduplicate_facts(result.facts, existing_facts)
-            skipped_count = before_count - len(kept_facts)
+        _extraction_in_flight = True
 
-            dedup_info = {
-                "existing_active_facts": len(existing_facts),
-                "new_facts_before_dedup": before_count,
-                "new_facts_after_dedup": len(kept_facts),
-                "duplicates_skipped": skipped_count,
-                "kept_facts": kept_facts,
-            }
-        except Exception as e:
-            dedup_info = {"error": f"Dedup check failed: {e}"}
-
-    # Step 4: Run invalidation matching if session_id provided
-    invalidation_info = None
-    if session_id and is_graph_ready() and result.invalidated_fact_ids:
+    try:
         try:
-            from archolith_proxy.graph.backend import get_backend
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
 
-            matched_ids = await get_backend().find_matching_fact_ids(session_id, result.invalidated_fact_ids)
+        user_message = body.get("user_message", "")
+        assistant_response = body.get("assistant_response", "")
+        if not user_message and not assistant_response:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "At least one of user_message or assistant_response is required"},
+            )
+
+        tool_results = body.get("tool_results")
+        session_goal = body.get("session_goal")
+        turn_number = body.get("turn_number", 0)
+        session_id = body.get("session_id")
+
+        # Step 1: Run extraction
+        try:
+            from archolith_proxy.config import get_settings
+            extractor_client = getattr(request.app.state, "extractor_client", None)
+            if not extractor_client:
+                return JSONResponse(status_code=503, content={"error": "Extractor client not available"})
+
+            from archolith_proxy.extractor.client import extract_facts
+            import time
+
+            start = time.monotonic()
+            result = await extract_facts(
+                http_client=extractor_client,
+                turn_number=turn_number,
+                user_message=user_message,
+                assistant_response=assistant_response,
+                tool_results=tool_results,
+                session_goal=session_goal,
+            )
+            extraction_latency_ms = (time.monotonic() - start) * 1000
+
+            if not result or not result.facts:
+                return {
+                    "status": "extraction_failed",
+                    "extraction_latency_ms": round(extraction_latency_ms, 1),
+                    "raw_result": None,
+                    "normalized": None,
+                    "dedup": None,
+                    "invalidation_candidates": None,
+                    "graph_write_set": None,
+                }
+
+        except Exception as e:
+            logger.warning("qa_extract_failed", error=str(e))
+            return JSONResponse(status_code=503, content={"error": f"Extraction call failed: {e}"})
+
+        # Step 2: Normalize the result
+        normalized = result.model_dump()
+
+        # Step 3: Run dedup check if session_id provided
+        dedup_info = None
+        if session_id and is_graph_ready():
+            try:
+                from archolith_proxy.extractor.dedup import deduplicate_facts
+                from archolith_proxy.graph.backend import get_backend
+
+                existing_facts = await get_backend().get_active_facts(
+                    session_id,
+                    limit=get_settings().fact_pool_limit,
+                )
+                before_count = len(result.facts)
+                kept_facts = deduplicate_facts(result.facts, existing_facts)
+                skipped_count = before_count - len(kept_facts)
+
+                dedup_info = {
+                    "existing_active_facts": len(existing_facts),
+                    "new_facts_before_dedup": before_count,
+                    "new_facts_after_dedup": len(kept_facts),
+                    "duplicates_skipped": skipped_count,
+                    "kept_facts": kept_facts,
+                }
+            except Exception as e:
+                dedup_info = {"error": f"Dedup check failed: {e}"}
+
+        # Step 4: Run invalidation matching if session_id provided
+        invalidation_info = None
+        if session_id and is_graph_ready() and result.invalidated_fact_ids:
+            try:
+                from archolith_proxy.graph.backend import get_backend
+
+                matched_ids = await get_backend().find_matching_fact_ids(session_id, result.invalidated_fact_ids)
+                invalidation_info = {
+                    "invalidation_descriptions": result.invalidated_fact_ids,
+                    "matched_fact_ids": matched_ids,
+                    "match_count": len(matched_ids),
+                    "description_count": len(result.invalidated_fact_ids),
+                }
+            except Exception as e:
+                invalidation_info = {"error": f"Invalidation matching failed: {e}"}
+        elif result.invalidated_fact_ids:
             invalidation_info = {
                 "invalidation_descriptions": result.invalidated_fact_ids,
-                "matched_fact_ids": matched_ids,
-                "match_count": len(matched_ids),
-                "description_count": len(result.invalidated_fact_ids),
+                "matched_fact_ids": [],
+                "note": "No session_id provided — cannot match to actual fact IDs",
             }
-        except Exception as e:
-            invalidation_info = {"error": f"Invalidation matching failed: {e}"}
-    elif result.invalidated_fact_ids:
-        invalidation_info = {
-            "invalidation_descriptions": result.invalidated_fact_ids,
-            "matched_fact_ids": [],
-            "note": "No session_id provided — cannot match to actual fact IDs",
+
+        # Step 5: Estimate graph write set
+        graph_write_set = {
+            "facts_to_store": len(result.facts) if result.facts else 0,
+            "files_to_touch": len(result.files_touched) if result.files_touched else 0,
+            "decisions_to_store": len(result.decisions) if result.decisions else 0,
+            "invalidations_to_attempt": len(result.invalidated_fact_ids) if result.invalidated_fact_ids else 0,
         }
+        if dedup_info and "duplicates_skipped" in dedup_info:
+            graph_write_set["facts_after_dedup"] = graph_write_set["facts_to_store"] - dedup_info["duplicates_skipped"]
+        if invalidation_info and "match_count" in invalidation_info:
+            graph_write_set["invalidations_matched"] = invalidation_info["match_count"]
 
-    # Step 5: Estimate graph write set
-    graph_write_set = {
-        "facts_to_store": len(result.facts) if result.facts else 0,
-        "files_to_touch": len(result.files_touched) if result.files_touched else 0,
-        "decisions_to_store": len(result.decisions) if result.decisions else 0,
-        "invalidations_to_attempt": len(result.invalidated_fact_ids) if result.invalidated_fact_ids else 0,
-    }
-    if dedup_info and "duplicates_skipped" in dedup_info:
-        graph_write_set["facts_after_dedup"] = graph_write_set["facts_to_store"] - dedup_info["duplicates_skipped"]
-    if invalidation_info and "match_count" in invalidation_info:
-        graph_write_set["invalidations_matched"] = invalidation_info["match_count"]
-
-    return {
-        "status": "success",
-        "extraction_latency_ms": round(extraction_latency_ms, 1),
-        "raw_result": normalized,
-        "normalized": normalized,
-        "dedup": dedup_info,
-        "invalidation_candidates": invalidation_info,
-        "graph_write_set": graph_write_set,
-    }
+        return {
+            "status": "success",
+            "extraction_latency_ms": round(extraction_latency_ms, 1),
+            "raw_result": normalized,
+            "normalized": normalized,
+            "dedup": dedup_info,
+            "invalidation_candidates": invalidation_info,
+            "graph_write_set": graph_write_set,
+        }
+    finally:
+        # Always clear the in-flight flag
+        async with _extraction_lock:
+            _extraction_in_flight = False

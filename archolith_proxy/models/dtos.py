@@ -90,6 +90,7 @@ class TurnTrace(BaseModel):
 
     # Prompt payloads (original vs rewritten)
     original_messages: list[dict] = Field(default_factory=list)
+    original_messages_count: int = 0
     rewritten_messages: list[dict] = Field(default_factory=list)
 
     # Turn-level timing

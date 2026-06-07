@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
+from archolith_proxy.admin import require_admin_token
 from archolith_proxy.config import get_settings
 from archolith_proxy.graph.backend import is_graph_ready
 from archolith_proxy.metrics import get_metrics
@@ -25,7 +26,7 @@ def _get_circuit_states() -> dict[str, dict]:
 
 
 @router.get("/metrics")
-async def metrics(request: Request) -> dict:
+async def metrics(request: Request, admin: None = Depends(require_admin_token)) -> dict:
     active_sessions = 0
     if is_graph_ready():
         try:
@@ -62,11 +63,13 @@ async def metrics(request: Request) -> dict:
     trace_store = getattr(request.app.state, "trace_store", get_trace_store())
     user_turns_by_session: dict[str, int] = {}
     try:
-        for session_id, turns in trace_store.by_session.items():
-            if turns:
-                user_turns_by_session[session_id] = max(
-                    (t.user_turn_count for t in turns), default=0
-                )
+        # Guard the read against concurrent mutation
+        async with trace_store._lock:
+            for session_id, turns in trace_store.by_session.items():
+                if turns:
+                    user_turns_by_session[session_id] = max(
+                        (t.user_turn_count for t in turns), default=0
+                    )
     except Exception:
         pass
 
@@ -76,12 +79,14 @@ async def metrics(request: Request) -> dict:
     total_cache_hit_tokens = 0
     total_cache_miss_tokens = 0
     try:
-        for turns in trace_store.by_session.values():
-            for t in turns:
-                if t.output_tokens:
-                    total_output_tokens += t.output_tokens
-                total_cache_hit_tokens += t.cache_hit_tokens
-                total_cache_miss_tokens += t.cache_miss_tokens
+        # Guard the read against concurrent mutation
+        async with trace_store._lock:
+            for turns in trace_store.by_session.values():
+                for t in turns:
+                    if t.output_tokens:
+                        total_output_tokens += t.output_tokens
+                    total_cache_hit_tokens += t.cache_hit_tokens
+                    total_cache_miss_tokens += t.cache_miss_tokens
     except Exception:
         pass
     output_cost = total_output_tokens * settings.pricing_output_per_million / 1_000_000
@@ -117,12 +122,14 @@ async def metrics(request: Request) -> dict:
     curator_latencies = []
     total_curator_tool_calls = 0
     try:
-        for turns in trace_store.by_session.values():
-            for t in turns:
-                if t.assembly_mode == "curator":
-                    curator_latencies.append(t.assembly_latency_ms)
-                    if t.curator_tool_log:
-                        total_curator_tool_calls += len(t.curator_tool_log)
+        # Guard the read against concurrent mutation
+        async with trace_store._lock:
+            for turns in trace_store.by_session.values():
+                for t in turns:
+                    if t.assembly_mode == "curator":
+                        curator_latencies.append(t.assembly_latency_ms)
+                        if t.curator_tool_log:
+                            total_curator_tool_calls += len(t.curator_tool_log)
     except Exception:
         pass
     avg_curator_latency_ms = (
