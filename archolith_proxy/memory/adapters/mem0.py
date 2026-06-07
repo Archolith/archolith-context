@@ -6,6 +6,8 @@ via the Mem0 REST API. Write-focused: no read path, no sync.
 
 from __future__ import annotations
 
+__all__ = ["Adapter"]
+
 from typing import TYPE_CHECKING
 
 import httpx
@@ -71,6 +73,12 @@ class Adapter(MemoryAdapterBase):
             healthcheck=True,
         )
 
+    async def close(self) -> None:
+        """Close the httpx client if open."""
+        client = getattr(self, "_client", None)
+        if client is not None and not client.is_closed:
+            await client.aclose()
+
     async def healthcheck(self) -> bool:
         try:
             client = self._get_client()
@@ -134,3 +142,4 @@ class Adapter(MemoryAdapterBase):
                 "tags": promotion.tags,
             },
         }
+

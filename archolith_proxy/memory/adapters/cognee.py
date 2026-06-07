@@ -9,6 +9,8 @@ This adapter promotes facts through Cognee's REST API (self-hosted or cloud).
 
 from __future__ import annotations
 
+__all__ = ["Adapter"]
+
 import time
 from typing import TYPE_CHECKING
 
@@ -77,6 +79,12 @@ class Adapter(MemoryAdapterBase):
             delete_promoted=True,  # Cognee has `forget`
             healthcheck=True,
         )
+
+    async def close(self) -> None:
+        """Close the httpx client if open."""
+        client = getattr(self, "_client", None)
+        if client is not None and not client.is_closed:
+            await client.aclose()
 
     async def healthcheck(self) -> bool:
         try:
@@ -187,3 +195,4 @@ class Adapter(MemoryAdapterBase):
                 "dedupe_key": promotion.dedupe_key,
             },
         }
+

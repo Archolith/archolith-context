@@ -11,6 +11,8 @@ making them immediately visible in Obsidian or any markdown editor.
 
 from __future__ import annotations
 
+__all__ = ["Adapter"]
+
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -92,6 +94,12 @@ class Adapter(MemoryAdapterBase):
             delete_promoted=False,
             healthcheck=True,
         )
+
+    async def close(self) -> None:
+        """Close the httpx client if open (API mode only)."""
+        client = getattr(self, "_client", None)
+        if client is not None and not client.is_closed:
+            await client.aclose()
 
     async def healthcheck(self) -> bool:
         if self._mode == "filesystem":
@@ -265,3 +273,4 @@ class Adapter(MemoryAdapterBase):
                 outcome=PromotionOutcome.FAILED,
                 error_message=f"HTTP {resp.status_code}: {resp.text[:500]}",
             )
+

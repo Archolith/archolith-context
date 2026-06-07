@@ -7,6 +7,8 @@ be added when a concrete integration need exists, not speculatively.
 
 from __future__ import annotations
 
+__all__ = ["MemoryAdapterBase"]
+
 import abc
 from typing import TYPE_CHECKING
 

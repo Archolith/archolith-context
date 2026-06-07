@@ -9,6 +9,8 @@ This adapter promotes facts as observations into the claude-mem worker.
 
 from __future__ import annotations
 
+__all__ = ["Adapter"]
+
 import time
 from typing import TYPE_CHECKING
 
@@ -72,6 +74,12 @@ class Adapter(MemoryAdapterBase):
             delete_promoted=False,
             healthcheck=True,
         )
+
+    async def close(self) -> None:
+        """Close the httpx client if open."""
+        client = getattr(self, "_client", None)
+        if client is not None and not client.is_closed:
+            await client.aclose()
 
     async def healthcheck(self) -> bool:
         try:
@@ -143,3 +151,4 @@ class Adapter(MemoryAdapterBase):
                 "dedupe_key": promotion.dedupe_key,
             },
         }
+
