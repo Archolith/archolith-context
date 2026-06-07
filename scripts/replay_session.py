@@ -92,8 +92,8 @@ def main() -> None:
         turns = det.get("turns", [])
         modes = collections.Counter(t.get("assembly_mode") for t in turns)
         skips = collections.Counter((t.get("curator_skip_reason") or "(none)") for t in turns)
-        rtk_avail = sum(1 for t in turns if t.get("rtk_available"))
-        rtk_saved = sum(t.get("rtk_chars_saved", 0) for t in turns)
+        filter_avail = sum(1 for t in turns if t.get("filter_available"))
+        filter_saved = sum(t.get("filter_chars_saved", 0) for t in turns)
         recalls = sum(1 for t in turns if t.get("recall_used"))
         solo = sum(1 for t in turns if t.get("assembly_mode") == "agent_solo")
 
@@ -102,7 +102,7 @@ def main() -> None:
     print("=" * 60)
     print("assembly modes:", dict(modes))
     print("curator skip reasons:", dict(skips))
-    print(f"rtk_available turns: {rtk_avail}/{len(turns)}  | rtk_chars_saved total: {rtk_saved:,}")
+    print(f"filter_available turns: {filter_avail}/{len(turns)}  | filter_chars_saved total: {filter_saved:,}")
     print(f"agent_solo turns: {solo}  | recall_used turns: {recalls}/{len(turns)}")
 
 

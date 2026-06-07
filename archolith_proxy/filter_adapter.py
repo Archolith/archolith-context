@@ -1,4 +1,4 @@
-"""Thin outbound RTK adapter for proxy-side tool-result filtering and shrinking."""
+"""Thin outbound filter adapter for proxy-side tool-result filtering and shrinking."""
 
 from __future__ import annotations
 
@@ -77,14 +77,14 @@ def _load_shrink_functions() -> tuple[Callable[..., Any] | None, Callable[..., A
 def is_available() -> bool:
     """Return True if archolith_filter is installed and the filter function is callable.
 
-    Used by the trace builder to distinguish 'RTK enabled but package missing
-    (fail-open)' from 'RTK enabled and active'.
+    Used by the trace builder to distinguish 'filter enabled but package missing
+    (fail-open)' from 'filter enabled and active'.
     """
     return _load_filter_output() is not None
 
 
 def filter_tool_messages(messages: list[dict[str, Any]], enabled: bool) -> list[dict[str, Any]]:
-    """Apply RTK Layer 1 filtering to outbound tool-role messages."""
+    """Apply Layer 1 filtering to outbound tool-role messages."""
     if not enabled:
         return messages
 
@@ -119,10 +119,10 @@ def filter_tool_messages(messages: list[dict[str, Any]], enabled: bool) -> list[
 
 
 def filter_single_tool_result(content: str, tool_name: str = "unknown") -> str:
-    """Apply RTK Layer 1 filter to a single tool result string.
+    """Apply Layer 1 filter to a single tool result string.
 
     Used by the extraction pipeline to strip noise before the extractor LLM
-    processes tool results.  Fail-open: returns content unchanged if RTK is
+    processes tool results.  Fail-open: returns content unchanged if filter is
     unavailable or the filter raises.
     """
     filter_output = _load_filter_output()
@@ -137,9 +137,9 @@ def filter_single_tool_result(content: str, tool_name: str = "unknown") -> str:
 
 
 def _unwrap_shrink_result(result: Any) -> list[dict[str, Any]]:
-    """Normalise RTK shrink return values to list[dict].
+    """Normalise filter shrink return values to list[dict].
 
-    RTK shrink functions return ShrinkTokensResult / ShrinkCharsResult dataclasses
+    filter shrink functions return ShrinkTokensResult / ShrinkCharsResult dataclasses
     with a ``.messages`` field.  Earlier versions returned list[ChatMessage] directly.
     This helper handles both cases and converts ChatMessage → dict when needed.
     """
@@ -163,7 +163,7 @@ def shrink_tool_call_args(
 
     Collapses large Write/Edit args (file content, patch bodies) that bloat
     history once the file is already in the content cache.
-    Fail-open: returns messages unchanged if RTK unavailable or shrink raises.
+    Fail-open: returns messages unchanged if filter unavailable or shrink raises.
     """
     if not enabled:
         return messages
@@ -186,7 +186,7 @@ def shrink_tail_tool_results(
 
     Prevents large file reads and command outputs from dominating the context
     window when retained in the tail for structural integrity.
-    Fail-open: returns messages unchanged if RTK unavailable or shrink raises.
+    Fail-open: returns messages unchanged if filter unavailable or shrink raises.
     """
     _, shrink_results = _load_shrink_functions()
     if shrink_results is None:
@@ -202,7 +202,7 @@ def shrink_tail_tool_results(
 def filter_request_body(body: dict[str, Any], enabled: bool) -> dict[str, Any]:
     """Return a request body with outbound tool messages filtered and args shrunk.
 
-    Applies two RTK passes when enabled:
+    Applies two filter passes when enabled:
     1. Layer 1 filter on tool-role messages (noise/boilerplate removal)
     2. Shrink oversized tool_call arguments in assistant messages
     """

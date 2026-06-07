@@ -30,7 +30,7 @@ TUNABLE_FIELDS = {
     "compaction_enabled",
     "query_rewrite_enabled",
     "session_recall_tool_enabled",
-    "rtk_enabled",
+    "filter_enabled",
     "pricing_input_per_million",
     "pricing_input_cached_per_million",
     "pricing_output_per_million",

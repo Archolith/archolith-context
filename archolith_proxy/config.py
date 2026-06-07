@@ -14,11 +14,10 @@ paths begin. The module-level lock guards the first-access race condition.
 from __future__ import annotations
 
 import json
-import os
 import threading
 from pathlib import Path
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Module-level singleton
@@ -110,13 +109,9 @@ class Settings(BaseSettings):
     per_tool_extraction_enabled: bool = False
     extractor_llm_concurrency: int = 3  # max concurrent LLM-backed extractor calls (turn-level excluded)
 
-    # Output filtering for outbound tool-role messages (via archolith_filter)
-    # Accepts FILTER_ENABLED or RTK_ENABLED (deprecated alias)
-    filter_enabled: bool = Field(
-        default=False,
-        # FILTER_ENABLED is canonical; RTK_ENABLED is accepted as a deprecated alias.
-        validation_alias=AliasChoices("FILTER_ENABLED", "RTK_ENABLED"),
-    )
+    # Output filtering for outbound tool-role messages (via archolith_filter).
+    # Reads the FILTER_ENABLED env var.
+    filter_enabled: bool = False
 
     # Retry / resilience
     upstream_max_retries: int = 3
@@ -287,17 +282,6 @@ class Settings(BaseSettings):
         if not self.upstream_api_key:
             missing.append("UPSTREAM_API_KEY")
         return missing
-
-    @property
-    def rtk_enabled(self) -> bool:
-        """Deprecated: use filter_enabled instead."""
-        import warnings
-        warnings.warn(
-            "settings.rtk_enabled is deprecated; use settings.filter_enabled instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.filter_enabled
 
 
 def get_settings() -> Settings:

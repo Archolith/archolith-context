@@ -299,28 +299,6 @@ class TestTraceBuilder:
         trace = builder.build()
         assert trace.fallback_reason == "Neo4j connection failed"
 
-    def test_back_compat_rtk_field_aliases(self):
-        """Old persisted traces with rtk_* keys deserialize to filter_* fields."""
-        # Simulate an old trace record with rtk_* keys
-        old_data = {
-            "session_id": "s1",
-            "turn_number": 1,
-            "rtk_available": True,
-            "rtk_chars_saved": 250,
-            "rtk_chars_before": 5000,
-            "rtk_chars_after": 4750,
-            "rtk_latency_ms": 123.4,
-            "rtk_strategy_savings": {"request_filter": 250},
-        }
-        trace = TurnTrace.model_validate(old_data)
-        # Verify that rtk_* keys are mapped to filter_* fields
-        assert trace.filter_available is True
-        assert trace.filter_chars_saved == 250
-        assert trace.filter_chars_before == 5000
-        assert trace.filter_chars_after == 4750
-        assert trace.filter_latency_ms == 123.4
-        assert trace.filter_strategy_savings == {"request_filter": 250}
-
     def test_incremental_build(self):
         """Builder can be built multiple times as data accumulates."""
         builder = TraceBuilder()

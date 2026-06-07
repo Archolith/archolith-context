@@ -248,7 +248,7 @@ def rewrite_messages(
 
     # Append the coherence tail — shrink oversized tool results first so large
     # file reads / command outputs don't dominate the context window even when
-    # kept for structural integrity.  Fail-open: if RTK absent, tail is intact.
+    # kept for structural integrity.  Fail-open: if filter absent, tail is intact.
     tail_validated = _validate_tail(tail)
     tail_shrunk = shrink_tail_tool_results(tail_validated)
     result.extend(tail_shrunk)

@@ -26,7 +26,7 @@ class ToolCallRecord:
     tool_call_id: str
     tool_name: str
     args: dict
-    result: str  # content after tool result filtering (RTK Layer 1)
+    result: str  # content after tool result filtering (Layer 1)
 
 
 @dataclass

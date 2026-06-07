@@ -176,8 +176,8 @@ def _collect_tool_call_records(messages: list[dict]) -> list:
     that has tool_calls. Scoped to this turn to avoid re-processing tool calls
     from previous turns (which have already been extracted and stored).
 
-    Applies RTK Layer 1 filter — the messages array passed to extraction is the
-    ORIGINAL (pre-rewrite) array; the outbound RTK filter runs on a copy in
+    Applies Layer 1 filter — the messages array passed to extraction is the
+    ORIGINAL (pre-rewrite) array; the outbound filter filter runs on a copy in
     filter_request_body() and does not mutate the source array.
     """
     from archolith_proxy.extractor.base import ToolCallRecord
@@ -211,7 +211,7 @@ def _collect_tool_call_records(messages: list[dict]) -> list:
             continue
         tool_name, args = current_turn_map[tc_id]
         content = _normalize_message_content(msg.get("content", ""))
-        # Apply RTK Layer 1 filter — same as _collect_recent_tool_results()
+        # Apply Layer 1 filter — same as _collect_recent_tool_results()
         content = filter_single_tool_result(content, tool_name=tool_name)
         records.append(ToolCallRecord(
             tool_call_id=tc_id,
@@ -321,7 +321,7 @@ def _collect_recent_tool_results(messages: list[dict], max_chars: int = 4000) ->
             continue
 
         tool_name = msg.get("name", "unknown_tool")
-        # Apply RTK Layer 1 filter before packing into the extraction budget —
+        # Apply Layer 1 filter before packing into the extraction budget —
         # strips noise/boilerplate so the extractor LLM sees signal, not lint.
         content = filter_single_tool_result(content, tool_name=tool_name)
         entry = f"Tool [{tool_name}]:\n{content}"

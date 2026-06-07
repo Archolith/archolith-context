@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -155,6 +156,19 @@ async def lifespan(app: FastAPI):
     proxy_missing = settings.check_required_for_proxy()
     if proxy_missing:
         logger.warning("missing_required_env_vars", vars=proxy_missing, note="proxy calls will fail")
+
+    # Loud startup check: the RTK_ENABLED env var was renamed to FILTER_ENABLED and is
+    # no longer read. If a stale environment still sets RTK_ENABLED without FILTER_ENABLED,
+    # filtering would silently turn off. Refuse to start rather than fail silently.
+    if os.environ.get("RTK_ENABLED") is not None and os.environ.get("FILTER_ENABLED") is None:
+        logger.error(
+            "rtk_enabled_env_removed",
+            note="RTK_ENABLED is no longer read; it was renamed to FILTER_ENABLED.",
+        )
+        raise RuntimeError(
+            "RTK_ENABLED is set but is no longer read (renamed to FILTER_ENABLED). "
+            "Filtering would silently be disabled. Set FILTER_ENABLED instead and unset RTK_ENABLED."
+        )
 
     # Loud startup check: FILTER_ENABLED but the package missing from THIS env means
     # agent-solo compression and filtering silently no-op (the failure that
