@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-07 — Deep RTK → filter rename (DTO + trace builder + dashboard)
+
+Complete nomenclature unification across trace DTO, builder, logs, and dashboard:
+- **DTO field rename with back-compat:** `TurnTrace` fields `rtk_*` → `filter_*` (available, chars_saved, chars_before, chars_after, strategy_savings, latency_ms). Pydantic v2 `AliasChoices` + `populate_by_name=True` allow old persisted traces (.jsonl with `rtk_*` keys) to deserialize correctly; output normalizes to `filter_*` keys.
+- **Trace builder methods:** `set_rtk_latency()` → `set_filter_latency()`, `set_rtk_stats()` → `set_filter_stats()`. Internal dict keys updated to match new field names. Updated callers in `openai/chat.py` and refactored `proxy/agent_solo.py` (variable rename: `rtk_stats` → `filter_stats`).
+- **Logging keys:** filter_adapter.py event names: `rtk_dependency_missing` → `filter_dependency_missing`, `rtk_filter_failed` → `filter_failed`, `rtk_filter_single_failed` → `filter_single_failed`, `rtk_shrink_args_failed` → `filter_shrink_args_failed`, `rtk_shrink_tail_failed` → `filter_shrink_tail_failed`.
+- **Dashboard JS:** Variable names and display labels updated (rtkBadge → filterBadge, rtkSavingsStr → filterSavingsStr, rtkStrategyStr → filterStrategyStr). Added fallback chains (`t.filter_available ?? t.rtk_available`) for safe transition.
+- **Tests:** Renamed `test_rtk_filtering.py` → `test_filter_adapter.py`; updated assertions and method calls throughout (set_filter_stats, filter_available, filter_chars_*). Added back-compat regression test `test_back_compat_rtk_field_aliases()`.
+- **.env.example:** Canonical `FILTER_ENABLED=false`, deprecated `RTK_ENABLED=false` aliased variant documented.
+
 ## 2026-06-07 — Chunk 7: Cross-cutting hygiene and version metadata
 
 Port and version standardization, docker/pyproject hardening, optional javalang:

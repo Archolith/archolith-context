@@ -160,21 +160,21 @@ async def lifespan(app: FastAPI):
     # agent-solo compression and filtering silently no-op (the failure that
     # made the proxy look 100% passthrough on real sessions). Surface it now.
     if settings.filter_enabled:
-        from archolith_proxy.filter_adapter import is_available as _rtk_is_available
-        if _rtk_is_available():
-            logger.info("rtk_available", note="archolith_filter loaded")
+        from archolith_proxy.filter_adapter import is_available as _filter_is_available
+        if _filter_is_available():
+            logger.info("filter_available", note="archolith_filter loaded")
         else:
             logger.error(
-                "rtk_enabled_but_unavailable",
-                note="RTK_ENABLED=true but archolith_filter is not importable; refusing to start.",
+                "filter_enabled_but_unavailable",
+                note="FILTER_ENABLED=true but archolith_filter is not importable; refusing to start.",
             )
             # Fail fast: a proxy that silently does no curation is worse than one
-            # that won't boot. If RTK is explicitly enabled it must be importable.
+            # that won't boot. If filter is explicitly enabled it must be importable.
             raise RuntimeError(
-                "RTK_ENABLED=true but archolith_filter is not importable in this environment. "
-                "Agent-solo compression and RTK filtering would silently do nothing. "
+                "FILTER_ENABLED=true but archolith_filter is not importable in this environment. "
+                "Agent-solo compression and filter would silently do nothing. "
                 "Install it into the active venv (pip install -e ../archolith-filter) "
-                "or set RTK_ENABLED=false."
+                "or set FILTER_ENABLED=false."
             )
 
     graph_missing = settings.check_required_for_graph()

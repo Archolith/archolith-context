@@ -427,15 +427,15 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
     )
 
     # ── Filtering ──
-    from archolith_proxy.filter_adapter import filter_request_body, is_available as rtk_is_available
-    _rtk_chars_before = sum(len(json.dumps(m)) for m in body.get("messages", []))
+    from archolith_proxy.filter_adapter import filter_request_body, is_available as filter_is_available
+    _filter_chars_before = sum(len(json.dumps(m)) for m in body.get("messages", []))
     body = filter_request_body(body, enabled=settings.filter_enabled)
-    _rtk_chars_after = sum(len(json.dumps(m)) for m in body.get("messages", []))
-    trace_builder.set_rtk_stats(
-        available=rtk_is_available(),
-        chars_saved=max(0, _rtk_chars_before - _rtk_chars_after),
-        chars_before=_rtk_chars_before,
-        chars_after=_rtk_chars_after,
+    _filter_chars_after = sum(len(json.dumps(m)) for m in body.get("messages", []))
+    trace_builder.set_filter_stats(
+        available=filter_is_available(),
+        chars_saved=max(0, _filter_chars_before - _filter_chars_after),
+        chars_before=_filter_chars_before,
+        chars_after=_filter_chars_after,
     )
 
     # ── Proxy-forced recall for key trigger patterns ──
@@ -462,7 +462,7 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                     _outbound_chars_sent = sum(len(json.dumps(m)) for m in body.get("messages", []))
                     trace_builder.set_outbound_context_stats(
                         outbound_chars_sent=_outbound_chars_sent,
-                        proxy_recall_chars_added=max(0, _outbound_chars_sent - _rtk_chars_after),
+                        proxy_recall_chars_added=max(0, _outbound_chars_sent - _filter_chars_after),
                     )
                     # Rough fact count: count lines that look like fact entries
                     _recall_fact_count = sum(1 for ln in _recall_text.splitlines() if ln.strip().startswith("- "))

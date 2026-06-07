@@ -752,8 +752,8 @@ class TestCollectToolCallRecords:
         assert records[1].tool_name == "Grep"
         assert records[0].result == "file content here"
 
-    def test_rtk_filter_applied(self):
-        """Verify RTK filter is applied to each record's result."""
+    def test_filter_adapter_applied(self):
+        """Verify filter adapter is applied to each record's result."""
         from archolith_proxy.openai.chat import _collect_tool_call_records
 
         with patch("archolith_proxy.openai.helpers.filter_single_tool_result", side_effect=lambda content, tool_name="": f"filtered_{content}"):

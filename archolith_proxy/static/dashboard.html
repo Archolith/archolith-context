@@ -352,17 +352,17 @@ function buildTurnCard(t) {
   const curatorFailStr = t.curator_failure_reason ? `<div style="color:var(--red);font-size:12px;margin-top:4px;">curator failed: <span class="mono">${escapeHtml(t.curator_failure_reason)}</span></div>` : '';
   const curatorSkipStr = (t.curator_skip_reason && t.assembly_mode === 'passthrough' && t.is_user_turn)
     ? `<div style="color:var(--text-dim);font-size:12px;margin-top:4px;">curator skip: <span class="mono" style="color:var(--yellow)">${escapeHtml(t.curator_skip_reason)}</span></div>` : '';
-  const rtkBadge = t.rtk_available === true
-    ? `<span class="tag" style="background:rgba(35,134,54,0.15);color:#56d364;font-size:10px;padding:1px 5px;">RTK✓</span>`
-    : t.rtk_available === false
-      ? `<span class="tag" style="background:rgba(248,81,73,0.15);color:#f85149;font-size:10px;padding:1px 5px;" title="archolith_filter not installed — filter fail-open">RTK✗</span>`
+  const filterBadge = (t.filter_available ?? t.rtk_available) === true
+    ? `<span class="tag" style="background:rgba(35,134,54,0.15);color:#56d364;font-size:10px;padding:1px 5px;">Filter✓</span>`
+    : (t.filter_available ?? t.rtk_available) === false
+      ? `<span class="tag" style="background:rgba(248,81,73,0.15);color:#f85149;font-size:10px;padding:1px 5px;" title="archolith_filter not installed — filter fail-open">Filter✗</span>`
       : '';
-  const rtkSavingsStr = t.rtk_chars_saved > 0
-    ? ` · <span style="color:var(--text-dim)">rtk -${t.rtk_chars_saved.toLocaleString()}c</span>` : '';
-  const rtkStrategyEntries = Object.entries(t.rtk_strategy_savings || {}).filter(([, v]) => Number(v) > 0);
-  const rtkStrategyStr = rtkStrategyEntries.length > 0
-    ? `<div style="font-size:12px;color:var(--text-dim);margin-top:4px;">rtk strategies: ${
-        rtkStrategyEntries.map(([k, v]) => `<span class="mono">${escapeHtml(k)}</span> -${Number(v).toLocaleString()}c`).join(' · ')
+  const filterSavingsStr = (t.filter_chars_saved ?? t.rtk_chars_saved ?? 0) > 0
+    ? ` · <span style="color:var(--text-dim)">filter -${(t.filter_chars_saved ?? t.rtk_chars_saved ?? 0).toLocaleString()}c</span>` : '';
+  const filterStrategyEntries = Object.entries(t.filter_strategy_savings ?? t.rtk_strategy_savings ?? {}).filter(([, v]) => Number(v) > 0);
+  const filterStrategyStr = filterStrategyEntries.length > 0
+    ? `<div style="font-size:12px;color:var(--text-dim);margin-top:4px;">filter strategies: ${
+        filterStrategyEntries.map(([k, v]) => `<span class="mono">${escapeHtml(k)}</span> -${Number(v).toLocaleString()}c`).join(' · ')
       }</div>`
     : '';
   const outboundContextStr = (t.outbound_chars_sent || t.proxy_recall_chars_added)
@@ -419,7 +419,7 @@ function buildTurnCard(t) {
       : '<span style="font-size:10px;opacity:0.7;margin-left:4px;">[model_invoked]</span>';
     factsHtml += `<div style="font-size:12px;color:var(--purple);margin-top:4px;">recall${recallTriggerStr}: "${escapeHtml(t.recall_question)}" → ${t.recall_facts_returned} facts</div>`;
   }
-  factsHtml += rtkStrategyStr;
+  factsHtml += filterStrategyStr;
   factsHtml += outboundContextStr;
 
   return `
@@ -427,7 +427,7 @@ function buildTurnCard(t) {
       <div class="turn-header">
         <span class="turn-num">t${t.turn_number}</span>
         <span style="font-size:11px;color:var(--text-dim);margin-right:4px;">${t.is_user_turn ? '👤' : '🤖'}</span>
-        <span class="turn-mode">${modeTag(t.assembly_mode)}${reasonStr}${rtkBadge}</span>
+        <span class="turn-mode">${modeTag(t.assembly_mode)}${reasonStr}${filterBadge}</span>
         <span style="font-family:var(--mono);font-size:12px;color:var(--text-dim);">${fmtTokens(t.input_tokens)} ctx${t.savings_tokens > 0 ? ` → ${fmtTokens(t.rewritten_tokens || t.input_tokens)} sent` : ''}</span>
         <span class="turn-tokens">${t.savings_tokens > 0 ? `<span class="${savingsCls}" style="color:var(--${savingsCls})">-${fmtTokens(t.savings_tokens)} (${pct(t.savings_ratio)})</span>` : ''}</span>
         <span class="turn-latency">${latencyBar(t.assembly_latency_ms + t.upstream_latency_ms)}</span>
@@ -448,7 +448,7 @@ function buildTurnCard(t) {
           <span style="font-size:12px;color:var(--text-dim);">extraction ${latencyBar(t.extraction_latency_ms, 500)}</span>
         </div>
         <div style="margin-bottom:12px;font-size:12px;color:var(--text-dim);">
-          in=${fmtTokens(t.input_tokens)} → rew=${fmtTokens(t.rewritten_tokens)} · saved=${fmtTokens(t.savings_tokens)} (${pct(t.savings_ratio)}) · output=${fmtTokens(t.output_tokens) || '?'}${rtkSavingsStr}${t.cache_hit_tokens ? ` · <span style="color:var(--green)">cache ${fmtTokens(t.cache_hit_tokens)}/${fmtTokens(t.cache_hit_tokens+t.cache_miss_tokens)} (${pct(t.cache_hit_tokens/(t.cache_hit_tokens+t.cache_miss_tokens))})</span>` : ''}
+          in=${fmtTokens(t.input_tokens)} → rew=${fmtTokens(t.rewritten_tokens)} · saved=${fmtTokens(t.savings_tokens)} (${pct(t.savings_ratio)}) · output=${fmtTokens(t.output_tokens) || '?'}${filterSavingsStr}${t.cache_hit_tokens ? ` · <span style="color:var(--green)">cache ${fmtTokens(t.cache_hit_tokens)}/${fmtTokens(t.cache_hit_tokens+t.cache_miss_tokens)} (${pct(t.cache_hit_tokens/(t.cache_hit_tokens+t.cache_miss_tokens))})</span>` : ''}
         </div>
         ${factsHtml}
         ${t.curator_tool_log && t.curator_tool_log.length > 0 ? `

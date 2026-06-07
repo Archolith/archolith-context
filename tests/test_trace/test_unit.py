@@ -255,9 +255,9 @@ class TestTraceBuilder:
         trace = builder.build()
         assert trace.recall_trigger == "proxy_forced:user_phrase"
 
-    def test_set_rtk_and_outbound_context_stats(self):
+    def test_set_filter_and_outbound_context_stats(self):
         builder = TraceBuilder()
-        builder.set_rtk_stats(
+        builder.set_filter_stats(
             available=True,
             chars_saved=120,
             chars_before=1000,
@@ -265,13 +265,13 @@ class TestTraceBuilder:
         )
         builder.set_outbound_context_stats(outbound_chars_sent=930, proxy_recall_chars_added=50)
         trace = builder.build()
-        assert trace.rtk_available is True
-        assert trace.rtk_chars_saved == 120
-        assert trace.rtk_chars_before == 1000
-        assert trace.rtk_chars_after == 880
+        assert trace.filter_available is True
+        assert trace.filter_chars_saved == 120
+        assert trace.filter_chars_before == 1000
+        assert trace.filter_chars_after == 880
         assert trace.outbound_chars_sent == 930
         assert trace.proxy_recall_chars_added == 50
-        assert trace.rtk_strategy_savings == {"request_filter": 120}
+        assert trace.filter_strategy_savings == {"request_filter": 120}
 
     def test_set_solo_stats_adds_strategy_breakdown(self):
         builder = TraceBuilder()
@@ -287,7 +287,7 @@ class TestTraceBuilder:
         assert trace.solo_chars_saved_compact == 400
         assert trace.solo_chars_saved_dedup == 250
         assert trace.solo_chars_saved_curator == 100
-        assert trace.rtk_strategy_savings == {
+        assert trace.filter_strategy_savings == {
             "curator_cache": 100,
             "compact": 400,
             "dedup": 250,
@@ -298,6 +298,28 @@ class TestTraceBuilder:
         builder.set_fallback_reason("Neo4j connection failed")
         trace = builder.build()
         assert trace.fallback_reason == "Neo4j connection failed"
+
+    def test_back_compat_rtk_field_aliases(self):
+        """Old persisted traces with rtk_* keys deserialize to filter_* fields."""
+        # Simulate an old trace record with rtk_* keys
+        old_data = {
+            "session_id": "s1",
+            "turn_number": 1,
+            "rtk_available": True,
+            "rtk_chars_saved": 250,
+            "rtk_chars_before": 5000,
+            "rtk_chars_after": 4750,
+            "rtk_latency_ms": 123.4,
+            "rtk_strategy_savings": {"request_filter": 250},
+        }
+        trace = TurnTrace.model_validate(old_data)
+        # Verify that rtk_* keys are mapped to filter_* fields
+        assert trace.filter_available is True
+        assert trace.filter_chars_saved == 250
+        assert trace.filter_chars_before == 5000
+        assert trace.filter_chars_after == 4750
+        assert trace.filter_latency_ms == 123.4
+        assert trace.filter_strategy_savings == {"request_filter": 250}
 
     def test_incremental_build(self):
         """Builder can be built multiple times as data accumulates."""

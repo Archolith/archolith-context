@@ -38,8 +38,8 @@ def _load_filter_output() -> Callable[..., Any] | None:
             _filter_output_fn = loaded
         except ImportError:
             logger.warning(
-                "rtk_dependency_missing",
-                message="archolith_filter is not installed; RTK filtering disabled",
+                "filter_dependency_missing",
+                message="archolith_filter is not installed; filter disabled",
             )
             _filter_output_fn = None
     return _filter_output_fn if callable(_filter_output_fn) else None
@@ -107,7 +107,7 @@ def filter_tool_messages(messages: list[dict[str, Any]], enabled: bool) -> list[
         try:
             result = filter_output(content, tool=tool_name)
         except Exception as exc:
-            logger.warning("rtk_filter_failed", tool=tool_name, error=str(exc))
+            logger.warning("filter_failed", tool=tool_name, error=str(exc))
             filtered_messages.append(message)
             continue
 
@@ -132,7 +132,7 @@ def filter_single_tool_result(content: str, tool_name: str = "unknown") -> str:
         result = filter_output(content, tool=tool_name)
         return result.output
     except Exception as exc:
-        logger.debug("rtk_filter_single_failed", tool=tool_name, error=str(exc))
+        logger.debug("filter_single_failed", tool=tool_name, error=str(exc))
         return content
 
 
@@ -174,7 +174,7 @@ def shrink_tool_call_args(
         result = shrink_args(messages, max_tokens=max_tokens)
         return _unwrap_shrink_result(result)
     except Exception as exc:
-        logger.debug("rtk_shrink_args_failed", error=str(exc))
+        logger.debug("filter_shrink_args_failed", error=str(exc))
         return messages
 
 
@@ -195,7 +195,7 @@ def shrink_tail_tool_results(
         result = shrink_results(messages, max_tokens=max_tokens_per_result)
         return _unwrap_shrink_result(result)
     except Exception as exc:
-        logger.debug("rtk_shrink_tail_failed", error=str(exc))
+        logger.debug("filter_shrink_tail_failed", error=str(exc))
         return messages
 
 

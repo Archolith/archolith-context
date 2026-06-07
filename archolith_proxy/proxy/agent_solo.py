@@ -235,7 +235,7 @@ def compress_agent_solo(
     coherence_tail_size: int = 10,
     max_tail_messages: int = 20,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Apply enabled agent-solo compression strategies via RTK.
+    """Apply enabled agent-solo compression strategies via archolith-filter.
 
     First applies curator prefix cache (if available), then runs
     mechanical compression strategies on top.
@@ -279,7 +279,7 @@ def compress_agent_solo(
                 from archolith_filter.agent_solo import compress_agent_solo_turn
             except ImportError:
                 if curator_chars_saved == 0:
-                    stats["skipped_reason"] = "rtk_unavailable"
+                    stats["skipped_reason"] = "filter_unavailable"
                 return messages, stats
 
             tracker = _get_tracker(session_id) if dedup_enabled else None
@@ -295,17 +295,17 @@ def compress_agent_solo(
                 tail_shrink_tokens=shrink_max_tokens,
             )
 
-            rtk_stats = result.stats
+            filter_stats = result.stats
             messages = result.messages
 
-            # Merge RTK stats
-            stats["strategies_applied"].extend(rtk_stats.strategies_applied)
-            stats["chars_saved_shrink"] = rtk_stats.chars_saved_shrink
-            stats["chars_saved_dedup"] = rtk_stats.chars_saved_dedup
-            stats["chars_saved_middle"] = rtk_stats.chars_saved_filter
-            stats["chars_saved_compact"] = rtk_stats.chars_saved_compact
-            stats["total_chars_saved"] += rtk_stats.total_chars_saved
-            if rtk_stats.skipped_reason and not stats["strategies_applied"]:
-                stats["skipped_reason"] = rtk_stats.skipped_reason
+            # Merge filter stats
+            stats["strategies_applied"].extend(filter_stats.strategies_applied)
+            stats["chars_saved_shrink"] = filter_stats.chars_saved_shrink
+            stats["chars_saved_dedup"] = filter_stats.chars_saved_dedup
+            stats["chars_saved_middle"] = filter_stats.chars_saved_filter
+            stats["chars_saved_compact"] = filter_stats.chars_saved_compact
+            stats["total_chars_saved"] += filter_stats.total_chars_saved
+            if filter_stats.skipped_reason and not stats["strategies_applied"]:
+                stats["skipped_reason"] = filter_stats.skipped_reason
 
     return messages, stats
