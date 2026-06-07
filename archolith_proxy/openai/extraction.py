@@ -144,7 +144,7 @@ async def _run_extraction(
             except Exception as e:
                 logger.warning("session_goal_update_failed", session_id=session_id, error=str(e))
 
-        if result is None:
+        if not result or not result.facts:
             record_metric("extraction_failures", 1)
             logger.warning("extraction_result_missing", session_id=session_id, turn=turn_number)
             if trace_builder:

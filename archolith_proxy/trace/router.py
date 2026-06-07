@@ -332,7 +332,7 @@ async def qa_extract(request: Request) -> dict:
         )
         extraction_latency_ms = (time.monotonic() - start) * 1000
 
-        if result is None:
+        if not result or not result.facts:
             return {
                 "status": "extraction_failed",
                 "extraction_latency_ms": round(extraction_latency_ms, 1),
