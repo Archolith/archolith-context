@@ -13,6 +13,8 @@ from archolith_proxy.config import get_settings
 
 logger = structlog.get_logger()
 
+__all__ = ["DefaultExtractor"]
+
 
 class DefaultExtractor(ToolExtractor):
     """Catch-all extractor for unknown or uncategorized tools.

@@ -6,6 +6,8 @@ import httpx
 
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord, ToolExtractor
 
+__all__ = ["WriteEditExtractor"]
+
 
 def _extract_path(args: dict) -> str:
     return (
@@ -22,7 +24,11 @@ class WriteEditExtractor(ToolExtractor):
     Emits a file_state fact and marks the file as modified.
     """
 
-    tool_names = ("Write", "Edit", "NotebookEdit")
+    tool_names = (
+        "Write", "Edit", "NotebookEdit",
+        # Aliases
+        "write_file", "edit_file", "notebook_edit",
+    )
 
     async def extract(
         self,

@@ -9,6 +9,8 @@ import httpx
 
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord, ToolExtractor
 
+__all__ = ["WebSearchExtractor"]
+
 _MAX_RESULTS = 5
 
 _TITLE_RE = re.compile(r"(?:Title|title):\s*(.+)")

@@ -17,6 +17,11 @@ from archolith_proxy.config import get_settings
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "MAX_BATCH_SIZE",
+    "compute_embeddings_batch",
+]
+
 # Maximum texts per embedding batch request (OpenAI limit is 2048)
 MAX_BATCH_SIZE = 100
 
@@ -63,12 +68,15 @@ async def compute_embeddings_batch(
             resp.raise_for_status()
             data = resp.json()
 
-            # Results come back in the same order as input
-            embeddings_map = {}
+            # Build explicit mapping from API response index to embedding.
+            # API returns items with "index" field that corresponds to position in the input batch.
+            embeddings_map: dict[int, list[float]] = {}
             for item in data.get("data", []):
-                idx = item.get("index", 0)
-                embeddings_map[idx] = item.get("embedding", [])
+                idx = item.get("index")
+                if idx is not None:
+                    embeddings_map[idx] = item.get("embedding", [])
 
+            # For each position in the batch, append the embedding (or None if missing)
             for j in range(len(batch)):
                 all_embeddings.append(embeddings_map.get(j))
 

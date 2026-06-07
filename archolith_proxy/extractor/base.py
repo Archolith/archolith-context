@@ -12,6 +12,12 @@ from dataclasses import dataclass, field
 
 import httpx
 
+__all__ = [
+    "ToolCallRecord",
+    "PartialExtractionResult",
+    "ToolExtractor",
+]
+
 
 @dataclass
 class ToolCallRecord:
@@ -20,7 +26,7 @@ class ToolCallRecord:
     tool_call_id: str
     tool_name: str
     args: dict
-    result: str  # content after RTK Layer 1 filter
+    result: str  # content after tool result filtering (RTK Layer 1)
 
 
 @dataclass
