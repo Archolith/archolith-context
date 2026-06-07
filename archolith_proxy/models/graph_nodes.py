@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -33,10 +33,12 @@ class FileStatus(str, Enum):
 
 class SessionNode(BaseModel):
     session_id: str
+    # fingerprint: optional session identity fingerprint; present for regular
+    # sessions, but can also persist for fallback sessions (agent-solo resumptions).
     fingerprint: str | None = None
     goal: str | None = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_active: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_active: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     ttl_hours: int = 24
     status: SessionStatus = SessionStatus.ACTIVE
     turn_number: int = 0
@@ -47,7 +49,7 @@ class FactNode(BaseModel):
     session_id: str
     content: str
     fact_type: FactType
-    valid_from: datetime = Field(default_factory=datetime.utcnow)
+    valid_from: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     valid_until: datetime | None = None
     confidence: float = 0.5
     source_turn: int = 0
