@@ -52,15 +52,29 @@ async def test_file_relevance_populated_from_score_tool():
     We verify that the PreFetchedFile.relevance field is populated with the reason
     (not a generic fallback).
     """
-    # Construct a tool_log with a score_file_relevance result
+    # PreFetchedFile entries are created from FETCH calls (get_file); the scored
+    # reason is then attached via the file_relevance map. So the log must contain
+    # both a fetch for each path AND a score_file_relevance result.
     tool_log = [
+        CuratorToolCall(
+            tool="get_file",
+            args={"path": "src/auth/handler.py"},
+            status="ok",
+            raw_result="def handler():\n    ...",
+        ),
+        CuratorToolCall(
+            tool="get_file",
+            args={"path": "src/db/models.py"},
+            status="ok",
+            raw_result="class Model:\n    ...",
+        ),
         CuratorToolCall(
             tool="score_file_relevance",
             args={"query": "auth handler"},
             status="ok",
             result_preview="File relevance for: auth handler\n\n3.0 | src/auth/handler.py | keyword 'auth' in path; keyword 'handler' in path\n2.0 | src/db/models.py | active at turn 5",
             raw_result="File relevance for: auth handler\n\nScore | Path | Reasons\n------|------|--------\n3.0 | src/auth/handler.py | keyword 'auth' in path; keyword 'handler' in path\n2.0 | src/db/models.py | active at turn 5",
-        )
+        ),
     ]
 
     # Create a minimal CuratorResult
@@ -198,45 +212,44 @@ async def test_invalid_json_in_tool_call_appends_error():
 # F2: SWAP_BACKGROUND_TASK IDENTITY TEST
 # ============================================================================
 
-def test_swap_background_task_preserves_new_task():
+@pytest.mark.asyncio
+async def test_swap_background_task_preserves_new_task():
     """Test that swap_background_task keeps the NEW task in _bg_tasks even if OLD task completes.
 
     When OLD task's done callback fires AFTER NEW task was registered,
     the callback must not pop the NEW task.
     """
-    # Clear state
     session_id = "test_session_bg"
     _bg_tasks.clear()
 
-    # Create task A
-    async def dummy_coro():
-        await asyncio.sleep(0.01)
+    # Long-lived coroutines so neither task self-completes during the test;
+    # task_a is cancelled by the swap, task_b stays pending until cleanup.
+    async def long_coro():
+        await asyncio.sleep(10)
 
-    task_a = asyncio.ensure_future(dummy_coro())
-
-    # Register task A
+    task_a = asyncio.create_task(long_coro())
     swap_background_task(session_id, task_a)
     assert _bg_tasks[session_id] is task_a
 
-    # Create and register task B (replaces A)
-    task_b = asyncio.ensure_future(dummy_coro())
+    # Registering task B cancels task A and stores B.
+    task_b = asyncio.create_task(long_coro())
     swap_background_task(session_id, task_b)
     assert _bg_tasks[session_id] is task_b
 
-    # Now simulate A completing — its callback should NOT pop B
-    # We'll manually complete A and process callbacks
-    task_a.cancel()
+    # Let task A's cancellation + done-callback run. The identity-checked
+    # callback must NOT pop B (the stored task is B, not A).
+    with pytest.raises(asyncio.CancelledError):
+        await task_a
+    await asyncio.sleep(0)  # flush done-callbacks
 
-    # Give the event loop a chance to run callbacks
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(asyncio.sleep(0.01))
-
-    # Verify B is still there
     assert session_id in _bg_tasks
     assert _bg_tasks[session_id] is task_b
 
     # Cleanup
     task_b.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task_b
+    _bg_tasks.clear()
 
 
 # ============================================================================
@@ -264,25 +277,23 @@ async def test_prefetch_file_rejects_outside_allowed_roots():
         blocked_file = blocked_dir / "test.txt"
         blocked_file.write_text("secret content")
 
-        # Mock get_settings to restrict to allowed_dir
-        with patch("archolith_proxy.curator.tools.get_settings") as mock_settings:
+        # prefetch_file imports get_settings from archolith_proxy.config inside
+        # the function, so patch it there (not on the tools module).
+        with patch("archolith_proxy.config.get_settings") as mock_settings:
             settings = MagicMock()
             settings.prefetch_allowed_roots = [str(allowed_dir)]
             settings.file_cache_max_file_bytes = 1_000_000
             mock_settings.return_value = settings
 
-            # Mock the backend
-            with patch("archolith_proxy.curator.tools.get_backend") as mock_backend:
-                mock_backend.return_value.list_cached_files = AsyncMock(return_value=[])
+            # Absolute path outside the allowed roots is rejected by the first
+            # allowlist check, before any backend call.
+            result = await prefetch_file(
+                session_id="test",
+                path=str(blocked_file),
+            )
 
-                # Attempt to prefetch the blocked file using absolute path
-                result = await prefetch_file(
-                    session_id="test",
-                    path=str(blocked_file),
-                )
-
-                # Should be blocked
-                assert "blocked" in result or "outside" in result
+            # Should be blocked
+            assert "blocked" in result or "outside" in result
 
 
 # ============================================================================
