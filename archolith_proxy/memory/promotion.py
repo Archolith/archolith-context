@@ -8,6 +8,8 @@ status for observability.
 
 from __future__ import annotations
 
+__all__ = ["PromotionService"]
+
 import time
 
 import structlog
@@ -192,14 +194,17 @@ class PromotionService:
         *,
         dry_run: bool = False,
     ) -> list[PromotionResult]:
-        """Promote a batch of facts. Routes to adapter's promote_batch if supported."""
+        """Promote a batch of facts. Routes to adapter's promote_batch if supported.
+
+        Records stats and audit for all outcomes: success, skipped, failed.
+        """
         if not promotions:
             return []
 
         adapter = self._resolve_adapter(engine_id)
         if adapter is None:
             # All skipped
-            return [
+            results = [
                 PromotionResult(
                     promotion_id=p.promotion_id,
                     engine_id=engine_id or "none",
@@ -208,9 +213,12 @@ class PromotionService:
                 )
                 for p in promotions
             ]
+            for r in results:
+                self._record(r)
+            return results
 
         if dry_run:
-            return [
+            results = [
                 PromotionResult(
                     promotion_id=p.promotion_id,
                     engine_id=adapter.config.id,
@@ -219,6 +227,9 @@ class PromotionService:
                 )
                 for p in promotions
             ]
+            for r in results:
+                self._record(r)
+            return results
 
         # Use adapter batch method
         records = [p.with_auto_dedupe() for p in promotions]
@@ -229,7 +240,7 @@ class PromotionService:
             return results
         except Exception as exc:
             logger.exception("batch_promotion_failed", engine_id=adapter.config.id)
-            return [
+            results = [
                 PromotionResult(
                     promotion_id=p.promotion_id,
                     engine_id=adapter.config.id,
@@ -238,6 +249,9 @@ class PromotionService:
                 )
                 for p in promotions
             ]
+            for r in results:
+                self._record(r)
+            return results
 
     # --- Observability ---
 

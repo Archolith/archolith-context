@@ -29,12 +29,13 @@ async def backend(tmp_db_path):
 
 
 @pytest.mark.asyncio
-async def test_protocol_compliance():
+async def test_protocol_compliance(tmp_db_path):
     """LadybugBackend satisfies the GraphBackend protocol."""
     from archolith_proxy.graph.ladybug_backend import LadybugBackend
     from archolith_proxy.graph.protocol import GraphBackend
 
-    assert isinstance(LadybugBackend, GraphBackend)
+    backend = LadybugBackend(db_path=tmp_db_path)
+    assert isinstance(backend, GraphBackend)
 
 
 @pytest.mark.asyncio
