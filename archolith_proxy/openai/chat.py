@@ -419,6 +419,11 @@ async def chat_completions(
     )
     gate_input_tokens = token_telemetry.breakdown.gate_input_tokens
     record_metric("total_input_tokens_structural", token_telemetry.breakdown.input_tokens_structural_est)
+    if token_telemetry.breakdown.input_tokens_client_reported is not None:
+        record_metric("total_input_tokens_client_reported", token_telemetry.breakdown.input_tokens_client_reported)
+    _gate_source = getattr(token_telemetry.breakdown.gate_source, "value", "")
+    if _gate_source:
+        record_metric(f"gate_decisions_{_gate_source}", 1)
     trace_builder.set_token_telemetry(token_telemetry.breakdown)
 
     user_turn_count = sum(1 for m in messages if m.get("role") == "user")
