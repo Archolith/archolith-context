@@ -358,7 +358,22 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
             assembly_reason = "agent_solo_compression"
 
     # ── Curator assembly (user turns) ──
-    if session_id and graph_ready and not session_over_budget and is_user_turn:
+    # Savings gate: skip the (expensive) curator assembly on short conversations
+    # where a rewrite can't save enough to justify the cost/risk. Configurable via
+    # assembly_min_input_tokens (tests set it to 0 to exercise assembly directly).
+    assembly_eligible = bool(
+        session_id and graph_ready and not session_over_budget and is_user_turn
+    )
+    if assembly_eligible and input_tokens < settings.assembly_min_input_tokens:
+        assembly_eligible = False
+        assembly_reason = "below_assembly_min_input_tokens"
+        logger.info(
+            "assembly_savings_gate_skip",
+            session_id=session_id,
+            input_tokens=input_tokens,
+            min_input_tokens=settings.assembly_min_input_tokens,
+        )
+    if assembly_eligible:
         t0 = time.monotonic()
         assembled = await curate_context(
             session_id=session_id, turn_number=turn_number,
