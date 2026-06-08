@@ -15,6 +15,9 @@ def _encode_overrides(overrides_json: str) -> str:
     as a MAP/STRUCT and stores a mangled repr (quotes stripped, true->True), so a
     raw JSON object can never round-trip. base64 makes the stored value an opaque
     ASCII string the driver cannot reinterpret. Symmetric with _decode_overrides.
+
+    Upstream bug: https://github.com/LadybugDB/ladybug/issues/580 — remove this
+    base64 layer once the binder stops content-sniffing str params.
     """
     if not overrides_json:
         return ""
