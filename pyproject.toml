@@ -58,6 +58,9 @@ packages = ["archolith_proxy"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["archolith_proxy"]
+markers = [
+    "real_config_overrides: opt out of config_overrides.json neutralization (tests the persistence mechanism)",
+]
 
 [tool.ruff]
 target-version = "py312"

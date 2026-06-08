@@ -11,17 +11,26 @@ from archolith_proxy.config import reset_settings
 
 
 @pytest.fixture(autouse=True)
-def _isolate_settings_from_dotenv(monkeypatch):
-    """Prevent pydantic-settings from reading the local .env file during tests.
+def _isolate_settings_from_dotenv(monkeypatch, request):
+    """Prevent developer/runtime config from leaking into the test suite.
 
-    Without this, Settings() picks up developer overrides (e.g. compaction_enabled=True)
-    which break tests that assert default values.
+    Two sources would otherwise flip settings out from under tests:
+    1. The local .env file (e.g. compaction_enabled=True).
+    2. config_overrides.json — runtime overrides persisted by PATCH /admin/config and
+       re-applied on top of env in get_settings(). A benchmark run that sets, say,
+       session_recall_tool_enabled=false silently disables recall for the whole suite.
+    Neutralize both so tests run against deterministic config.
+
+    Tests that exercise the override-persistence mechanism itself opt out of the
+    config_overrides neutralization with @pytest.mark.real_config_overrides.
     """
     reset_settings()
     monkeypatch.setattr(
         "archolith_proxy.config.Settings.model_config",
         {**__import__("archolith_proxy.config", fromlist=["Settings"]).Settings.model_config, "env_file": None},
     )
+    if request.node.get_closest_marker("real_config_overrides") is None:
+        monkeypatch.setattr("archolith_proxy.config._read_overrides", lambda: {})
     yield
     reset_settings()
 

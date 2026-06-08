@@ -126,6 +126,7 @@ class TestAdminConfigPersistence:
         reset_settings()
 
     @pytest.mark.asyncio
+    @pytest.mark.real_config_overrides
     async def test_patch_persists_override_and_reports_delta(self, client, tmp_path: Path):
         override_file = tmp_path / "config_overrides.json"
 
