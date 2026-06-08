@@ -6,7 +6,7 @@ import os
 import signal
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 
 from archolith_proxy.admin import require_admin_token
 from archolith_proxy.config import _write_overrides, get_settings, get_settings_delta
@@ -66,15 +66,23 @@ async def get_config(admin: None = Depends(require_admin_token)) -> dict:
 @router.patch("/admin/config")
 @router.post("/admin/config")
 async def update_config(
-    request: Request, admin: None = Depends(require_admin_token)
+    request: Request,
+    admin: None = Depends(require_admin_token),
+    persist: bool = Query(
+        True,
+        description="When false, apply in-memory only and do NOT write "
+        "config_overrides.json (changes evaporate on restart). Use for "
+        "benchmarks/experiments that must not mutate persisted config.",
+    ),
 ) -> dict:
     """Update runtime-tunable configuration fields.
 
     Accepts a JSON object with one or more tunable fields. Changes take
     effect immediately for subsequent requests (no restart needed).
 
-    Overrides are persisted to config_overrides.json and re-applied
-    automatically on the next startup.
+    By default, overrides are persisted to config_overrides.json and re-applied
+    on the next startup. Pass ?persist=false to apply in-memory only (e.g. a
+    benchmark arm) so the proxy's persisted config is never mutated.
     """
     body = await request.json()
     settings = get_settings()
@@ -104,13 +112,19 @@ async def update_config(
             logger.info("config_updated", field=key, value=coerced)
         except (ValueError, TypeError) as e:
             rejected[key] = f"invalid value: {e}"
-    if updated:
+    if updated and persist:
         _write_overrides(updated)
+    if persist:
+        warning = ("Changes persist across restarts via config_overrides.json. "
+                   "Delete that file and restart to reset to env defaults.")
+    else:
+        warning = ("Applied in-memory only (persist=false). Changes are NOT written "
+                   "to config_overrides.json and evaporate on the next restart.")
     return {
         "updated": updated,
         "rejected": rejected,
-        "warning": "Changes persist across restarts via config_overrides.json. "
-                   "Delete that file and restart to reset to env defaults.",
+        "persisted": bool(persist),
+        "warning": warning,
     }
 
 

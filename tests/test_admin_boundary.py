@@ -152,3 +152,27 @@ class TestAdminConfigPersistence:
 
             reset_settings()
             assert get_settings().context_token_budget == 12345
+
+    @pytest.mark.asyncio
+    @pytest.mark.real_config_overrides
+    async def test_patch_persist_false_does_not_write_file(self, client, tmp_path: Path):
+        """?persist=false applies in-memory only and never writes config_overrides.json."""
+        override_file = tmp_path / "config_overrides.json"
+
+        with patch.object(config_module, "_OVERRIDES_FILE", override_file):
+            reset_settings()
+
+            resp = await client.patch(
+                "/admin/config?persist=false",
+                json={"context_token_budget": 54321},
+            )
+
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["updated"]["context_token_budget"] == 54321
+            assert body["persisted"] is False
+            assert "persist=false" in body["warning"].lower()
+            # In-memory value applies immediately...
+            assert get_settings().context_token_budget == 54321
+            # ...but nothing was written to disk.
+            assert not override_file.exists()
