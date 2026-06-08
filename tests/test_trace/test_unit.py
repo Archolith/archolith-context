@@ -172,6 +172,41 @@ class TestTraceBuilder:
         assert trace.input_tokens == 2000
         assert trace.message_count == 10
 
+    def test_set_token_telemetry_surfaces_in_trace(self):
+        """Structural token telemetry + actual upstream prompt_tokens persist
+        through build() (guards against the DTO silently dropping extra keys)."""
+        from archolith_proxy.token_accounting import build_telemetry
+
+        builder = TraceBuilder()
+        # Tiny message (content estimate hits its floor) but several realistic tool
+        # schemas, so structural must exceed content once the tools are counted.
+        tools = [
+            {"type": "function", "function": {
+                "name": f"search_documents_{i}",
+                "description": (
+                    "Search the indexed corpus for documents matching a natural "
+                    "language query and return ranked results with snippets and scores."
+                ),
+                "parameters": {"type": "object", "properties": {
+                    f"query_{j}": {"type": "string", "description": f"The {j}th search expression to evaluate against the corpus."}
+                    for j in range(6)
+                }},
+            }}
+            for i in range(8)
+        ]
+        tel = build_telemetry([{"role": "user", "content": "fix it"}], tools=tools)
+        builder.set_token_telemetry(tel.breakdown)
+        builder.set_response(status=200, prompt_tokens=1234)
+        trace = builder.build()
+
+        # Structural counts the tool schema the content-only estimate misses.
+        assert trace.token_structural_est > trace.token_content_est
+        assert trace.token_gate_input == tel.breakdown.gate_input_tokens
+        assert trace.token_gate_source  # non-empty source label
+        assert trace.token_estimator_version
+        # Actual upstream input tokens captured for estimate-vs-actual.
+        assert trace.prompt_tokens_actual == 1234
+
     def test_set_assembly(self):
         builder = TraceBuilder()
         builder.set_assembly(

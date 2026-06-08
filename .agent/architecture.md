@@ -450,6 +450,20 @@ URLs + keys, `admin_token`, `ladybug_db_path`); denied and unknown fields are re
 loudly (logged) and never persisted. Set/get/reset helpers: `set_session_settings`,
 `reset_session_settings`, graph `set_session_config_overrides` / `get_session_config_overrides`.
 
+**Token accounting (`archolith_proxy/token_accounting/`).** The assembly gate keys
+on a structural token estimate, not the crude `len(json.dumps(m))//4`. The crude
+estimate sees message content only and is blind to the top-level `tools` array, so
+the gate decided on a large underestimate (e.g. 10 vs ~17,900 tokens on a 20-tool
+request). `build_telemetry` computes content / structural (content + tool schemas +
+`tool_calls` + tool-result payloads + framing) / client-reported estimates and a
+gate decision; the gate uses `gate_input_tokens = max(structural, client_reported)`.
+A client may supply `X-Context-Token-Hint`. The estimator uses tiktoken (cl100k_base)
+when present and falls back to `len/3.6`. It runs on the request hot path via
+`asyncio.to_thread` — tiktoken releases the GIL, so encoding does not block the
+event loop. The per-turn trace records the breakdown plus the actual upstream
+`prompt_tokens` (`prompt_tokens_actual`) so estimate-vs-actual is inspectable. The
+session token budget still uses the legacy content estimate (controlled migration).
+
 **Important default nuance:** the Python `Settings` class still defaults `graph_backend` to `neo4j`
 and `upstream_base_url` to DeepSeek. The repo README and `.env.example` are optimized around the
 public/local bootstrap path (`ladybug` + OpenAI-compatible upstream). Keep both realities explicit

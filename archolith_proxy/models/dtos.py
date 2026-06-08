@@ -83,6 +83,15 @@ class TurnTrace(BaseModel):
     savings_tokens: int = 0
     savings_ratio: float = 0.0
 
+    # Token accounting (structural estimator) — the gate keys on token_gate_input.
+    # Pair token_structural_est with prompt_tokens_actual for estimate-vs-actual.
+    token_content_est: int = 0           # content-only estimate (messages text)
+    token_structural_est: int = 0        # content + tool schemas + tool_calls + framing
+    token_client_reported: int | None = None  # X-Context-Token-Hint, if supplied
+    token_gate_input: int = 0            # surface the assembly gate decided on
+    token_gate_source: str = ""          # structural_estimate | content_estimate | client_reported | max_structural_client
+    token_estimator_version: str = ""
+
     # Facts selected for injection (from assembler)
     facts_selected: list[dict] = Field(default_factory=list)
     files_selected: list[dict] = Field(default_factory=list)
@@ -103,6 +112,7 @@ class TurnTrace(BaseModel):
     upstream_status: int = 0
     upstream_latency_ms: float = 0.0
     output_tokens: int | None = None
+    prompt_tokens_actual: int | None = None  # actual upstream input tokens (vs token_structural_est)
     upstream_response_summary: str = ""  # First 500 chars of response text
 
     # Extraction
