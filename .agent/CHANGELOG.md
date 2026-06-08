@@ -1,5 +1,13 @@
 # Changelog — archolith-context
 
+## 2026-06-08 — Per-Session Config Overrides
+
+- **`archolith_proxy/config.py`**: Added a `contextvars` per-session settings overlay. `get_settings()` returns the session overlay when active, else the global singleton (default — behavior-identical across all ~54 call sites). `build_effective_settings()` layers session overrides over the global base (precedence session > `config_overrides.json` > env > default); `SESSION_CONFIG_DENYLIST` blocks per-session override of secrets/infra. Added `set_session_settings` / `reset_session_settings`.
+- **`archolith_proxy/graph/` (ladybug_backend, ladybug_sessions, session, neo4j_backend, protocol)**: Added a `config_overrides` column on the Session node with an idempotent ALTER migration for pre-existing DBs, and symmetric `set/get_session_config_overrides` CRUD. LadybugDB 0.16.1 mangles a STRING parameter beginning with `{` (stores a STRUCT repr), so the ladybug CRUD base64-encodes on write and decodes via the typed getter; neo4j stores verbatim.
+- **`archolith_proxy/openai/chat.py`**: An `X-Session-Config` request header merges into the session's persisted overrides, persists, and activates the overlay for the request; a request-scoped dependency resets it after the response. Denied/unknown fields are rejected loudly and never persisted. Async follow-up work (extraction, curator background pass) inherits the overlay via context copying.
+- **`archolith_proxy/routers/admin_router.py`**: `PATCH /admin/config?persist=false` applies an override in-memory only (no `config_overrides.json` write) so benchmark runs don't mutate global config.
+- **Tests**: Added `tests/test_per_session_config.py` (overlay precedence/denylist/coercion, contextvar propagation, request-helper merge/persist against fake + real LadybugDB) and graph round-trip/migration coverage. Full suite: 802 passed.
+
 ## 2026-06-02 — Quality Remediation Closeout Follow-Through
 
 - **`archolith_proxy/main.py`**: Fixed post-expiry cache pruning to remove stale session state instead of clearing active agent-solo entries. Cleanup now prunes both agent-solo caches and curator briefing/snapshot state after graph expiry cycles.
