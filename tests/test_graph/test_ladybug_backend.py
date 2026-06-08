@@ -104,6 +104,38 @@ async def test_update_goal(backend):
 
 
 @pytest.mark.asyncio
+async def test_session_config_overrides_round_trip(backend):
+    """Per-session config overrides persist on the node and decode back exactly.
+
+    Stored value is base64-encoded internally (LadybugDB 0.16.1 mangles a STRING
+    parameter that begins with '{'), so the JSON must survive via the typed getter.
+    """
+    await backend.create_session("sess-cfg-1")
+    payload = '{"curator_enabled": false, "context_token_budget": 999}'
+    await backend.set_session_config_overrides("sess-cfg-1", payload)
+
+    got = await backend.get_session_config_overrides("sess-cfg-1")
+    assert got == payload
+
+
+@pytest.mark.asyncio
+async def test_session_config_overrides_default_empty(backend):
+    """A freshly created session returns empty-string config overrides."""
+    await backend.create_session("sess-cfg-2")
+
+    got = await backend.get_session_config_overrides("sess-cfg-2")
+    assert got == ""
+
+
+@pytest.mark.asyncio
+async def test_set_config_overrides_unknown_session_no_error(backend):
+    """Set/get for a non-existent session matches nothing, does not raise."""
+    await backend.set_session_config_overrides("sess-does-not-exist", "{}")
+    got = await backend.get_session_config_overrides("sess-does-not-exist")
+    assert got == ""
+
+
+@pytest.mark.asyncio
 async def test_store_and_get_facts(backend):
     """Store facts and retrieve them."""
     await backend.create_session("sess-004")

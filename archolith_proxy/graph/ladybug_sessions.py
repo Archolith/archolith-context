@@ -2,9 +2,34 @@
 
 from __future__ import annotations
 
+import base64
 from uuid import uuid4
 
 # Re-export _execute type — callers pass the ladybug backend's _execute
+
+
+def _encode_overrides(overrides_json: str) -> str:
+    """Encode a per-session config JSON string for safe storage.
+
+    LadybugDB 0.16.1 type-infers a STRING parameter whose value begins with '{'
+    as a MAP/STRUCT and stores a mangled repr (quotes stripped, true->True), so a
+    raw JSON object can never round-trip. base64 makes the stored value an opaque
+    ASCII string the driver cannot reinterpret. Symmetric with _decode_overrides.
+    """
+    if not overrides_json:
+        return ""
+    return base64.b64encode(overrides_json.encode("utf-8")).decode("ascii")
+
+
+def _decode_overrides(stored: str | None) -> str:
+    """Decode a stored per-session config value back to its JSON string ('' if empty)."""
+    if not stored:
+        return ""
+    try:
+        return base64.b64decode(stored.encode("ascii")).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        # Tolerate a legacy/plain value that was stored before base64 encoding.
+        return stored
 
 
 async def create_session(execute, session_id: str, fingerprint: str | None = None) -> dict:
@@ -14,12 +39,41 @@ async def create_session(execute, session_id: str, fingerprint: str | None = Non
             session_id: $session_id, fingerprint: $fingerprint,
             goal: NULL, created_at: current_timestamp(),
             last_active: current_timestamp(),
-            ttl_hours: 24, status: 'active', turn_number: 0
+            ttl_hours: 24, status: 'active', turn_number: 0,
+            config_overrides: ''
         }) RETURN s
         """,
         {"session_id": session_id, "fingerprint": fingerprint},
     )
     return rows[0] if rows else {}
+
+
+async def set_session_config_overrides(
+    execute, session_id: str, overrides_json: str
+) -> None:
+    """Persist a JSON string of per-session config overrides on the Session node.
+
+    The value is base64-encoded for storage (see _encode_overrides). No-op
+    (matches nothing) if the session does not exist; the caller is responsible
+    for ensuring the session was created first.
+    """
+    await execute(
+        "MATCH (s:Session {session_id: $session_id}) "
+        "SET s.config_overrides = $overrides_json",
+        {"session_id": session_id, "overrides_json": _encode_overrides(overrides_json)},
+    )
+
+
+async def get_session_config_overrides(execute, session_id: str) -> str:
+    """Return the per-session config overrides JSON string ('' if none/unknown)."""
+    rows = await execute(
+        "MATCH (s:Session {session_id: $session_id}) "
+        "RETURN s.config_overrides AS config_overrides",
+        {"session_id": session_id},
+    )
+    if not rows:
+        return ""
+    return _decode_overrides(rows[0].get("config_overrides"))
 
 
 async def find_session_by_id(execute, session_id: str) -> dict | None:

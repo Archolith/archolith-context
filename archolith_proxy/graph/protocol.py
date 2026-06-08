@@ -97,6 +97,14 @@ class GraphBackend(Protocol):
         """Update the session goal string."""
         ...
 
+    async def set_session_config_overrides(self, session_id: str, overrides_json: str) -> None:
+        """Persist a JSON string of per-session config overrides on the session."""
+        ...
+
+    async def get_session_config_overrides(self, session_id: str) -> str:
+        """Return the per-session config overrides JSON string ('' if none)."""
+        ...
+
     async def list_active_sessions(self) -> list[dict]:
         """List all active sessions (for admin/metrics endpoints)."""
         ...
