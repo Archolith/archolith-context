@@ -16,9 +16,11 @@ from archolith_proxy.filter_adapter import shrink_tail_tool_results
 __all__ = [
     "strip_reasoning",
     "strip_dsml_artifacts",
+    "text_has_dsml_artifacts",
     "estimate_input_tokens",
     "rewrite_messages",
     "inject_no_dsml_hint",
+    "inject_no_dsml_hint_strict",
 ]
 
 # Pattern for stripping model reasoning/thinking blocks before extraction
@@ -84,6 +86,22 @@ def strip_dsml_artifacts(text: str) -> str:
     # Nous-style XML tool calls (bounded)
     text = _NOUS_TOOL_CALL_RE.sub("", text)
     return text.rstrip()
+
+
+def text_has_dsml_artifacts(text: str) -> bool:
+    """Return True if the text contains DSML / tool-call invocation markup.
+
+    Used to detect when an upstream response leaked tool-call syntax as plain text
+    on a request that offered no real tools, so the proxy can refuse it (retry,
+    then strip) instead of returning the markup to the caller.
+    """
+    if not text:
+        return False
+    return bool(
+        _DSML_BLOCK_RE.search(text)
+        or _DEEPSEEK_TOOL_BLOCK_RE.search(text)
+        or _NOUS_TOOL_CALL_RE.search(text)
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -674,6 +692,36 @@ def inject_no_dsml_hint(messages: list[dict], model: str, has_tools: bool = Fals
         # No system message found — prepend one
         result.insert(0, {"role": "system", "content": _DEEPSEEK_NO_TOOL_HINT})
 
+    return result
+
+
+_DEEPSEEK_NO_TOOL_HINT_STRICT = (
+    "CRITICAL: Your previous response emitted tool-call / DSML invocation markup, "
+    "but NO tools are available in this session. You MUST respond with plain text, "
+    "markdown, and code blocks ONLY. Do NOT emit tool calls, function invocations, "
+    "DSML markup (e.g. <|DSML|...>), <tool_call> tags, or any special invocation "
+    "syntax. If you need to read or edit a file, describe what to do in prose."
+)
+
+
+def inject_no_dsml_hint_strict(messages: list[dict]) -> list[dict]:
+    """Append a STRONGER no-tool instruction for the retry after a DSML leak.
+
+    Unlike inject_no_dsml_hint this is not gated (the caller already gated on
+    deepseek + no-tools before retrying) and uses more forceful wording because the
+    model already ignored the normal hint once.
+    """
+    result = []
+    injected = False
+    for msg in messages:
+        if msg.get("role") == "system" and not injected:
+            existing = msg.get("content", "") or ""
+            result.append({**msg, "content": existing + "\n\n" + _DEEPSEEK_NO_TOOL_HINT_STRICT})
+            injected = True
+        else:
+            result.append(msg)
+    if not injected:
+        result.insert(0, {"role": "system", "content": _DEEPSEEK_NO_TOOL_HINT_STRICT})
     return result
 
 
