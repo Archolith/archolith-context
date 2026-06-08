@@ -46,6 +46,96 @@ def _schedule_trace_store(
     background_tasks.add_task(_store)
 
 
+def _extract_message_contents(data: dict) -> list[str]:
+    """Return assistant message content strings from an OpenAI response dict."""
+    out: list[str] = []
+    for choice in (data.get("choices") or []):
+        msg = choice.get("message") or {}
+        content = msg.get("content")
+        if isinstance(content, str):
+            out.append(content)
+    return out
+
+
+async def _refuse_dsml_leak(
+    resp: httpx.Response,
+    request: Request,
+    url: str,
+    headers: dict,
+    body: bytes,
+    settings,
+    session_id: str | None,
+) -> httpx.Response:
+    """Refuse a leaked DSML/tool-call response: retry once, then strip.
+
+    When a no-tools DeepSeek request comes back with tool-call/DSML markup as the
+    assistant's plain-text content, re-issue the upstream call once with a stronger
+    no-tool instruction. If it still leaks, strip the markup as a safety net so the
+    caller never receives raw invocation syntax. Returns the (possibly rebuilt)
+    response; unchanged for non-gated or clean responses.
+    """
+    from archolith_proxy.proxy.rewrite import (
+        inject_no_dsml_hint_strict,
+        strip_dsml_artifacts,
+        text_has_dsml_artifacts,
+    )
+
+    # Gate: only no-tools DeepSeek (same contract as inject_no_dsml_hint).
+    try:
+        req_body = json.loads(body)
+    except Exception:
+        return resp
+    model = str(req_body.get("model", ""))
+    if "deepseek" not in model.lower() or req_body.get("tools"):
+        return resp
+
+    try:
+        data = resp.json()
+    except Exception:
+        return resp
+
+    if not any(text_has_dsml_artifacts(c) for c in _extract_message_contents(data)):
+        return resp
+
+    record_metric("dsml_leak_detected", 1)
+    logger.warning("dsml_leak_detected", session_id=session_id, model=model)
+
+    # --- Retry once with a stronger instruction ---
+    try:
+        retry_body_obj = dict(req_body)
+        retry_body_obj["messages"] = inject_no_dsml_hint_strict(req_body.get("messages", []))
+        retry_resp = await upstream_request_with_retry(
+            client=request.app.state.http_client,
+            url=url,
+            headers=headers,
+            content=json.dumps(retry_body_obj).encode(),
+            max_retries=settings.upstream_max_retries,
+            backoff_base=settings.upstream_retry_backoff_base_s,
+        )
+        if retry_resp.status_code < 400:
+            retry_data = retry_resp.json()
+            if not any(text_has_dsml_artifacts(c) for c in _extract_message_contents(retry_data)):
+                record_metric("dsml_leak_retry_recovered", 1)
+                return retry_resp
+            # Retry still leaked — carry it forward for stripping.
+            data = retry_data
+    except Exception:
+        logger.warning("dsml_leak_retry_failed", session_id=session_id, exc_info=True)
+
+    # --- Safety net: strip markup from the content ---
+    stripped_any = False
+    for choice in (data.get("choices") or []):
+        msg = choice.get("message") or {}
+        content = msg.get("content")
+        if isinstance(content, str) and text_has_dsml_artifacts(content):
+            msg["content"] = strip_dsml_artifacts(content)
+            choice["message"] = msg
+            stripped_any = True
+    if stripped_any:
+        record_metric("dsml_leak_stripped", 1)
+    return httpx.Response(resp.status_code, json=data)
+
+
 async def _handle_non_streaming(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -88,6 +178,14 @@ async def _handle_non_streaming(
             session_id=session_id,
             synthetic_injected=synthetic_injected,
             request_preview=body[:500].decode("utf-8", errors="replace") if isinstance(body, bytes) else str(body)[:500],
+        )
+
+    # Refuse leaked DSML/tool-call markup (no-tools DeepSeek): retry once, then strip.
+    # Runs before recall/extraction so the corrected response flows downstream.
+    if resp.status_code < 400:
+        resp = await _refuse_dsml_leak(
+            resp=resp, request=request, url=url, headers=headers, body=body,
+            settings=settings, session_id=session_id,
         )
 
     # Predictive gate inputs for background curator pass
