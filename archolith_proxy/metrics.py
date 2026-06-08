@@ -34,6 +34,7 @@ _metrics: dict = {
     "neo4j_errors": 0,
     "token_savings_estimated": 0,
     "total_input_tokens_seen": 0,
+    "total_input_tokens_structural": 0,
     "compaction_applied": 0,
     "promotions_attempted": 0,
     "promotions_succeeded": 0,
