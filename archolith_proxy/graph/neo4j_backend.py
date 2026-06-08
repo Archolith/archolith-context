@@ -108,6 +108,12 @@ class Neo4jBackend:
     async def update_goal(self, session_id: str, goal: str) -> None:
         await _session.update_goal(session_id, goal)
 
+    async def set_session_config_overrides(self, session_id: str, overrides_json: str) -> None:
+        await _session.set_session_config_overrides(session_id, overrides_json)
+
+    async def get_session_config_overrides(self, session_id: str) -> str:
+        return await _session.get_session_config_overrides(session_id)
+
     async def list_active_sessions(self) -> list[dict]:
         return await _session.list_active_sessions()
 

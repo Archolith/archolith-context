@@ -29,6 +29,7 @@ derived fields, but these are the canonical application-level fields.
 | `ttl_hours` | `int` | Expiry window |
 | `status` | `SessionStatus` | `active`, `expired`, or `promoted` |
 | `turn_number` | `int` | Current session turn counter |
+| `config_overrides` | `str` | Per-session config overrides as a JSON string (base64-encoded at rest on LadybugDB; see Config in architecture.md). Empty when the session uses global config. |
 
 ### FactNode
 

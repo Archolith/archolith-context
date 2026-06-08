@@ -129,6 +129,27 @@ SET s.goal = $goal
     await run_write(cypher, {"session_id": session_id, "goal": goal})
 
 
+async def set_session_config_overrides(session_id: str, overrides_json: str) -> None:
+    """Persist a JSON string of per-session config overrides on the session node."""
+    cypher = f"""
+MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
+SET s.config_overrides = $overrides_json
+    """
+    await run_write(cypher, {"session_id": session_id, "overrides_json": overrides_json})
+
+
+async def get_session_config_overrides(session_id: str) -> str:
+    """Return the per-session config overrides JSON string ('' if none)."""
+    cypher = f"""
+MATCH (s:{CONTEXT_SESSION_LABEL}:Session {{session_id: $session_id}})
+RETURN s.config_overrides AS config_overrides
+    """
+    rows = await run_query(cypher, {"session_id": session_id})
+    if not rows:
+        return ""
+    return rows[0].get("config_overrides") or ""
+
+
 async def list_active_sessions() -> list[dict]:
     """List all active sessions (for admin/metrics endpoint)."""
     cypher = f"""

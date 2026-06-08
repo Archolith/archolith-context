@@ -14,10 +14,15 @@ import time
 
 import httpx
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import Response, StreamingResponse
 
-from archolith_proxy.config import get_settings
+from archolith_proxy.config import (
+    SESSION_CONFIG_DENYLIST,
+    build_effective_settings,
+    get_settings,
+    set_session_settings,
+)
 from archolith_proxy.curator.pipeline import curate_context
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
 from archolith_proxy.metrics import record_metric
@@ -173,11 +178,93 @@ async def _handle_passthrough_non_stream(
     )
 
 
+# ── Per-session config overlay ──────────────────────────────────────────
+
+
+async def _clear_session_overlay():
+    """Request-scoped dependency: clear the per-session settings overlay after the
+    response is sent (including its background tasks) so it never bleeds into the
+    next request sharing this task's context. In production each request runs in
+    its own task (overlay is task-local), but the test client shares a context, so
+    an explicit reset keeps behavior correct in both."""
+    try:
+        yield
+    finally:
+        set_session_settings(None)
+
+
+async def _apply_session_config_overlay(header_value: str | None, session_id: str, settings):
+    """Merge an X-Session-Config header into the session's persisted overrides,
+    persist the merge, and activate the per-session settings overlay.
+
+    Returns the effective settings (the overlay if any overrides apply, else the
+    settings passed in). Denylisted and unknown fields are rejected loudly (logged,
+    not silently dropped) and never persisted. The contextvar is reset by the
+    _clear_session_overlay dependency after the response.
+    """
+    backend = get_backend()
+
+    # 1. Apply an inbound header (launch-with-config or mutate-this-session).
+    if header_value:
+        incoming = None
+        try:
+            parsed = json.loads(header_value)
+            if not isinstance(parsed, dict):
+                raise ValueError("X-Session-Config must be a JSON object")
+            incoming = parsed
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning("session_config_header_invalid", session_id=session_id, error=str(e))
+
+        if incoming is not None:
+            denied = sorted(k for k in incoming if k in SESSION_CONFIG_DENYLIST)
+            unknown = sorted(k for k in incoming if k not in SESSION_CONFIG_DENYLIST and not hasattr(settings, k))
+            if denied:
+                logger.warning("session_config_denied_fields", session_id=session_id, fields=denied)
+            if unknown:
+                logger.warning("session_config_unknown_fields", session_id=session_id, fields=unknown)
+
+            existing_json = await backend.get_session_config_overrides(session_id)
+            try:
+                merged = json.loads(existing_json) if existing_json else {}
+                if not isinstance(merged, dict):
+                    merged = {}
+            except (ValueError, json.JSONDecodeError):
+                merged = {}
+            applied = {
+                k: v for k, v in incoming.items()
+                if k not in SESSION_CONFIG_DENYLIST and hasattr(settings, k)
+            }
+            if applied:
+                merged.update(applied)
+                await backend.set_session_config_overrides(session_id, json.dumps(merged))
+                logger.info("session_config_applied", session_id=session_id, fields=sorted(applied))
+
+    # 2. Load the session's effective overrides and activate the overlay.
+    overrides_json = await backend.get_session_config_overrides(session_id)
+    if not overrides_json:
+        return settings
+    try:
+        overrides = json.loads(overrides_json)
+    except (ValueError, json.JSONDecodeError):
+        logger.warning("session_config_load_corrupt", session_id=session_id)
+        return settings
+    if not isinstance(overrides, dict) or not overrides:
+        return settings
+
+    effective = build_effective_settings(overrides)
+    set_session_settings(effective)
+    return effective
+
+
 # ── Main entry point ────────────────────────────────────────────────────
 
 
 @router.post("/chat/completions")
-async def chat_completions(request: Request, background_tasks: BackgroundTasks) -> Response:
+async def chat_completions(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    _overlay_cleanup: None = Depends(_clear_session_overlay),
+) -> Response:
     """Accept OpenAI chat completion requests, forward to upstream,
     resolve session, assemble context, and trigger async fact extraction."""
     settings = get_settings()
@@ -279,6 +366,14 @@ async def chat_completions(request: Request, background_tasks: BackgroundTasks) 
                 await store.set_session_metadata(session_id, "proxy_config", snapshot_config())
 
             structlog.contextvars.bind_contextvars(session_id=session_id, turn_number=turn_number)
+
+            # Per-session config overlay: merge any X-Session-Config header into
+            # the session's persisted overrides and activate the effective
+            # settings for the remainder of this request (and its async follow-up
+            # work). Reset post-response by the _clear_session_overlay dependency.
+            settings = await _apply_session_config_overlay(
+                request.headers.get("X-Session-Config"), session_id, settings
+            )
         except Exception as e:
             logger.warning("session_resolution_failed", error=str(e))
             record_metric("neo4j_errors", 1)

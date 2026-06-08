@@ -7,7 +7,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from archolith_proxy.config import reset_settings
+from archolith_proxy.config import reset_settings, set_session_settings
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +31,10 @@ def _isolate_settings_from_dotenv(monkeypatch, request):
     )
     if request.node.get_closest_marker("real_config_overrides") is None:
         monkeypatch.setattr("archolith_proxy.config._read_overrides", lambda: {})
+    # Clear any per-session settings overlay so it can't leak between tests.
+    set_session_settings(None)
     yield
+    set_session_settings(None)
     reset_settings()
 
 

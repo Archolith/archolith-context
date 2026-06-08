@@ -333,6 +333,8 @@ The gate runs in `main.py` during app initialization, before the FastAPI server 
 - `GET /admin/config` and `PATCH /admin/config` expose runtime-tunable settings
 - `GET /admin/config-delta` shows the persisted override delta relative to base env settings
 - Runtime override persistence uses `config_overrides.json` at the project root and reloads on startup via `_load_config_overrides()` + watcher polling
+- `PATCH /admin/config?persist=false` applies an override in-memory only (no `config_overrides.json` write) — used by benchmarks so a run does not mutate global config
+- Per-session config: an `X-Session-Config` request header on `/v1/chat/completions` scopes config to one session (persisted on the Session node), without touching global config — see the per-session config overlay under Config
 
 ### Agent-Solo Compression (`archolith_proxy/proxy/agent_solo.py`)
 
@@ -430,6 +432,23 @@ Cache methods on `LadybugBackend`: `upsert_file_content`, `get_file_content`,
 - Agent-solo compression toggles and payload dump switch
 - Session token budget: max input tokens per session, budget action (passthrough/reject)
 - Settings singleton caching (get_settings / reset_settings)
+
+**Per-session config overlay.** Config can be scoped to a single session without
+mutating the global singleton. `get_settings()` checks a `contextvars` overlay
+(`_session_settings_ctx`): when set it returns the session's effective settings,
+else the process-global singleton (default — behavior-identical). `build_effective_settings(overrides)`
+copies the global base and layers the (filtered) session overrides on top, so
+precedence is **session > `config_overrides.json` > env > default**. A client sets
+overrides via an `X-Session-Config` request header (JSON object) on `/v1/chat/completions`:
+the proxy merges it into the session's persisted overrides (`Session.config_overrides`,
+see data_models.md), activates the overlay for the request, and resets it after the
+response via a request-scoped dependency. Async follow-up work (extraction, the
+curator background pass spawned with `asyncio.create_task`) inherits the overlay
+through context copying. Because that endpoint is unauthenticated, `SESSION_CONFIG_DENYLIST`
+blocks per-session override of secrets/infra (upstream/extractor/curator/embedding/memory
+URLs + keys, `admin_token`, `ladybug_db_path`); denied and unknown fields are rejected
+loudly (logged) and never persisted. Set/get/reset helpers: `set_session_settings`,
+`reset_session_settings`, graph `set_session_config_overrides` / `get_session_config_overrides`.
 
 **Important default nuance:** the Python `Settings` class still defaults `graph_backend` to `neo4j`
 and `upstream_base_url` to DeepSeek. The repo README and `.env.example` are optimized around the

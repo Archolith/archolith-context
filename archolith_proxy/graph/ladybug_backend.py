@@ -72,8 +72,10 @@ from archolith_proxy.graph.ladybug_sessions import (
     find_session_by_fingerprint,
     find_session_by_id,
     get_session_stats,
+    get_session_config_overrides,
     get_turn_number,
     list_active_sessions,
+    set_session_config_overrides,
     touch_session,
     update_goal,
 )
@@ -90,7 +92,8 @@ CREATE NODE TABLE Session(
     last_active TIMESTAMP,
     ttl_hours INT64,
     status STRING,
-    turn_number INT64
+    turn_number INT64,
+    config_overrides STRING
 );
 
 CREATE NODE TABLE Fact(
@@ -282,7 +285,29 @@ class LadybugBackend:
                 err = str(e).lower()
                 if "already exists" not in err and "duplicate" not in err:
                     logger.warning("ladybug_schema_warning", statement=stmt[:80], error=str(e)[:120])
+        await self._migrate_session_columns()
         logger.info("ladybug_schema_ensured")
+
+    async def _migrate_session_columns(self) -> None:
+        """Additive column migrations for pre-existing Session tables.
+
+        ``CREATE NODE TABLE Session`` is skipped on existing databases (the table
+        already exists), so columns added after a DB was first created must be
+        applied via ALTER. Idempotent: re-running tolerates the "already has
+        property" signal LadybugDB raises when the column is present.
+        """
+        migrations = [
+            "ALTER TABLE Session ADD config_overrides STRING",
+        ]
+        for stmt in migrations:
+            try:
+                await self._aconn.execute(stmt)
+            except Exception as e:
+                err = str(e).lower()
+                if "already has property" not in err and "already exists" not in err:
+                    logger.warning(
+                        "ladybug_migration_warning", statement=stmt[:80], error=str(e)[:120]
+                    )
 
     async def verify_connectivity(self) -> bool:
         if not self._aconn:
@@ -308,7 +333,9 @@ class LadybugBackend:
             # Session CRUD
             "create_session", "find_session_by_id", "find_session_by_fingerprint",
             "find_or_create_by_fingerprint", "touch_session", "get_turn_number",
-            "update_goal", "list_active_sessions", "get_session_stats",
+            "update_goal", "set_session_config_overrides",
+            "get_session_config_overrides",
+            "list_active_sessions", "get_session_stats",
             # Fact CRUD
             "store_fact", "store_facts_batch", "invalidate_facts",
             "find_matching_fact_ids", "get_active_facts", "get_active_fact_count",
@@ -385,6 +412,12 @@ class LadybugBackend:
 
     async def update_goal(self, session_id: str, goal: str) -> None:
         return await update_goal(self._execute, session_id, goal)
+
+    async def set_session_config_overrides(self, session_id: str, overrides_json: str) -> None:
+        return await set_session_config_overrides(self._execute, session_id, overrides_json)
+
+    async def get_session_config_overrides(self, session_id: str) -> str:
+        return await get_session_config_overrides(self._execute, session_id)
 
     async def list_active_sessions(self) -> list[dict]:
         return await list_active_sessions(self._execute)
