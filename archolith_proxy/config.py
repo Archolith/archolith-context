@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import threading
+from contextvars import ContextVar
 from pathlib import Path
 
 from pydantic import field_validator
@@ -22,6 +23,33 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Module-level singleton
 _settings: Settings | None = None
+
+# Per-session effective settings overlay. When set (inside a request bound to a
+# session that has config_overrides), get_settings() returns this instead of the
+# global singleton, so all ~54 get_settings() call sites become session-aware
+# transparently. Default None == today's behavior (global singleton).
+_session_settings_ctx: ContextVar["Settings | None"] = ContextVar(
+    "session_settings", default=None
+)
+
+# Fields a per-session X-Session-Config header may NOT override. /v1/chat/completions
+# is unauthenticated, so a client must not be able to redirect upstream traffic or
+# override secrets/paths for their session. Everything else is settable per-session.
+SESSION_CONFIG_DENYLIST: frozenset[str] = frozenset({
+    "upstream_base_url",
+    "upstream_api_url",
+    "upstream_api_key",
+    "extractor_base_url",
+    "extractor_api_key",
+    "curator_base_url",
+    "curator_api_key",
+    "embedding_base_url",
+    "embedding_api_key",
+    "memory_api_url",
+    "memory_api_key",
+    "admin_token",
+    "ladybug_db_path",
+})
 
 # Resolve .env relative to this file's directory (archolith_proxy/),
 # then walk up one level to the project root. This ensures .env loads
@@ -284,8 +312,8 @@ class Settings(BaseSettings):
         return missing
 
 
-def get_settings() -> Settings:
-    """Return cached settings instance (singleton per process)."""
+def _get_global_settings() -> Settings:
+    """Return the process-global settings singleton (no session overlay)."""
     global _settings, _base_values
     if _settings is None:
         with _settings_lock:
@@ -297,6 +325,59 @@ def get_settings() -> Settings:
                 # Apply persisted overrides from config_overrides.json
                 _apply_overrides(_settings)
     return _settings
+
+
+def get_settings() -> Settings:
+    """Return the effective settings for the current context.
+
+    If a per-session overlay is active (set via set_session_settings during a
+    request bound to a session that has config_overrides), return it. Otherwise
+    return the process-global singleton. This keeps all call sites unchanged while
+    making them session-aware when an overlay is present.
+    """
+    overlay = _session_settings_ctx.get()
+    if overlay is not None:
+        return overlay
+    return _get_global_settings()
+
+
+def build_effective_settings(overrides: dict[str, object]) -> Settings:
+    """Build a per-session Settings from the global base + (filtered) overrides.
+
+    Precedence: session overrides > global config_overrides.json > env > defaults.
+    The global singleton already encodes env + config_overrides.json, so we copy it
+    and layer the session overrides on top. Denylisted fields are ignored.
+    """
+    base = _get_global_settings()
+    effective = base.model_copy()
+    for key, value in (overrides or {}).items():
+        if key in SESSION_CONFIG_DENYLIST:
+            continue
+        if not hasattr(effective, key):
+            continue
+        try:
+            expected_type = type(getattr(effective, key))
+            setattr(effective, key, expected_type(value) if not isinstance(value, expected_type) else value)
+        except (ValueError, TypeError):
+            continue
+    return effective
+
+
+def set_session_settings(settings: "Settings | None"):
+    """Set the per-session settings overlay for the current context.
+
+    Returns the ContextVar Token; pass it to reset_session_settings in a finally
+    block to restore the prior overlay. Set None to explicitly run with no overlay.
+    """
+    return _session_settings_ctx.set(settings)
+
+
+def reset_session_settings(token) -> None:
+    """Restore the per-session overlay to its prior value (pair with set_session_settings)."""
+    try:
+        _session_settings_ctx.reset(token)
+    except (ValueError, LookupError):
+        pass
 
 
 def reset_settings() -> None:
