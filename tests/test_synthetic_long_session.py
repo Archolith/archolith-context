@@ -1087,7 +1087,23 @@ class TestTokenAwareAssembly:
             return httpx.Response(200, json=_NORMAL_RESPONSE)
 
         settings = get_settings()
-        # Keep default assembly_min_input_tokens (50K) — short session should NOT trigger assembly
+        # Deterministic gate test: force a known config instead of inheriting the
+        # operator's .env (which lowers assembly_min_input_tokens and enables
+        # agent-solo). Below assembly_min_input_tokens, with agent-solo and filter
+        # compression off, the proxy must pass the messages through unchanged.
+        orig_cfg = {
+            "assembly_min_input_tokens": settings.assembly_min_input_tokens,
+            "filter_enabled": settings.filter_enabled,
+            "agent_solo_shrink_enabled": settings.agent_solo_shrink_enabled,
+            "agent_solo_dedup_enabled": settings.agent_solo_dedup_enabled,
+            "agent_solo_compress_middle_enabled": settings.agent_solo_compress_middle_enabled,
+        }
+        settings.assembly_min_input_tokens = 100_000  # well above this short session
+        settings.filter_enabled = False
+        settings.agent_solo_shrink_enabled = False
+        settings.agent_solo_dedup_enabled = False
+        settings.agent_solo_compress_middle_enabled = False
+
         assert original_tokens < settings.assembly_min_input_tokens, (
             f"Short session has {original_tokens} tokens, expected < {settings.assembly_min_input_tokens}"
         )
@@ -1101,41 +1117,42 @@ class TestTokenAwareAssembly:
 
         app = create_app()
 
-        with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
-             patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
-             patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
-             patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
-             patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
+        try:
+            with patch("archolith_proxy.openai.chat.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.openai.chat.resolve_session", new_callable=AsyncMock) as mock_resolve, \
+                 patch("archolith_proxy.openai.chat.get_backend", return_value=mock_backend), \
+                 patch("archolith_proxy.graph.backend.is_graph_ready", return_value=True), \
+                 patch("archolith_proxy.graph.backend.get_backend", return_value=mock_backend):
 
-            mock_resolve.return_value = (SESSION_ID, False)
+                mock_resolve.return_value = (SESSION_ID, False)
 
-            async with app.router.lifespan_context(app):
-                app.state.http_client = httpx.AsyncClient(
-                    transport=httpx.MockTransport(mock_handler)
-                )
-                app.state.extractor_client = AsyncMock()
-                transport = ASGITransport(app=app)
-                async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-                    resp = await ac.post(
-                        "/v1/chat/completions",
-                        json={
-                            "model": "test-model",
-                            "messages": messages,
-                            "stream": False,
-                        },
-                        headers={"X-Session-ID": SESSION_ID},
+                async with app.router.lifespan_context(app):
+                    app.state.http_client = httpx.AsyncClient(
+                        transport=httpx.MockTransport(mock_handler)
                     )
+                    app.state.extractor_client = AsyncMock()
+                    transport = ASGITransport(app=app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                        resp = await ac.post(
+                            "/v1/chat/completions",
+                            json={
+                                "model": "test-model",
+                                "messages": messages,
+                                "stream": False,
+                            },
+                            headers={"X-Session-ID": SESSION_ID},
+                        )
+        finally:
+            for _k, _v in orig_cfg.items():
+                setattr(settings, _k, _v)
 
         assert resp.status_code == 200
         assert len(captured_payloads) >= 1
 
-        # With the savings gate, the upstream should receive the ORIGINAL messages
-        # (passthrough because input_tokens < assembly_min_input_tokens)
-        upstream_msg_count = len(captured_payloads[0].get("messages", []))
-        upstream_tokens = estimate_input_tokens(captured_payloads[0].get("messages", []))
-
-        # Token count should be approximately the same (not reduced by assembly)
-        # Allow small variance from DSML hint injection or tool injection
+        # Passthrough: the upstream completion should receive ~the ORIGINAL messages
+        # (no assembly/agent-solo/filter rewrite). Use the last captured payload (the
+        # main completion; any sub-call would precede it).
+        upstream_tokens = estimate_input_tokens(captured_payloads[-1].get("messages", []))
         token_ratio = upstream_tokens / max(original_tokens, 1)
         assert token_ratio > 0.9, (
             f"Savings gate should prevent assembly: original={original_tokens}, "

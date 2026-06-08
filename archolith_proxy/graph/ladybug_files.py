@@ -68,7 +68,7 @@ async def get_file_content(execute, session_id: str, path: str) -> dict | None:
         MATCH (fc:FileContent {session_id: $session_id})
         WHERE fc.path = $norm_query OR fc.path ENDS WITH $suffix
         RETURN fc.content AS content, fc.sha256 AS sha256, fc.line_count AS line_count,
-               fc.path AS stored_path, length(fc.path) AS path_len
+               fc.path AS stored_path, size(fc.path) AS path_len
         ORDER BY path_len ASC
         LIMIT 2
         """,
