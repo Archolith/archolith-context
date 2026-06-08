@@ -437,6 +437,7 @@ async def _handle_non_streaming(
                 response_summary=response_text,
                 cache_hit_tokens=ns_usage.get("prompt_cache_hit_tokens", 0) or 0,
                 cache_miss_tokens=ns_usage.get("prompt_cache_miss_tokens", 0) or 0,
+                prompt_tokens=ns_usage.get("prompt_tokens"),
             )
 
     # Build and return the response
