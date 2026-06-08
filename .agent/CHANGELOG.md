@@ -1,5 +1,14 @@
 # Changelog — archolith-context
 
+## 2026-06-08 — Structural Token Accounting (TODO #8, trace + gating)
+
+- **`archolith_proxy/token_accounting/`** (new): structural token estimator salvaged from the `feat/evaluation-and-rollout` branch. Counts tool schemas, `tool_calls`, tool-result payloads, and message framing that the crude `len(json.dumps)//4` estimate missed. `build_telemetry` produces content / structural / client-reported estimates + a gate decision; `extract_client_hint` reads `X-Context-Token-Hint`. Uses tiktoken (cl100k_base) with a `len/3.6` fallback. 34 ported unit tests.
+- **`archolith_proxy/openai/chat.py`**: the assembly gate now keys on `gate_input_tokens` (structural) instead of the crude messages-only estimate, which was blind to the `tools` array (e.g. 10 vs ~17,900 tokens on a 20-tool request). `build_telemetry` runs via `asyncio.to_thread` — tiktoken releases the GIL (verified ~2.7x parallel), so encoding does not block the event loop. Legacy `input_tokens` retained for the session token budget.
+- **`archolith_proxy/trace/builder.py` + `models/dtos.py`**: `TurnTrace` gains token-accounting fields (`token_content_est`, `token_structural_est`, `token_client_reported`, `token_gate_input`, `token_gate_source`, `token_estimator_version`) and `prompt_tokens_actual` (actual upstream input tokens) for estimate-vs-actual reconciliation. `set_response` captures `prompt_tokens`.
+- **Calibration**: `assembly_min_input_tokens` 50K -> 55K and `assembly_min_savings_ratio` 0.20 -> 0.25, re-tuned for structural tokens (which run larger than content-only and still undercount upstream by ~10.7%). `eval/calibration_runner.py` + `eval/calibration_corpus.py` (dev tooling, not imported by the proxy) compare old vs new estimator against simulated client/upstream values and confirm the 55K/0.25 recommendation.
+- **Metrics**: added `total_input_tokens_client_reported` and `gate_decisions_<source>` counters (which estimate source the gate used). Registered `total_input_tokens_structural` (a live smoke caught it unregistered).
+- **Tests**: 837 passed. Added a trace test asserting the telemetry surfaces through `build()` (guards the DTO from silently dropping the new fields).
+
 ## 2026-06-08 — Per-Session Config Overrides
 
 - **`archolith_proxy/config.py`**: Added a `contextvars` per-session settings overlay. `get_settings()` returns the session overlay when active, else the global singleton (default — behavior-identical across all ~54 call sites). `build_effective_settings()` layers session overrides over the global base (precedence session > `config_overrides.json` > env > default); `SESSION_CONFIG_DENYLIST` blocks per-session override of secrets/infra. Added `set_session_settings` / `reset_session_settings`.

@@ -58,6 +58,21 @@ class TraceBuilder:
         self._data["user_turn_count"] = user_turn_count
         self._data["is_user_turn"] = is_user_turn
 
+    def set_token_telemetry(self, breakdown) -> None:
+        """Record the structural token-accounting breakdown for this turn.
+
+        Captures the input-side estimates (content / structural / client-reported /
+        gate input) so the trace shows the true request size. Paired with the actual
+        upstream prompt_tokens (set via set_response) this gives estimate vs actual.
+        """
+        gate_source = getattr(breakdown, "gate_source", None)
+        self._data["token_content_est"] = breakdown.input_tokens_content_est
+        self._data["token_structural_est"] = breakdown.input_tokens_structural_est
+        self._data["token_client_reported"] = breakdown.input_tokens_client_reported
+        self._data["token_gate_input"] = breakdown.gate_input_tokens
+        self._data["token_gate_source"] = getattr(gate_source, "value", str(gate_source))
+        self._data["token_estimator_version"] = breakdown.estimator_version
+
     def set_request_start(self, monotonic_start: float, wall_clock: float) -> None:
         """Record the monotonic clock at request entry for total latency calculation."""
         self._request_start = monotonic_start
@@ -135,6 +150,7 @@ class TraceBuilder:
         response_summary: str = "",
         cache_hit_tokens: int = 0,
         cache_miss_tokens: int = 0,
+        prompt_tokens: int | None = None,
     ) -> None:
         self._data["upstream_status"] = status
         self._data["upstream_latency_ms"] = latency_ms
@@ -142,6 +158,9 @@ class TraceBuilder:
         self._data["upstream_response_summary"] = response_summary[:500]
         self._data["cache_hit_tokens"] = cache_hit_tokens
         self._data["cache_miss_tokens"] = cache_miss_tokens
+        # Actual upstream input tokens — pairs with token_structural_est for the
+        # estimate-vs-actual reconciliation (TODO #8).
+        self._data["prompt_tokens_actual"] = prompt_tokens
 
     def set_extraction(
         self,

@@ -102,9 +102,16 @@ class Settings(BaseSettings):
     cold_start_turns: int = 3
     cold_start_token_threshold: int = 20000
 
-    # Savings-ratio gate: only rewrite when it actually saves meaningful tokens
-    assembly_min_savings_ratio: float = 0.20  # Skip rewriting if savings < 20%
-    assembly_min_input_tokens: int = 50000    # Don't rewrite below 50K input tokens
+    # Savings-ratio gate: only rewrite when it actually saves meaningful tokens.
+    # Calibrated for the structural token estimator (token_accounting): the gate now
+    # keys on structural tokens (tools + framing), which run larger than the old
+    # content-only estimate. The structural estimate still undercounts actual upstream
+    # by ~10.7%, so these are kept conservative — requests that pass are genuinely
+    # large. min_input_tokens raised 50K -> 55K to offset structural undercounting;
+    # min_savings_ratio raised 0.20 -> 0.25 because tool overhead inflates apparent
+    # savings (it does not disappear on rewrite).
+    assembly_min_savings_ratio: float = 0.25  # Skip rewriting if savings < 25%
+    assembly_min_input_tokens: int = 55000    # Don't rewrite below 55K input tokens
 
     # Embedding-driven retrieval
     embedding_enabled: bool = False

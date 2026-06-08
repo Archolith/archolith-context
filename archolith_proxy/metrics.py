@@ -34,6 +34,13 @@ _metrics: dict = {
     "neo4j_errors": 0,
     "token_savings_estimated": 0,
     "total_input_tokens_seen": 0,
+    "total_input_tokens_structural": 0,
+    "total_input_tokens_client_reported": 0,
+    # Which estimate source the assembly gate decided on (per GateSource value).
+    "gate_decisions_structural_estimate": 0,
+    "gate_decisions_content_estimate": 0,
+    "gate_decisions_client_reported": 0,
+    "gate_decisions_max_structural_client": 0,
     "compaction_applied": 0,
     "promotions_attempted": 0,
     "promotions_succeeded": 0,

@@ -9,6 +9,7 @@ extraction, file_cache.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
@@ -42,6 +43,7 @@ from archolith_proxy.openai.file_cache import (
 )
 from archolith_proxy.openai.non_streaming import _handle_non_streaming
 from archolith_proxy.openai.streaming import _handle_streaming
+from archolith_proxy.token_accounting import build_telemetry, extract_client_hint
 from archolith_proxy.openai.errors import make_error_response, UpstreamError
 from archolith_proxy.proxy.live import broadcast_request, broadcast_session_event
 from archolith_proxy.proxy.session import resolve_session
@@ -398,6 +400,32 @@ async def chat_completions(
     messages = body.get("messages", [])
     input_tokens = _estimate_input_tokens(messages)
     record_metric("total_input_tokens_seen", input_tokens)
+
+    # Structural token accounting: counts tool schemas / tool_calls / framing the
+    # crude content estimate above misses, so the assembly gate sees the true
+    # request size. Run via to_thread — tiktoken releases the GIL, so encoding
+    # does not block the event loop under concurrency.
+    token_telemetry = await asyncio.to_thread(
+        build_telemetry,
+        messages,
+        tools=body.get("tools"),
+        client_reported_tokens=extract_client_hint(dict(request.headers), body),
+        min_input_tokens=settings.assembly_min_input_tokens,
+        min_savings_ratio=settings.assembly_min_savings_ratio,
+        cold_start_turns=settings.cold_start_turns,
+        cold_start_token_threshold=settings.cold_start_token_threshold,
+        session_id=session_id or "",
+        turn_number=turn_number,
+    )
+    gate_input_tokens = token_telemetry.breakdown.gate_input_tokens
+    record_metric("total_input_tokens_structural", token_telemetry.breakdown.input_tokens_structural_est)
+    if token_telemetry.breakdown.input_tokens_client_reported is not None:
+        record_metric("total_input_tokens_client_reported", token_telemetry.breakdown.input_tokens_client_reported)
+    _gate_source = getattr(token_telemetry.breakdown.gate_source, "value", "")
+    if _gate_source:
+        record_metric(f"gate_decisions_{_gate_source}", 1)
+    trace_builder.set_token_telemetry(token_telemetry.breakdown)
+
     user_turn_count = sum(1 for m in messages if m.get("role") == "user")
     is_user_turn = bool(messages) and messages[-1].get("role") == "user"
 
@@ -459,13 +487,14 @@ async def chat_completions(
     assembly_eligible = bool(
         session_id and graph_ready and not session_over_budget and is_user_turn
     )
-    if assembly_eligible and input_tokens < settings.assembly_min_input_tokens:
+    if assembly_eligible and gate_input_tokens < settings.assembly_min_input_tokens:
         assembly_eligible = False
         assembly_reason = "below_assembly_min_input_tokens"
         logger.info(
             "assembly_savings_gate_skip",
             session_id=session_id,
             input_tokens=input_tokens,
+            gate_input_tokens=gate_input_tokens,
             min_input_tokens=settings.assembly_min_input_tokens,
         )
     if assembly_eligible:
