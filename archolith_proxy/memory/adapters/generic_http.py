@@ -9,6 +9,7 @@ from __future__ import annotations
 __all__ = ["Adapter"]
 
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -59,6 +60,13 @@ class Adapter(MemoryAdapterBase):
         problems: list[str] = []
         if not self.config.base_url:
             problems.append("base_url is required for generic_http adapter")
+        else:
+            parsed = urlparse(self.config.base_url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                problems.append(
+                    "base_url must be an http(s) URL with a host "
+                    f"(got: {self.config.base_url!r})"
+                )
         return problems
 
     async def capabilities(self) -> EngineCapabilities:
