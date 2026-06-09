@@ -328,8 +328,8 @@ async def extract_facts_per_tool(
         if isinstance(r, Exception):
             logger.warning("per_tool_extractor_failed", error=str(r))
             continue
-        all_facts.extend(r.facts)
-        all_files.extend(r.files_touched)
+        all_facts.extend(r.facts or [])
+        all_files.extend(r.files_touched or [])
         if r.used_llm:
             llm_calls_made += 1
 
