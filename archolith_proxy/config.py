@@ -179,6 +179,9 @@ class Settings(BaseSettings):
     # Promotion policy defaults
     promotion_min_confidence: float = 0.9
     promotion_dry_run: bool = False  # If True, generate records but don't write
+    # Directory for durable promotion-audit JSONL. When empty (default), the
+    # audit trail is in-memory only and lost on restart.
+    promotion_audit_dir: str = ""
 
     # File content cache
     file_cache_enabled: bool = True
@@ -477,7 +480,7 @@ _SNAPSHOT_EXCLUDE = frozenset({
     "assembler_base_url", "assembler_api_key",
     "session_neo4j_uri", "session_neo4j_database",
     "session_neo4j_user", "memory_api_url",
-    "ladybug_db_path", "trace_dir", "memory_engines_json",
+    "ladybug_db_path", "trace_dir", "promotion_audit_dir", "memory_engines_json",
     "pricing_input_per_million", "pricing_input_cached_per_million",
     "pricing_output_per_million",
 })
