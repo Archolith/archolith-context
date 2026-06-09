@@ -27,6 +27,7 @@ from archolith_proxy.routers.admin_router import router as admin_router
 from archolith_proxy.routers.live_router import router as live_router
 from archolith_proxy.routers.memory_admin_router import router as memory_admin_router
 from archolith_proxy.routers.metrics_router import router as metrics_router
+from archolith_proxy.routers.plugins import router as plugins_router
 from archolith_proxy.routers.sessions_router import router as sessions_router
 from archolith_proxy.trace.router import router as trace_router
 from archolith_proxy.trace.store import get_trace_store
@@ -287,6 +288,15 @@ async def lifespan(app: FastAPI):
 
     configure_curation_mode()
 
+    # Activate all registered plugins (fail-safe — proxy always starts)
+    from archolith_proxy.plugins import get_plugin_registry
+
+    plugin_registry = get_plugin_registry()
+    plugin_results = await plugin_registry.activate_all()
+    if plugin_results:
+        active_count = sum(1 for ok in plugin_results.values() if ok)
+        logger.info("plugins_activated", total=len(plugin_results), active=active_count)
+
     logger.info("proxy_starting", port=settings.proxy_port, upstream=settings.upstream_base_url)
 
     _cleanup_task = asyncio.create_task(_background_cleanup_loop())
@@ -298,6 +308,8 @@ async def lifespan(app: FastAPI):
         await _cleanup_task
     except asyncio.CancelledError:
         pass
+
+    await plugin_registry.deactivate_all()
 
     from archolith_proxy.curator.tools import close_semantic_client
     await close_semantic_client()
@@ -361,6 +373,7 @@ def create_app() -> FastAPI:
     app.include_router(sessions_router, dependencies=[Depends(require_admin_token)])
     app.include_router(memory_admin_router, dependencies=[Depends(require_admin_token)])
     app.include_router(live_router)
+    app.include_router(plugins_router, dependencies=[Depends(require_admin_token)])
     app.include_router(trace_router, dependencies=[Depends(require_admin_token)])
 
     # Dashboard static files
@@ -481,3 +494,20 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+def run() -> None:
+    """Entry point for archolith-proxy CLI command.
+
+    Starts uvicorn with settings from environment and config.
+    """
+    import uvicorn
+
+    settings = get_settings()
+
+    uvicorn.run(
+        app=app,
+        host="0.0.0.0",
+        port=settings.proxy_port,
+        log_level="info",
+    )

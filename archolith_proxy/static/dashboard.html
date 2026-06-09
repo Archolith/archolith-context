@@ -588,6 +588,18 @@ async function renderOverview() {
           </div>
         </div>
 
+        ${Object.keys(m.plugins || {}).length > 0 ? `
+        <div class="card" id="plugins-card">
+          <div class="card-header"><h2>Plugins</h2></div>
+          <div class="metrics-grid">
+            ${Object.entries(m.plugins || {}).map(([pid, pm]) => {
+              const entries = Object.entries(pm || {});
+              return `<div class="metric"><div class="value">${entries.length > 0 ? entries.map(([k,v]) => k+'='+v).join(', ') : '—'}</div><div class="label">${pid}</div></div>`;
+            }).join('')}
+          </div>
+        </div>
+        ` : ''}
+
         <div class="card">
           <div class="card-header"><h2>Assembly Modes</h2></div>
           <div class="metrics-grid" id="modes-grid">

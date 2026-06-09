@@ -272,6 +272,13 @@ class Settings(BaseSettings):
     # When set, all operator endpoints require X-Admin-Token or Authorization: Bearer matching this value.
     admin_token: str = ""
 
+    # Plugin enable/disable — comma-separated plugin IDs.
+    # PLUGINS_ENABLED: when non-empty, only listed plugins activate.
+    #   When empty (default), all installed plugins activate unless disabled.
+    # PLUGINS_DISABLED: always blocks the listed plugin IDs, even if listed in PLUGINS_ENABLED.
+    plugins_enabled: str = ""
+    plugins_disabled: str = ""
+
     @property
     def upstream_api_url(self) -> str:
         """Full upstream API base URL (ensures no trailing slash issues)."""

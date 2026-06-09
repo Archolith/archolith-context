@@ -41,7 +41,6 @@ _metrics: dict = {
     "gate_decisions_content_estimate": 0,
     "gate_decisions_client_reported": 0,
     "gate_decisions_max_structural_client": 0,
-    "compaction_applied": 0,
     "promotions_attempted": 0,
     "promotions_succeeded": 0,
     "promotions_failed": 0,
@@ -60,6 +59,9 @@ _metrics: dict = {
     "native_read_cache_misses": 0,
     "native_read_intercept_errors": 0,
     "file_cache_invalidations": 0,
+    # Plugin metrics — aggregated from PluginRegistry.aggregate_metrics()
+    # at each /metrics poll. Stored as a nested dict keyed by plugin ID.
+    "plugins": {},
 }
 
 
