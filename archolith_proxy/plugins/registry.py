@@ -15,6 +15,26 @@ import structlog
 
 logger = structlog.get_logger()
 
+# Minimum compatible version for each built-in plugin.
+# Activation fails (plugin marked 'error') when installed version is below this.
+# Proxy still starts — version mismatch is non-fatal.
+MIN_PLUGIN_VERSIONS: dict[str, str] = {
+    "filter": "0.1.0",
+    "audit": "0.1.0",
+    "memory": "0.1.0",
+}
+
+
+def _version_meets_minimum(installed: str, minimum: str) -> bool:
+    """Return True if installed version >= minimum using PEP 440 comparison."""
+    try:
+        from packaging.version import Version
+        return Version(installed) >= Version(minimum)
+    except Exception:
+        # Fall back to lexicographic comparison when packaging is unavailable.
+        # Adequate for simple x.y.z versions.
+        return installed >= minimum
+
 
 @runtime_checkable
 class ProxyPlugin(Protocol):
@@ -132,6 +152,22 @@ class PluginRegistry:
                 continue
 
             try:
+                # Version compatibility check before activation
+                min_ver = MIN_PLUGIN_VERSIONS.get(pid)
+                if min_ver:
+                    installed_ver = plugin.plugin_version
+                    if installed_ver not in ("unknown", "not_installed") and not _version_meets_minimum(installed_ver, min_ver):
+                        self._statuses[pid] = "error"
+                        logger.error(
+                            "plugin_version_incompatible",
+                            plugin_id=pid,
+                            installed=installed_ver,
+                            required=min_ver,
+                            hint=f"pip install archolith-proxy[{pid}] to upgrade",
+                        )
+                        results[pid] = False
+                        continue
+
                 ok = await asyncio.wait_for(plugin.activate(), timeout=10.0)
                 if ok:
                     self._statuses[pid] = "active"

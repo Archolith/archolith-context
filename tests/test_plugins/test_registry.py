@@ -292,6 +292,73 @@ def test_aggregate_metrics_raising_plugin_omitted():
 
 
 # ---------------------------------------------------------------------------
+# Version compatibility
+# ---------------------------------------------------------------------------
+
+
+async def test_version_below_minimum_marks_error(monkeypatch):
+    """A plugin whose version is below MIN_PLUGIN_VERSIONS is marked 'error'."""
+    import archolith_proxy.plugins.registry as reg_module
+    monkeypatch.setitem(reg_module.MIN_PLUGIN_VERSIONS, "ok", "2.0.0")
+
+    class _OldPlugin(_OkPlugin):
+        @property
+        def plugin_id(self) -> str:
+            return "ok"
+
+        @property
+        def plugin_version(self) -> str:
+            return "1.0.0"
+
+    r = PluginRegistry()
+    r.register(_OldPlugin())
+    results = await r.activate_all()
+    assert results["ok"] is False
+    assert r.list_plugins()[0]["status"] == "error"
+
+
+async def test_version_at_minimum_activates(monkeypatch):
+    """A plugin at exactly the minimum version activates normally."""
+    import archolith_proxy.plugins.registry as reg_module
+    monkeypatch.setitem(reg_module.MIN_PLUGIN_VERSIONS, "ok", "1.0.0")
+
+    class _ExactPlugin(_OkPlugin):
+        @property
+        def plugin_id(self) -> str:
+            return "ok"
+
+        @property
+        def plugin_version(self) -> str:
+            return "1.0.0"
+
+    r = PluginRegistry()
+    r.register(_ExactPlugin())
+    results = await r.activate_all()
+    assert results["ok"] is True
+    assert r.list_plugins()[0]["status"] == "active"
+
+
+async def test_version_unknown_skips_check(monkeypatch):
+    """A plugin returning 'unknown' for version skips the compatibility check."""
+    import archolith_proxy.plugins.registry as reg_module
+    monkeypatch.setitem(reg_module.MIN_PLUGIN_VERSIONS, "ok", "9.9.9")
+
+    class _UnknownVersionPlugin(_OkPlugin):
+        @property
+        def plugin_id(self) -> str:
+            return "ok"
+
+        @property
+        def plugin_version(self) -> str:
+            return "unknown"
+
+    r = PluginRegistry()
+    r.register(_UnknownVersionPlugin())
+    results = await r.activate_all()
+    assert results["ok"] is True
+
+
+# ---------------------------------------------------------------------------
 # Singleton
 # ---------------------------------------------------------------------------
 

@@ -6,17 +6,38 @@ Instead of re-sending stale conversation history on every turn, the proxy extrac
 
 **Naming:** Public repo is `archolith-context`; Python package is `archolith_proxy`; PyPI dist is `archolith-proxy`.
 
+## Install
+
+```bash
+# Proxy core (passthrough + session tracking + monitoring)
+pip install archolith-proxy
+
+# Proxy + token reduction (archolith-filter)
+pip install archolith-proxy[filter]
+
+# Proxy + waste monitoring (archolith-audit)
+pip install archolith-proxy[audit]
+
+# Full stack (filter + audit)
+pip install archolith-proxy[full]
+```
+
+For local development from source:
+```bash
+pip install -e ".[dev]"
+```
+
 ## Quick Start
 
 ```bash
-pip install -e .
-
 # Copy and configure
 cp .env.example .env
-# Edit .env with your upstream API key
+# Set UPSTREAM_API_KEY and UPSTREAM_BASE_URL in .env
 
 # Run the proxy
-python -m archolith_proxy.main
+archolith-proxy
+
+# Or: python -m archolith_proxy.main
 
 # Point any OpenAI-compatible client at http://localhost:9800/v1
 ```
