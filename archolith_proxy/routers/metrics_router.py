@@ -79,34 +79,36 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
         round(total_savings / total_input, 4) if total_input > 0 else 0.0
     )
 
-    # Per-session user turn counts from trace store (cold_start gate progress)
+    # Per-session user turn counts + cost aggregation from the trace store.
+    # D10: compute all trace-derived metrics under a SINGLE lock acquisition so
+    # the derived ratios come from one consistent snapshot. Previously the two
+    # reads were locked separately, so a mutation in between could mix counts
+    # from different states and yield inconsistent ratios.
     trace_store = getattr(request.app.state, "trace_store", get_trace_store())
-    user_turns_by_session: dict[str, int] = {}
-    try:
-        # Guard the read against concurrent mutation
-        async with trace_store._lock:
-            for session_id, turns in trace_store.by_session.items():
-                if turns:
-                    user_turns_by_session[session_id] = max(
-                        (t.user_turn_count for t in turns), default=0
-                    )
-    except Exception:
-        pass
-
-    # Cost estimation from pricing config
     settings = get_settings()
+    user_turns_by_session: dict[str, int] = {}
     total_output_tokens = 0
     total_cache_hit_tokens = 0
     total_cache_miss_tokens = 0
+    curator_latencies: list[float] = []
+    total_curator_tool_calls = 0
     try:
-        # Guard the read against concurrent mutation
         async with trace_store._lock:
-            for turns in trace_store.by_session.values():
+            for session_id, turns in trace_store.by_session.items():
+                if not turns:
+                    continue
+                user_turns_by_session[session_id] = max(
+                    (t.user_turn_count for t in turns), default=0
+                )
                 for t in turns:
                     if t.output_tokens:
                         total_output_tokens += t.output_tokens
                     total_cache_hit_tokens += t.cache_hit_tokens
                     total_cache_miss_tokens += t.cache_miss_tokens
+                    if t.assembly_mode == "curator":
+                        curator_latencies.append(t.assembly_latency_ms)
+                        if t.curator_tool_log:
+                            total_curator_tool_calls += len(t.curator_tool_log)
     except Exception:
         pass
     output_cost = total_output_tokens * settings.pricing_output_per_million / 1_000_000
@@ -138,20 +140,8 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
         round(cache_hits / cache_total, 4) if cache_total > 0 else 0.0
     )
 
-    # Average assembly latency from trace store (curator turns only)
-    curator_latencies = []
-    total_curator_tool_calls = 0
-    try:
-        # Guard the read against concurrent mutation
-        async with trace_store._lock:
-            for turns in trace_store.by_session.values():
-                for t in turns:
-                    if t.assembly_mode == "curator":
-                        curator_latencies.append(t.assembly_latency_ms)
-                        if t.curator_tool_log:
-                            total_curator_tool_calls += len(t.curator_tool_log)
-    except Exception:
-        pass
+    # Average assembly latency (curator turns only). Collected above in the
+    # single trace-store snapshot (D10).
     avg_curator_latency_ms = (
         round(sum(curator_latencies) / len(curator_latencies), 1)
         if curator_latencies
