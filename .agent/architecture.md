@@ -817,6 +817,57 @@ uv pip install -e ../archolith-filter  # from inside archolith-context
 
 archolith-filter has zero dependency on archolith-context and can be used independently as a standalone token-reduction library in any Python project.
 
+## Plugin System
+
+archolith-proxy ships with a formal plugin contract so sibling modules (filter, audit, memory) integrate through a single standard lifecycle instead of ad-hoc sentinel patterns.
+
+### ProxyPlugin Protocol (`archolith_proxy/plugins/registry.py`)
+
+A `@runtime_checkable` Protocol. Any object that implements these six members satisfies the contract:
+
+| Member | Purpose |
+|--------|---------|
+| `plugin_id: str` | Unique identifier (`"filter"`, `"audit"`, `"memory"`) |
+| `plugin_version: str` | Semantic version of the plugin |
+| `async activate() -> bool` | Called at proxy startup. Return True if ready, False if degraded. Raise to report error. Proxy always starts. |
+| `async deactivate() -> None` | Called at proxy shutdown. Best-effort; exceptions are swallowed. |
+| `async healthcheck() -> dict` | Returns `{"status": "ok"|"degraded"|"unavailable", ...}` |
+| `contribute_metrics() -> dict[str, int|float]` | Flat counters for `/metrics`. Must not block. |
+
+### PluginRegistry (`archolith_proxy/plugins/__init__.py`)
+
+Process-level singleton (`get_plugin_registry()`). Responsibilities:
+
+- `register(plugin)` — called by built-in plugins at startup
+- `activate_all()` — called in lifespan startup; fail-safe per plugin
+- `deactivate_all()` — called in lifespan shutdown
+- `aggregate_metrics()` — merges plugin metrics under `plugins.<id>.*` keys
+- `healthcheck(id)` — delegates to plugin's `healthcheck()`
+- `list_plugins()` — id, version, status for admin surface
+
+### Built-in Plugins
+
+| Plugin | File | What it wraps |
+|--------|------|---------------|
+| `FilterPlugin` | `plugins/filter_plugin.py` | `filter_adapter.py` sentinels; reads `FilterTelemetryStore` |
+| `MemoryPlugin` | `plugins/memory_plugin.py` | `memory/registry.py`; reports engine count + promotion counters |
+| `AuditPlugin` | `plugins/audit_plugin.py` | `archolith_mcp_audit`; optional `LiveAccumulator` attachment |
+
+### Configuration
+
+```env
+PLUGINS_ENABLED=filter,memory   # Only these activate (empty = all)
+PLUGINS_DISABLED=audit          # Always blocked even if in ENABLED
+```
+
+Version compatibility is enforced: `MIN_PLUGIN_VERSIONS` in `registry.py` defines the minimum acceptable version per plugin. A mismatch logs an error with a `pip install archolith-proxy[<id>]` hint; the proxy still starts.
+
+### Admin Surface
+
+- `GET /plugins` — list all plugins with status, version, counts
+- `GET /plugins/{id}` — single plugin detail + live health + metrics
+- `GET /metrics` → `plugins` key — aggregated plugin metrics grouped by plugin ID
+
 ## External Dependencies
 
 | Service | Purpose | Required |
