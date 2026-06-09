@@ -1,5 +1,31 @@
 # Changelog
 
+## [unreleased] — 2026-06-09 — Dedup + cheap hardening (defects #3, #4, #5, D6)
+
+### Fixed
+- **extraction**: dedup now checks **all** session facts via a content-hash set, not a recency-bounded window. `get_active_facts(limit=fact_pool_limit)` only compared the most recent facts, so semantic duplicates of older facts re-entered the graph; the new path compares against `get_all_fact_hashes(session_id)` (every active fact). The `fact_pool_at_capacity` warning is removed (no longer applicable). Trade-off: exact (post-normalization) content duplicates are caught across the full pool, but near-duplicate (Jaccard) matching against the stored pool no longer applies — within-extraction near-duplicate collapsing (`deduplicate_facts` in the per-tool merge) is unchanged. (`archolith_proxy/openai/extraction.py`, `archolith_proxy/extractor/dedup.py`, `archolith_proxy/graph/ladybug_backend.py`, defect #3 from 2026-06-09 audit)
+- **models**: widen `PromotionRecord.compute_dedupe_key` from 64 to 128 bits (`hexdigest()[:16]` → `[:32]`), eliminating the practical collision risk that could silently drop a distinct fact. (`archolith_proxy/memory/models.py`, defect #4)
+  NOTE: existing 16-char dedupe keys in the DB are incompatible with new 32-char keys. On upgrade, facts promoted before this fix may not dedup against post-fix keys for the same content — expect a one-time, bounded batch of near-duplicate promotions that subsequent dedup passes filter. Benign.
+- **backend**: WAL rotation "depth exceeded" error now reports the rotation depth at time of failure instead of the just-reset counter (was always "after 0 rotation attempts"). (`archolith_proxy/graph/ladybug_backend.py`, defect #5, cosmetic)
+- **extractor**: per-tool merge guards against `facts=None`/`files_touched=None` from any extractor (`r.facts or []`), preventing `TypeError` on `list.extend(None)`. (`archolith_proxy/extractor/client.py`, design risk D6)
+
+### Tests
+- `tests/test_extractor/test_dedup.py` — `_fact_content_hash` + `deduplicate_facts_by_hash`: beyond-recency-window duplicate rejected, cross-session content kept, within-batch exact-dup collapse, content-only hashing.
+- `tests/test_extractor/test_per_tool_extraction.py` — extractor returning `facts=None` no longer crashes the merge.
+
+---
+
+## [unreleased] — 2026-06-09 — Concurrency correctness (defects #1 and #2)
+
+### Fixed
+- **extraction**: fail closed (return early) when session lock acquire times out — prevents unserialized file-cache, dedup, and graph writes when a competing turn holds the session lock. (`archolith_proxy/openai/extraction.py`, defect #1 from 2026-06-09 audit)
+- **sessions**: serialize `find_or_create_by_fingerprint` per fingerprint with a double-checked `asyncio.Lock` — prevents duplicate Session nodes when two concurrent first requests for the same client fingerprint both observe no existing session. (`archolith_proxy/graph/ladybug_sessions.py`, defect #2 from 2026-06-09 audit)
+
+### Tests
+- `tests/test_extraction_concurrency.py` — two new concurrency tests written before fixes to prove both defects, confirm they pass after.
+
+---
+
 ## 2026-06-07 — Deep RTK → filter rename (DTO + trace builder + dashboard)
 
 Complete nomenclature unification across trace DTO, builder, logs, and dashboard:

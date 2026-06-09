@@ -604,3 +604,41 @@ Canonical outbound payload for one promoted fact.
 | `update_promoted` | `bool` | `False` |
 | `delete_promoted` | `bool` | `False` |
 | `healthcheck` | `bool` | `True` |
+
+## Plugin System Models
+
+### ProxyPlugin Protocol (`archolith_proxy/plugins/registry.py`)
+
+`@runtime_checkable` Protocol. Six required members:
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `plugin_id` | `str` (property) | Unique ID — `"filter"`, `"audit"`, `"memory"` |
+| `plugin_version` | `str` (property) | Semantic version string |
+| `activate()` | `async -> bool` | Startup hook. True = ready, False = degraded, raise = error |
+| `deactivate()` | `async -> None` | Shutdown hook. Best-effort. |
+| `healthcheck()` | `async -> dict` | Returns `{"status": "ok"|"degraded"|"unavailable", ...}` |
+| `contribute_metrics()` | `-> dict[str, int\|float]` | Flat counters for `/metrics`; must not block |
+
+### PluginRegistry
+
+Process-level singleton (`get_plugin_registry()`). Tracks plugin instances and their lifecycle statuses.
+
+| Status | Meaning |
+|--------|---------|
+| `inactive` | Registered but not yet activated, or disabled by config |
+| `active` | `activate()` returned `True` |
+| `degraded` | `activate()` returned `False` |
+| `error` | `activate()` raised, or version below `MIN_PLUGIN_VERSIONS` |
+
+### MIN_PLUGIN_VERSIONS
+
+```python
+MIN_PLUGIN_VERSIONS: dict[str, str] = {
+    "filter": "0.1.0",
+    "audit": "0.1.0",
+    "memory": "0.1.0",
+}
+```
+
+Version check runs before `activate()`. Mismatch → status `error`, proxy still starts.

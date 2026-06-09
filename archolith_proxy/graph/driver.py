@@ -14,6 +14,15 @@ from archolith_proxy.config import get_settings
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "init_driver",
+    "get_driver",
+    "is_connected",
+    "close_driver",
+    "get_database",
+    "ensure_indexes",
+]
+
 # Shared driver — initialized once in app lifespan
 _driver: neo4j.AsyncDriver | None = None
 

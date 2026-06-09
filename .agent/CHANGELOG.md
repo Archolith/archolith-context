@@ -1,5 +1,16 @@
 # Changelog — archolith-context
 
+## 2026-06-09 — Plugin System (ProxyPlugin contract + built-in plugins + unified distribution)
+
+- **`archolith_proxy/plugins/`** (new): `ProxyPlugin` `@runtime_checkable` Protocol with six lifecycle members (`plugin_id`, `plugin_version`, `activate`, `deactivate`, `healthcheck`, `contribute_metrics`). `PluginRegistry` singleton manages lifecycle with fail-safe contract — no plugin misbehavior can prevent proxy startup. `PLUGINS_ENABLED` / `PLUGINS_DISABLED` env var gating; `MIN_PLUGIN_VERSIONS` enforces minimum compatible versions with clear error logging.
+- **Built-in plugins**: `FilterPlugin` (wraps `filter_adapter.py` sentinels; exposes `FilterTelemetryStore` stats), `MemoryPlugin` (reads `MemoryEngineRegistry`; reports engine count + promotion counters), `AuditPlugin` (availability probe for `archolith_mcp_audit`; optional `LiveAccumulator` attachment). All three auto-registered at proxy startup.
+- **`archolith_proxy/routers/plugins.py`**: `GET /plugins` (list with summary counts), `GET /plugins/{id}` (detail + live health + metrics). Registered with admin auth.
+- **`GET /metrics`**: extended with `plugins` key — aggregated plugin metrics grouped by plugin ID.
+- **Dashboard**: Plugins card shown when any plugin is registered.
+- **`pyproject.toml`**: bumped to `0.5.0`; added `[filter]`, `[audit]`, `[full]` optional extras (`pip install archolith-proxy[full]`).
+- **README**: Install section with one-liner extras commands; `archolith-proxy` CLI replaces `python -m`.
+- **57 tests** covering protocol compliance, fail-safe lifecycle, config gating, version compat, health, metrics aggregation, router endpoints, and all three built-in plugin wrappers.
+
 ## 2026-06-08 — Structural Token Accounting (TODO #8, trace + gating)
 
 - **`archolith_proxy/token_accounting/`** (new): structural token estimator salvaged from the `feat/evaluation-and-rollout` branch. Counts tool schemas, `tool_calls`, tool-result payloads, and message framing that the crude `len(json.dumps)//4` estimate missed. `build_telemetry` produces content / structural / client-reported estimates + a gate decision; `extract_client_hint` reads `X-Context-Token-Hint`. Uses tiktoken (cl100k_base) with a `len/3.6` fallback. 34 ported unit tests.

@@ -6,9 +6,11 @@ import pytest
 
 from archolith_proxy.extractor.dedup import (
     DEFAULT_SIMILARITY_THRESHOLD,
+    _fact_content_hash,
     _normalize,
     _tokenize,
     deduplicate_facts,
+    deduplicate_facts_by_hash,
     is_duplicate,
     jaccard_similarity,
 )
@@ -245,3 +247,81 @@ class TestMergeLevelDedup:
         # Should drop the first (near-dup) and keep the second
         assert len(result) == 1
         assert result[0]["content"] == "Auth module uses JWT tokens for authentication"
+
+
+# ── Hash-set dedup (defect #3) ──────────────────────────────────────────────
+
+class TestFactContentHash:
+    def test_stable_and_32_chars(self):
+        h = _fact_content_hash({"content": "src/main.py is a FastAPI app"})
+        assert len(h) == 32
+        assert h == _fact_content_hash({"content": "src/main.py is a FastAPI app"})
+
+    def test_normalized_content_collapses(self):
+        """Trivial formatting differences hash to the same value."""
+        a = _fact_content_hash({"content": "Some Fact."})
+        b = _fact_content_hash({"content": '  "some fact"  '})
+        assert a == b
+
+    def test_distinct_content_differs(self):
+        a = _fact_content_hash({"content": "fact one"})
+        b = _fact_content_hash({"content": "fact two"})
+        assert a != b
+
+    def test_content_only_ignores_fact_type(self):
+        a = _fact_content_hash({"content": "same content", "fact_type": "observation"})
+        b = _fact_content_hash({"content": "same content", "fact_type": "decision"})
+        assert a == b
+
+
+class TestDeduplicateFactsByHash:
+    def test_rejects_duplicate_of_fact_beyond_recency_window(self):
+        """A duplicate of an *old* fact (well beyond a 200-row window) is rejected.
+
+        The hash set covers all facts in the session, not just the recent ones,
+        so an old fact's hash is present and its duplicate is dropped.
+        """
+        # Simulate a large pool: 500 prior facts, the *oldest* being the target.
+        old_fact = {"content": "the database uses PostgreSQL 16"}
+        pool = [old_fact] + [{"content": f"unrelated fact number {i}"} for i in range(499)]
+        existing_hashes = {_fact_content_hash(f) for f in pool}
+
+        new_facts = [
+            {"content": "the database uses PostgreSQL 16", "fact_type": "observation"},
+            {"content": "a brand new distinct fact", "fact_type": "state"},
+        ]
+        result = deduplicate_facts_by_hash(new_facts, existing_hashes)
+
+        assert len(result) == 1
+        assert result[0]["content"] == "a brand new distinct fact"
+
+    def test_cross_session_content_not_deduped(self):
+        """Identical content in a *different* session is kept.
+
+        Session scoping lives in ``get_all_fact_hashes`` (which queries a single
+        session), so a different session's hash set does not contain this
+        content's hash — modeled here as an empty existing set.
+        """
+        new_facts = [{"content": "the database uses PostgreSQL 16", "fact_type": "observation"}]
+        # Different session => its scoped hash set does not include this content.
+        result = deduplicate_facts_by_hash(new_facts, set())
+        assert len(result) == 1
+        assert result[0]["content"] == "the database uses PostgreSQL 16"
+
+    def test_within_batch_exact_duplicate_collapsed(self):
+        new_facts = [
+            {"content": "fact A", "fact_type": "observation"},
+            {"content": "fact A", "fact_type": "decision"},  # exact dup by content
+            {"content": "fact B", "fact_type": "state"},
+        ]
+        result = deduplicate_facts_by_hash(new_facts, set())
+        assert len(result) == 2
+        assert result[0]["content"] == "fact A"
+        assert result[1]["content"] == "fact B"
+
+    def test_empty_new_facts(self):
+        assert deduplicate_facts_by_hash([], {"abc"}) == []
+
+    def test_empty_existing_keeps_all(self):
+        new_facts = [{"content": "x"}, {"content": "y"}]
+        assert len(deduplicate_facts_by_hash(new_facts, set())) == 2

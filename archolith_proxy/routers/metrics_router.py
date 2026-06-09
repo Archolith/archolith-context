@@ -16,6 +16,25 @@ from archolith_proxy.trace.store import get_trace_store
 router = APIRouter()
 
 
+def _get_plugin_metrics() -> dict:
+    """Return aggregated plugin metrics from the registry."""
+    try:
+        from archolith_proxy.plugins import get_plugin_registry
+
+        registry = get_plugin_registry()
+        raw = registry.aggregate_metrics()
+        # Group by plugin ID: {"filter": {"hits": 5}, "audit": {...}}
+        grouped: dict[str, dict[str, int | float]] = {}
+        for key, value in raw.items():
+            parts = key.split(".", 2)  # "plugins.<id>.<metric>"
+            if len(parts) == 3:
+                _, pid, metric = parts
+                grouped.setdefault(pid, {})[metric] = value
+        return grouped
+    except Exception:
+        return {}
+
+
 def _get_circuit_states() -> dict[str, dict]:
     """Return per-session circuit breaker states for /metrics."""
     try:
@@ -162,7 +181,6 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
         "avg_token_savings_per_request": avg_token_savings,
         "token_savings_rate": token_savings_rate,
         "total_input_tokens_seen": get_metrics()["total_input_tokens_seen"],
-        "compaction_applied": get_metrics()["compaction_applied"],
         "curator_calls": curator_calls,
         "curator_timeouts": curator_timeouts,
         "curator_fallbacks": curator_fallbacks,
@@ -207,4 +225,5 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
             "input_cached_per_million": settings.pricing_input_cached_per_million,
             "output_per_million": settings.pricing_output_per_million,
         },
+        "plugins": _get_plugin_metrics(),
     }

@@ -241,10 +241,11 @@ class LadybugBackend:
                                note="rotating to fresh DB path")
                 self._rotation_depth += 1
                 if self._rotation_depth > 3:
-                    logger.error("ladybug_rotation_depth_exceeded", path=self._db_path, depth=self._rotation_depth,
+                    _depth_at_failure = self._rotation_depth
+                    logger.error("ladybug_rotation_depth_exceeded", path=self._db_path, depth=_depth_at_failure,
                                  error=str(e), note="giving up after 3 rotation attempts")
                     self._rotation_depth = 0
-                    raise RuntimeError(f"LadybugDB connection failed after {self._rotation_depth} rotation attempts: {e}")
+                    raise RuntimeError(f"LadybugDB connection failed after {_depth_at_failure} rotation attempts: {e}")
                 await self.close()
                 self._db_path = _rotate_db_path(self._db_path)
                 logger.info("ladybug_rotating_to_fresh", new_path=self._db_path, attempt=self._rotation_depth)
@@ -339,6 +340,7 @@ class LadybugBackend:
             # Fact CRUD
             "store_fact", "store_facts_batch", "invalidate_facts",
             "find_matching_fact_ids", "get_active_facts", "get_active_fact_count",
+            "get_all_fact_hashes",
             "get_facts_filtered", "get_invalidated_facts", "get_supersession_chain",
             # All edge operations (single and bulk)
             "create_belongs_to", "create_touches", "bulk_create_touches",
@@ -446,6 +448,23 @@ class LadybugBackend:
 
     async def get_active_fact_count(self, session_id: str) -> int:
         return await get_active_fact_count(self._execute, session_id)
+
+    async def get_all_fact_hashes(self, session_id: str) -> set[str]:
+        """Return content hashes for *all* active facts in a session (no recency limit).
+
+        Lightweight: selects only the ``content`` column and hashes it in Python,
+        so payload size does not grow with the embedding vectors. Used by the
+        extraction dedup path to catch duplicates of facts that fall beyond the
+        recency window of ``get_active_facts`` (audit defect #3).
+        """
+        from archolith_proxy.extractor.dedup import _fact_content_hash
+
+        rows = await self._execute(
+            "MATCH (f:Fact {session_id: $session_id}) WHERE f.valid_until IS NULL "
+            "RETURN f.content AS content",
+            {"session_id": session_id},
+        )
+        return {_fact_content_hash({"content": r.get("content", "")}) for r in rows}
 
     async def get_facts_filtered(self, session_id: str, fact_type: str | None = None,
                                  min_confidence: float | None = None, from_turn: int | None = None,

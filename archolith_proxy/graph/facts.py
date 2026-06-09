@@ -14,6 +14,18 @@ from archolith_proxy.models.graph_nodes import FactType
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "store_fact",
+    "store_facts_batch",
+    "invalidate_facts",
+    "find_matching_fact_ids",
+    "get_active_facts",
+    "get_active_fact_count",
+    "get_facts_filtered",
+    "get_supersession_chain",
+    "get_invalidated_facts",
+]
+
 # Similarity threshold for matching invalidated descriptions to existing facts
 _INVALIDATION_MATCH_THRESHOLD = 0.60
 

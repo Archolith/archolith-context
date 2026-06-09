@@ -23,7 +23,7 @@ async def store_fact(execute, session_id: str, content: str, fact_type: str,
         """,
         {"fact_id": fact_id, "session_id": session_id, "content": content,
          "fact_type": fact_type, "confidence": confidence,
-         "source_turn": source_turn, "embedding": embedding if embedding is not None else []},
+         "source_turn": source_turn, "embedding": embedding if embedding is not None else None},
     )
     return fact_id
 

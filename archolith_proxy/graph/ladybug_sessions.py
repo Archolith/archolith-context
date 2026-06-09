@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from uuid import uuid4
+
+# Per-fingerprint locks serialise the find-or-create slow path so that two
+# concurrent first requests for the same fingerprint cannot both observe no
+# session and each create one.  Keyed on fingerprint; grows to at most the
+# number of unique clients ever seen in this process lifetime.
+_fingerprint_create_locks: dict[str, asyncio.Lock] = {}
 
 # Re-export _execute type — callers pass the ladybug backend's _execute
 
@@ -98,22 +105,32 @@ async def find_session_by_fingerprint(execute, fingerprint: str) -> dict | None:
 async def find_or_create_by_fingerprint(execute, fingerprint: str) -> tuple[dict, bool]:
     """Find an existing session by fingerprint or create a new one.
 
-    Returns (session_data, is_new). NOTE: a true fingerprint-keyed atomic MERGE
-    is not possible in LadybugDB/kuzu because MERGE requires the primary key
-    (session_id) in the node pattern, and we key on fingerprint. This
-    lookup-then-create is safe under the proxy's single asyncio event loop (no
-    thread preemption between the lookup and the create); the post-create
-    re-query handles the rare failure path.
+    Returns (session_data, is_new). Serialised per fingerprint via
+    _fingerprint_create_locks to prevent duplicate session creation when two
+    concurrent first requests for the same fingerprint both observe no session.
+    The fast path (session already exists) skips the lock entirely.
     """
+    # Fast path: session already exists — no lock needed for read.
     existing = await find_session_by_fingerprint(execute, fingerprint)
     if existing:
         return existing, False
-    session_id = uuid4().hex[:16]
-    created = await create_session(execute, session_id, fingerprint=fingerprint)
-    if not created:
+
+    # Slow path: acquire per-fingerprint lock before creating.
+    if fingerprint not in _fingerprint_create_locks:
+        _fingerprint_create_locks[fingerprint] = asyncio.Lock()
+    lock = _fingerprint_create_locks[fingerprint]
+
+    async with lock:
+        # Double-check: a concurrent waiter may have already created the session.
         existing = await find_session_by_fingerprint(execute, fingerprint)
-        return existing or {}, False
-    return created, True
+        if existing:
+            return existing, False
+        session_id = uuid4().hex[:16]
+        created = await create_session(execute, session_id, fingerprint=fingerprint)
+        if not created:
+            existing = await find_session_by_fingerprint(execute, fingerprint)
+            return existing or {}, False
+        return created, True
 
 
 async def touch_session(execute, session_id: str) -> None:

@@ -978,6 +978,70 @@ class TestExtractFactsPerTool:
         assert len(grep_facts) >= 1
 
     @pytest.mark.asyncio
+    async def test_extractor_returning_none_facts_does_not_crash_merge(self):
+        """An extractor returning facts=None/files_touched=None must not break the merge (D6).
+
+        The protocol permits None; the merge loop guards with ``r.facts or []``.
+        """
+        from archolith_proxy.extractor.client import extract_facts_per_tool
+
+        class NoneReturningExtractor(ToolExtractor):
+            tool_names = ("NoneTool",)
+            async def extract(self, record, http_client, turn_number, session_goal):
+                return PartialExtractionResult(
+                    source_tool="NoneTool", facts=None, files_touched=None
+                )
+
+        reg = ToolExtractorRegistry()
+        reg.register(NoneReturningExtractor())
+        from archolith_proxy.extractor.extractors.grep import GrepExtractor
+        reg.register(GrepExtractor())
+        reg.set_default(GrepExtractor())
+
+        # Turn-level LLM returns nothing extra.
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({
+                "facts": [], "decisions": [], "session_goal": None, "checkpoint": None,
+                "issues": [], "verifications": [], "files_touched": [], "invalidated": [],
+            })}}]
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        records = [
+            ToolCallRecord(tool_call_id="1", tool_name="NoneTool", args={}, result="x"),
+            ToolCallRecord(tool_call_id="2", tool_name="Grep", args={"pattern": "x"}, result="a.py:1:x"),
+        ]
+
+        with patch("archolith_proxy.extractor.client.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                extractor_model="gpt-4.1-mini",
+                extractor_base_url="https://api.openai.com/v1",
+                extractor_api_key="test",
+                extractor_llm_concurrency=3,
+            )
+            import archolith_proxy.extractor.client as client_mod
+            client_mod._llm_semaphore = None
+
+            # Must not raise TypeError on list.extend(None).
+            result = await extract_facts_per_tool(
+                http_client=mock_client,
+                turn_number=1,
+                user_message="test",
+                assistant_response="test",
+                tool_records=records,
+                session_goal=None,
+                registry=reg,
+            )
+
+        assert result is not None
+        # None-returning extractor contributed nothing; Grep facts survive.
+        grep_facts = [f for f in result.facts if "[Grep]" in f.get("content", "")]
+        assert len(grep_facts) >= 1
+
+    @pytest.mark.asyncio
     async def test_semaphore_only_applied_to_llm_backed_extractors(self):
         """No-LLM extractors (Grep, Glob) bypass the semaphore; LLM extractor waits for it."""
         from archolith_proxy.extractor.client import _extract_with_semaphore

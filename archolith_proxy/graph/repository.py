@@ -20,6 +20,14 @@ from archolith_proxy.graph.driver import get_driver, get_database
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "LabelGuardViolation",
+    "run_query",
+    "run_write",
+    "CONTEXT_SESSION_LABEL",
+    "MEMORY_LABEL",
+]
+
 CONTEXT_SESSION_LABEL = "ContextSession"
 MEMORY_LABEL = "Memory"
 

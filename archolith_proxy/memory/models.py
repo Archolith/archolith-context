@@ -67,7 +67,7 @@ class PromotionRecord(BaseModel):
         preventing repeated promotions without intent.
         """
         raw = f"{self.session_id}:{self.fact_type}:{self.content}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     def with_auto_dedupe(self) -> PromotionRecord:
         """Return a copy with dedupe_key populated if empty."""

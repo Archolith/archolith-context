@@ -1,6 +1,6 @@
 [project]
 name = "archolith-proxy"
-version = "0.3.0"
+version = "0.5.0"
 description = "Self-hosted context intelligence proxy for LLMs — extracts knowledge, compresses context, remembers everything"
 requires-python = ">=3.12"
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
@@ -30,6 +30,9 @@ dependencies = [
     "ladybug>=0.16.0",
 ]
 
+[project.scripts]
+archolith-proxy = "archolith_proxy.main:run"
+
 [project.urls]
 Homepage = "https://archolith.dev"
 Repository = "https://github.com/Archolith/archolith-context"
@@ -40,7 +43,17 @@ Benchmarks = "https://github.com/ctharvey/archolith-bench"
 java = [
     "javalang>=0.13.0",
 ]
+filter = [
+    "archolith-filter>=0.1.0",
+]
+audit = [
+    "archolith-audit>=0.1.0",
+]
+full = [
+    "archolith-proxy[filter,audit]",
+]
 dev = [
+    "archolith-proxy[full]",
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "pytest-httpx>=0.35.0",

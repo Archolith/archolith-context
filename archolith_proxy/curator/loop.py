@@ -234,9 +234,9 @@ async def _run_curator_native(
             content = (choice.message.content or "").strip()
             if not content:
                 # Model returned stop with empty content — retry once with an
-                # explicit nudge before giving up.  This recovers from the
-                # transient gpt-4.1-mini behaviour where it suppresses its
-                # inline answer when tool_choice="auto" confuses it.
+                # explicit nudge before giving up. This recovers from transient
+                # LLM behaviour where it suppresses its inline answer when
+                # tool_choice="auto" confuses it.
                 if iteration == 0:
                     logger.info(
                         "curator_empty_final_retry",

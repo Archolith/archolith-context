@@ -11,6 +11,20 @@ from archolith_proxy.models.graph_nodes import SessionStatus
 
 logger = structlog.get_logger()
 
+__all__ = [
+    "create_session",
+    "find_by_session_id",
+    "find_by_fingerprint",
+    "find_or_create_by_fingerprint",
+    "touch_session",
+    "get_turn_number",
+    "update_goal",
+    "set_session_config_overrides",
+    "get_session_config_overrides",
+    "list_active_sessions",
+    "get_session_stats",
+]
+
 
 async def create_session(session_id: str, fingerprint: str | None = None) -> dict:
     """Create a new session node."""
