@@ -572,6 +572,7 @@ async def stream_with_recall_detection(
     decision_made = False
     is_recall = False
     recall_buffered_lines: list[str] = []
+    late_recall_sentinel_seen = False
     start_time = time.monotonic()
 
     async for line in upstream_response.aiter_lines():
@@ -660,6 +661,16 @@ async def stream_with_recall_detection(
             continue
 
         if decision_made and not is_recall:
+            # D3: a recall sentinel arriving after the decision window closed is
+            # not intercepted (we are committed to passthrough). Surface it once
+            # so the bypass is observable rather than silent.
+            if not late_recall_sentinel_seen and recall_tool_name in line:
+                late_recall_sentinel_seen = True
+                logger.warning(
+                    "streaming_recall_sentinel_after_timeout",
+                    recall_tool_name=recall_tool_name,
+                    note="recall tool call appeared after the decision window; not intercepted",
+                )
             # Passthrough — yield lines directly
             yield (line, None, None)
 

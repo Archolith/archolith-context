@@ -212,7 +212,10 @@ async def _handle_streaming(
                 )
 
                 recall_result_obj = None
-                async for line, result, cap in stream_with_recall_detection(upstream_resp, RECALL_TOOL_NAME):
+                _recall_decision_timeout = get_settings().streaming_recall_decision_timeout_s
+                async for line, result, cap in stream_with_recall_detection(
+                    upstream_resp, RECALL_TOOL_NAME, decision_timeout_s=_recall_decision_timeout
+                ):
                     if result is not None and result.is_recall:
                         recall_result_obj = result
                         break

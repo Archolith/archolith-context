@@ -124,6 +124,10 @@ class Settings(BaseSettings):
 
     # Session recall as proxy-intercepted tool (injects __archolith_recall)
     session_recall_tool_enabled: bool = False
+    # Seconds to buffer a streaming response while deciding whether the model is
+    # calling the recall tool. A recall sentinel arriving after this window is
+    # not intercepted (logged as streaming_recall_sentinel_after_timeout).
+    streaming_recall_decision_timeout_s: float = 5.0
 
     # Agent-initiated synthetic tools (recall_session_work, recall_files_read)
     # Injects two tool definitions that the model can call to get structured
