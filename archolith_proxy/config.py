@@ -271,6 +271,9 @@ class Settings(BaseSettings):
     # When empty (default), admin endpoints are open (localhost-only assumption).
     # When set, all operator endpoints require X-Admin-Token or Authorization: Bearer matching this value.
     admin_token: str = ""
+    # Escape hatch: when True, an empty admin_token leaves admin endpoints open
+    # even to non-loopback peers. Default False — empty token is loopback-only.
+    admin_allow_open_nonlocal: bool = False
 
     # Plugin enable/disable — comma-separated plugin IDs.
     # PLUGINS_ENABLED: when non-empty, only listed plugins activate.
