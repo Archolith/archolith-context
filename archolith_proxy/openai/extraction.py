@@ -51,7 +51,13 @@ async def _run_extraction(
         await asyncio.wait_for(lock.acquire(), timeout=10.0)
         acquired = True
     except asyncio.TimeoutError:
-        logger.warning("extraction_lock_acquire_timeout", session_id=session_id, turn=turn_number)
+        logger.warning(
+            "extraction_lock_acquire_timeout",
+            session_id=session_id,
+            turn=turn_number,
+            note="skipping extraction — fail closed",
+        )
+        return
 
     try:
         user_message = ""
