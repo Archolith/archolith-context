@@ -164,16 +164,9 @@ async def _run_extraction(
                 trace_builder.set_extraction(extraction_latency_ms=extraction_latency_ms)
             return
 
-        from archolith_proxy.extractor.dedup import deduplicate_facts as _deduplicate_facts
-        _fact_limit = get_settings().fact_pool_limit
-        existing_facts = await get_backend().get_active_facts(session_id, limit=_fact_limit)
-        if len(existing_facts) >= _fact_limit:
-            logger.warning(
-                "fact_pool_at_capacity",
-                session_id=session_id, turn=turn_number, limit=_fact_limit,
-                msg="dedup may miss older facts beyond the pool limit",
-            )
-        unique_facts = _deduplicate_facts(result.facts, existing_facts)
+        from archolith_proxy.extractor.dedup import deduplicate_facts_by_hash as _dedup_by_hash
+        existing_hashes = await get_backend().get_all_fact_hashes(session_id)
+        unique_facts = _dedup_by_hash(result.facts, existing_hashes)
         if len(unique_facts) < len(result.facts):
             logger.info(
                 "extraction_dedup_applied",

@@ -9,6 +9,8 @@ from shared so the graph layer can depend on shared instead of extractor.
 
 from __future__ import annotations
 
+import hashlib
+
 import structlog
 
 from archolith_proxy.shared.text_utils import (
@@ -23,6 +25,8 @@ __all__ = [
     "DEFAULT_SIMILARITY_THRESHOLD",
     "is_duplicate",
     "deduplicate_facts",
+    "deduplicate_facts_by_hash",
+    "_fact_content_hash",
     # Re-exported from shared.text_utils for backward compat
     "_normalize",
     "_tokenize",
@@ -31,6 +35,56 @@ __all__ = [
 
 # Default similarity threshold — skip if Jaccard > this value
 DEFAULT_SIMILARITY_THRESHOLD = 0.85
+
+
+def _fact_content_hash(fact: dict) -> str:
+    """Return a stable 128-bit content hash for a fact (32 hex chars).
+
+    Hashes the fact's normalized ``content`` only. Normalization (lowercase,
+    quote/whitespace/trailing-punctuation stripping) means trivial formatting
+    differences collapse to the same hash. Session scoping is handled by the
+    caller (``get_all_fact_hashes`` queries a single session), so the session
+    id is deliberately excluded here — identical content in a different session
+    is not a duplicate because that session's hash set will not contain it.
+
+    The 32-char (128-bit) width matches ``PromotionRecord.compute_dedupe_key``,
+    making collisions practically impossible.
+    """
+    content = _normalize(fact.get("content", ""))
+    return hashlib.sha256(content.encode()).hexdigest()[:32]
+
+
+def deduplicate_facts_by_hash(
+    new_facts: list[dict],
+    existing_hashes: set[str],
+) -> list[dict]:
+    """Filter new facts, dropping any whose content hash is already known.
+
+    Unlike :func:`deduplicate_facts` (Jaccard near-duplicate matching against a
+    bounded recency window), this compares exact content hashes against a set
+    that covers *all* facts in the session — so duplicates of facts beyond the
+    recency window are still caught (audit defect #3). The trade-off is that only
+    exact (post-normalization) duplicates are removed, not near-duplicates.
+
+    Also deduplicates within the ``new_facts`` batch: if two new facts share a
+    content hash, only the first is kept.
+
+    Args:
+        new_facts: Candidate facts to store.
+        existing_hashes: Content hashes of all facts already in the session.
+
+    Returns:
+        Filtered list of new facts with exact-duplicate content removed.
+    """
+    seen = set(existing_hashes)
+    kept: list[dict] = []
+    for fact in new_facts:
+        h = _fact_content_hash(fact)
+        if h in seen:
+            continue
+        seen.add(h)
+        kept.append(fact)
+    return kept
 
 
 def is_duplicate(
