@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from pathlib import Path
 
 import structlog
@@ -58,8 +58,9 @@ class TraceStore:
         self._by_session: dict[str, list[TurnTrace]] = defaultdict(list)
         # turn_id -> TurnTrace (global index for direct lookup)
         self._by_turn_id: dict[str, TurnTrace] = {}
-        # Track insertion order for LRU eviction
-        self._session_order: list[str] = []
+        # Track access order for LRU eviction. OrderedDict gives O(1) move-to-end
+        # and pop-oldest, vs. O(n) list.remove() per touch (D9). Keys only.
+        self._session_order: "OrderedDict[str, None]" = OrderedDict()
         self._total_traces = 0
         # Per-session metadata (harness_env, etc.) — set once on session creation
         self._session_meta: dict[str, dict[str, object]] = {}
@@ -117,20 +118,16 @@ class TraceStore:
                 oldest = turn_list.pop(0)
                 self._by_turn_id.pop(oldest.turn_id, None)
 
-            # Evict least-recently-active session if over global cap
-            if session_id not in self._session_order:
-                self._session_order.append(session_id)
-            else:
-                # Move to end (most-recently touched)
-                self._session_order.remove(session_id)
-                self._session_order.append(session_id)
+            # Mark this session most-recently-active (move to end). O(1).
+            self._session_order.pop(session_id, None)
+            self._session_order[session_id] = None
 
             while len(self._by_session) > self._max_sessions:
-                # Evict the least-recently-active session
-                evict_sid = self._session_order[0]
+                # Evict the least-recently-active session (front of the order).
+                evict_sid = next(iter(self._session_order))
                 if evict_sid != session_id:
                     self._drop_session_state(evict_sid)
-                    self._session_order.pop(0)
+                    self._session_order.pop(evict_sid, None)
                 else:
                     break  # Can't evict the current session
 
@@ -390,7 +387,7 @@ class TraceStore:
                             self._total_traces += 1
                             loaded += 1
                             if session_id not in self._session_order:
-                                self._session_order.append(session_id)
+                                self._session_order[session_id] = None
                         except Exception:
                             continue  # Skip malformed lines
             except Exception:
