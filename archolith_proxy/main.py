@@ -288,10 +288,18 @@ async def lifespan(app: FastAPI):
 
     configure_curation_mode()
 
-    # Activate all registered plugins (fail-safe — proxy always starts)
+    # Register built-in plugins before activation
     from archolith_proxy.plugins import get_plugin_registry
+    from archolith_proxy.plugins.filter_plugin import FilterPlugin
+    from archolith_proxy.plugins.memory_plugin import MemoryPlugin
+    from archolith_proxy.plugins.audit_plugin import AuditPlugin
 
     plugin_registry = get_plugin_registry()
+    plugin_registry.register(FilterPlugin())
+    plugin_registry.register(MemoryPlugin())
+    plugin_registry.register(AuditPlugin())
+
+    # Activate all registered plugins (fail-safe — proxy always starts)
     plugin_results = await plugin_registry.activate_all()
     if plugin_results:
         active_count = sum(1 for ok in plugin_results.values() if ok)
