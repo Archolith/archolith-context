@@ -207,6 +207,10 @@ async def lifespan(app: FastAPI):
         timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0),
     )
 
+    # D4: track whether a configured graph backend ended up degraded so /health
+    # can report it honestly instead of always returning 200.
+    app.state.graph_degraded_reason = None
+
     if settings.graph_backend == "ladybug":
         try:
             from archolith_proxy.graph.ladybug_backend import LadybugBackend
@@ -219,8 +223,10 @@ async def lifespan(app: FastAPI):
             )
             logger.info("ladybug_initialized", db_path=settings.ladybug_db_path)
         except ImportError:
+            app.state.graph_degraded_reason = "ladybug not installed"
             logger.error("ladybug_not_installed", note="pip install ladybug, or set GRAPH_BACKEND=neo4j")
         except Exception as e:
+            app.state.graph_degraded_reason = f"ladybug init failed: {e}"
             logger.warning("ladybug_init_failed", error=str(e), note="proxy will run without graph features")
     elif settings.session_neo4j_password:
         await _init_neo4j_with_retry(
@@ -230,6 +236,16 @@ async def lifespan(app: FastAPI):
         )
     else:
         logger.info("graph_not_configured", note="set GRAPH_BACKEND=ladybug or SESSION_NEO4J_PASSWORD for graph features")
+
+    # D4: a configured graph backend that did not come up is "degraded", not
+    # "not_configured". Surface it; optionally fail closed.
+    graph_configured = settings.graph_backend == "ladybug" or bool(settings.session_neo4j_password)
+    if graph_configured and not is_graph_ready():
+        reason = app.state.graph_degraded_reason or "graph backend configured but not ready after init"
+        app.state.graph_degraded_reason = reason
+        if settings.require_graph_on_startup:
+            raise RuntimeError(f"Graph backend required but not ready: {reason}")
+        logger.warning("graph_degraded", reason=reason)
 
     from archolith_proxy.proxy.live import get_live_stream
 
@@ -465,7 +481,13 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health(request: Request) -> dict:
-        """Legacy health endpoint (compatibility). Delegates to readiness."""
+        """Health endpoint. Reports degraded graph state honestly (D4).
+
+        A graph backend that was configured but failed to initialize is reported
+        as ``degraded`` (HTTP 503), distinct from an unconfigured graph (``ok``).
+        """
+        degraded_reason = getattr(request.app.state, "graph_degraded_reason", None)
+
         graph_status = "not_configured"
         if is_graph_ready():
             try:
@@ -475,6 +497,8 @@ def create_app() -> FastAPI:
             except Exception:
                 graph_status = "disconnected"
                 record_metric("neo4j_errors")
+        elif degraded_reason:
+            graph_status = "degraded"
 
         upstream_status = "unknown"
         try:
@@ -488,8 +512,8 @@ def create_app() -> FastAPI:
         except Exception:
             upstream_status = "unreachable"
 
-        return {
-            "status": "ok",
+        result = {
+            "status": "degraded" if degraded_reason else "ok",
             "graph": graph_status,
             "upstream": upstream_status,
             "version": __version__,
@@ -497,6 +521,10 @@ def create_app() -> FastAPI:
             if get_metrics()["start_time"]
             else 0,
         }
+        if degraded_reason:
+            result["graph_degraded_reason"] = degraded_reason
+            return JSONResponse(status_code=503, content=result)
+        return result
 
     return app
 

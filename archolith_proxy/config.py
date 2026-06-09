@@ -159,6 +159,9 @@ class Settings(BaseSettings):
     graph_backend: str = "neo4j"  # "neo4j" or "ladybug"
     ladybug_db_path: str = str(Path(__file__).parent.parent / "data" / "context.lbug")
     ladybug_max_concurrent: int = 8
+    # When True, abort startup if a configured graph backend fails to initialize
+    # instead of serving in a silently-degraded (passthrough-only) state.
+    require_graph_on_startup: bool = False
 
     # Optional: promotion to long-term memory
     memory_api_url: str = "http://localhost:8200"
