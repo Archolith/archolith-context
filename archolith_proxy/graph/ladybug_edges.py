@@ -38,6 +38,9 @@ async def create_touches(execute, session_id: str, file_path: str, status: str, 
         fid = existing[0]["f.file_id"]
         sets = []
         params = {"fid": fid}
+        # Allowlisted File properties that can be updated
+        _ALLOWED_PROPERTIES = {"status", "last_modified_turn", "last_read_turn"}
+
         sets.append("f.status = $status")
         params["status"] = status
         if status in ("modified", "created", "deleted"):
@@ -46,6 +49,13 @@ async def create_touches(execute, session_id: str, file_path: str, status: str, 
         if status == "read":
             sets.append("f.last_read_turn = $turn")
             params["turn"] = turn
+
+        # Validate SET clause properties against allowlist
+        for s in sets:
+            prop_name = s.split(" = ")[0].replace("f.", "")
+            if prop_name not in _ALLOWED_PROPERTIES:
+                raise ValueError(f"Unauthorized property in SET clause: {prop_name}")
+
         await execute(
             f"MATCH (f:File {{file_id: $fid}}) SET {', '.join(sets)}", params,
         )

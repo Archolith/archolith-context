@@ -239,6 +239,11 @@ async def _reconcile_turn_number(session_id: str) -> None:
         return
     _reconciled_sessions.add(session_id)
 
+    # Memory leak mitigation: cap the reconciliation set size to prevent unbounded growth
+    # when reconciling large numbers of sessions over a long-running process lifetime.
+    if len(_reconciled_sessions) > 100000:
+        _reconciled_sessions.clear()
+
     try:
         trace_max = await get_trace_store().get_max_turn_number(session_id)
         if trace_max is None:

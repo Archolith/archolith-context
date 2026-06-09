@@ -338,12 +338,16 @@ async def _run_extraction(
                             eligible_records.append(record)
 
                     if eligible_records:
+                        record_metric("promotions_attempted", len(eligible_records))
                         promo_results = await svc.promote_batch(
                             eligible_records, dry_run=settings.promotion_dry_run,
                         )
                         succeeded = sum(1 for r in promo_results if r.outcome.value == "success")
                         skipped = sum(1 for r in promo_results if r.outcome.value == "skipped")
                         failed = sum(1 for r in promo_results if r.outcome.value == "failed")
+                        record_metric("promotions_succeeded", succeeded)
+                        record_metric("promotions_failed", failed)
+                        record_metric("promotions_skipped", skipped)
                         logger.info(
                             "promotion_completed",
                             session_id=session_id, turn=turn_number,

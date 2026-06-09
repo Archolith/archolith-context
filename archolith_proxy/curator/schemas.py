@@ -317,13 +317,6 @@ SCORE_FILE_RELEVANCE_SCHEMA: dict = {
 PREPPER_TOOLS: list[dict] = [*ALL_CURATOR_TOOLS, SCORE_FILE_RELEVANCE_SCHEMA]
 
 # Assembler tool set — minimal: just select_relevant_turns + get_file_lines
-def _find_tool(name: str, tools: list[dict]) -> dict | None:
-    """Find a tool schema by name in a tool list."""
-    for t in tools:
-        if t.get("function", {}).get("name") == name:
-            return t
-    return None
-
 _ASSEMBLER_TOOL_NAMES = {"select_relevant_turns", "get_file_lines"}
 ASSEMBLER_TOOLS: list[dict] = [
     t for t in ALL_CURATOR_TOOLS

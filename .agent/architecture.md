@@ -148,32 +148,52 @@ Harness → POST /v1/chat/completions → Proxy
 ### Proxy Layer (`archolith_proxy/proxy/`, `archolith_proxy/openai/`, `archolith_proxy/routers/`)
 
 **Core proxy files** (`archolith_proxy/proxy/`):
-- `main.py` — FastAPI app factory with extracted operator routers for admin, sessions, metrics, memory admin, and live streaming
-- `live.py` — live stream handlers for SSE/streaming response pass-through and retry handling
-- `session.py` — session identification (fingerprint from system prompt + first user message)
-- `rewrite.py` — request rewriting orchestration (linear → graph-assembled)
-- `recall.py` — synthetic memory recall injection and fact-selection logic
-- `locks.py` — session-level locking primitives for concurrent turn handling
-- `streaming.py` — SSE streaming pass-through and chunk buffering
-- `agent_solo.py` — agent-solo turn compression and curator prefix-cache logic (covered separately below)
-- `tool_injection.py` — synthetic tool registration (memory_recall, file_read intercepts, prefetch)
-- `tool_intercept.py` — interception handlers for native file reads and tool-call dispatch
-- `upstream.py` — upstream API passthrough, rate-limit handling, response capture
-- `circuit_breaker.py` — adaptive circuit breaker for upstream failures and synthetic tool fallbacks
-- `synthetic_tools.py` — tool implementations (memory_recall, file_read, prefetch_file wrappers)
+
+Request/Response Orchestration:
+- `session.py` — session identification (fingerprint from system prompt + first user message); session state tracking and expiry
+- `rewrite.py` — request rewriting orchestration (linear → graph-assembled); message array rebuild with curator results and coherence tail
+- `upstream.py` — upstream API passthrough with exponential backoff retry logic; 429/500/502/503/504 + timeout resilience
+- `router.py` — routing decisions and mode classification (user turn vs agent-solo vs error recovery); assembly gate logic
+
+Streaming & Response Handling:
+- `live.py` — live stream handlers for SSE/streaming response pass-through and retry handling; WebSocket broadcast for extraction events
+- `streaming.py` — SSE streaming pass-through and chunk buffering; server-sent events transport for real-time response delivery
+
+Context Assembly & Recall:
+- `recall.py` — proxy-forced synthetic memory recall injection and fact-selection logic; triggers on repeated file reads or recall phrases in user messages; handles up to 2 nested recall rounds per turn
+- `agent_solo.py` — agent-solo turn compression and curator prefix-cache logic (covered separately below); deterministic token reduction for tool-call continuation turns
+
+Synthetic Tools & Injection:
+- `tool_injection.py` — synthetic tool registration (memory_recall, file_read intercepts, prefetch); tool schema injection and response parsing; __archolith_recall tool call detection and handling
+- `tool_intercept.py` — interception handlers for native file reads from cache; tool-call dispatch routing to synthetic handlers
+- `synthetic_tools.py` — tool implementations (recall_session_work, recall_files_read, recall_file); returns structured summaries from session graph and file cache
+
+Concurrency & Reliability:
+- `locks.py` — session-level locking primitives (async semaphores) for concurrent turn handling; per-session lock acquisition to gate extraction and graph writes
+- `circuit_breaker.py` — adaptive circuit breaker for upstream failures and synthetic tool fallbacks; per-session state with cooldown and hard-disable thresholds
 
 **OpenAI-compatible layer** (`archolith_proxy/openai/`):
-- `chat.py` — main `/v1/chat/completions` endpoint handler; routes to streaming or non-streaming paths
-- `streaming.py` — streaming response parsing, SSE chunk handling, delta accumulation
-- `non_streaming.py` — non-streaming response collection and finalization
-- `extraction.py` — post-response async extraction pipeline and fact indexing
-- `file_cache.py` — file content cache population from tool results
-- `helpers.py` — token counting, model resolution, payload formatting utilities
-- `schemas.py` — OpenAI-compatible Pydantic models (15 total; see Data Models section)
-- `models.py` — model catalog and upstream model delegation logic
-- `errors.py` — error handling and upstream error translation
-- `passthrough.py` — identity passthrough for non-curated requests (fallback mode)
-- `router.py` — routing decisions and mode classification (user turn vs agent-solo vs error recovery)
+
+Entry Points & Routing:
+- `chat.py` — main `/v1/chat/completions` endpoint handler; routes to streaming or non-streaming paths based on request `stream` flag; handles recall interception, synthetic tool injection, and extraction dispatch
+- `router.py` — FastAPI APIRouter for `/v1/chat/completions` and `/v1/models` endpoints; registers with the main app
+
+Response Handling:
+- `streaming.py` — streaming response parsing, SSE chunk handling, delta accumulation; collects streamed completion chunks into a full response for processing; handles recall and synthetic tool injection in streaming context
+- `non_streaming.py` — non-streaming response collection and finalization; validates response structure, applies filters, and prepares for extraction
+
+Extraction & Knowledge Graph:
+- `extraction.py` — post-response async extraction pipeline (off critical path); fact extraction, file content caching, invalidation logic, and promotion service dispatch; runs lock-gated per session with configurable concurrency
+- `file_cache.py` — file content cache population from tool results; SHA-256 dedup, line-count precomputation, FileContent node upsert
+
+Utilities & Schemas:
+- `helpers.py` — token counting (tiktoken cl100k_base), model resolution, payload formatting utilities; message normalization, tool result filtering before extractor LLM budget
+- `schemas.py` — OpenAI-compatible Pydantic models (ChatMessage, ChatCompletionRequest, Choice, Delta, etc.); request/response validation
+- `models.py` — model catalog and upstream model delegation logic; resolves upstream model names to actual endpoints
+
+Error Handling & Fallback:
+- `errors.py` — error handling and upstream error translation; maps HTTP status codes to OpenAI-compatible error responses
+- `passthrough.py` — identity passthrough for non-curated requests (fallback mode); returns original upstream response unchanged when assembly/curation fails
 
 ### Context Assembler (`archolith_proxy/assembler/`)
 

@@ -4,15 +4,8 @@
 TOUCHES = "TOUCHES"
 MODIFIES = "MODIFIES"
 
-# File → File
-IMPORTS = "IMPORTS"
-
 # Fact → Fact
-CAUSED_BY = "CAUSED_BY"
 SUPERSEDES = "SUPERSEDES"
-
-# Fact → Decision
-SUPPORTS = "SUPPORTS"
 
 # * → Session
 BELONGS_TO = "BELONGS_TO"
