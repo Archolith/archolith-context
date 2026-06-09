@@ -78,6 +78,7 @@ class ResponseCapture:
         self._finish_reason: str | None = None
         self._direct_text: str | None = None  # For non-streaming responses
         self._usage: dict | None = None  # Usage data from final SSE chunk
+        self._tool_calls: list[dict] = []  # tool_calls on the final message (D8)
 
     def add_chunk(self, chunk_data: str) -> None:
         """Add a parsed SSE chunk to the buffer."""
@@ -156,6 +157,11 @@ class ResponseCapture:
         if choices:
             message = choices[0].get("message", {})
             self._direct_text = _flatten_content(message.get("content"))
+            # D8: preserve tool_calls so the captured final message is complete
+            # (the re-send is often a tool-call-only turn with empty content).
+            tcs = message.get("tool_calls")
+            if tcs:
+                self._tool_calls = tcs
             fr = choices[0].get("finish_reason")
             if fr:
                 self._finish_reason = fr
@@ -192,6 +198,11 @@ class ResponseCapture:
     @property
     def finish_reason(self) -> str | None:
         return self._finish_reason
+
+    @property
+    def tool_calls(self) -> list[dict]:
+        """tool_calls on the captured final message (empty if none). D8."""
+        return self._tool_calls
 
     @property
     def truncated(self) -> bool:
