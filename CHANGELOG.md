@@ -1,5 +1,16 @@
 # Changelog
 
+## [unreleased] — 2026-06-09 — Concurrency correctness (defects #1 and #2)
+
+### Fixed
+- **extraction**: fail closed (return early) when session lock acquire times out — prevents unserialized file-cache, dedup, and graph writes when a competing turn holds the session lock. (`archolith_proxy/openai/extraction.py`, defect #1 from 2026-06-09 audit)
+- **sessions**: serialize `find_or_create_by_fingerprint` per fingerprint with a double-checked `asyncio.Lock` — prevents duplicate Session nodes when two concurrent first requests for the same client fingerprint both observe no existing session. (`archolith_proxy/graph/ladybug_sessions.py`, defect #2 from 2026-06-09 audit)
+
+### Tests
+- `tests/test_extraction_concurrency.py` — two new concurrency tests written before fixes to prove both defects, confirm they pass after.
+
+---
+
 ## 2026-06-07 — Deep RTK → filter rename (DTO + trace builder + dashboard)
 
 Complete nomenclature unification across trace DTO, builder, logs, and dashboard:
