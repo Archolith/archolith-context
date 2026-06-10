@@ -26,6 +26,7 @@ _UNRESOLVED = _LoadState.UNRESOLVED
 _filter_output_fn: Callable[..., Any] | None | _LoadState = _UNRESOLVED
 _shrink_args_fn: Callable[..., Any] | None | _LoadState = _UNRESOLVED
 _shrink_results_fn: Callable[..., Any] | None | _LoadState = _UNRESOLVED
+_dedupe_tracker_cls: type | None | _LoadState = _UNRESOLVED
 
 
 def _load_filter_output() -> Callable[..., Any] | None:
@@ -43,6 +44,50 @@ def _load_filter_output() -> Callable[..., Any] | None:
             )
             _filter_output_fn = None
     return _filter_output_fn if callable(_filter_output_fn) else None
+
+
+def _load_dedupe_tracker_cls() -> type | None:
+    """Lazy-load archolith_filter.DedupeTracker; fail open if unavailable."""
+    global _dedupe_tracker_cls
+    if _dedupe_tracker_cls is _UNRESOLVED:
+        try:
+            from archolith_filter import DedupeTracker as loaded_cls
+
+            _dedupe_tracker_cls = loaded_cls
+        except ImportError:
+            _dedupe_tracker_cls = None
+    return _dedupe_tracker_cls if isinstance(_dedupe_tracker_cls, type) else None
+
+
+def _supports_dedupe_tracker(fn: Callable[..., Any]) -> bool:
+    """True if fn accepts a dedupe_tracker kwarg (named param or **kwargs)."""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if "dedupe_tracker" in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _call_filter_output(filter_output: Callable[..., Any], content: str, tool_name: str) -> Any:
+    """Invoke filter_output with payload-replay dedup semantics.
+
+    The proxy re-sends full conversation history on every request, so the
+    cross-call dedupe in filter_output Stage 7 (process-global singleton)
+    would marker the ONLY copy of previously-seen content in later requests —
+    the re-read doom loop (2026-06-10). Passing a FRESH tracker per call makes
+    Stage 7 inert here; payload-level dedup is owned exclusively by agent-solo
+    Strategy B (payload-scoped, keep-newest, tail-guarded).
+    """
+    tracker_cls = _load_dedupe_tracker_cls()
+    if tracker_cls is not None and _supports_dedupe_tracker(filter_output):
+        return filter_output(content, tool=tool_name, dedupe_tracker=tracker_cls())
+    # Old archolith-filter without the kwarg: legacy singleton behavior
+    # (cross-request markering risk). Logged once at debug; upgrade the peer.
+    return filter_output(content, tool=tool_name)
 
 
 def _load_shrink_functions() -> tuple[Callable[..., Any] | None, Callable[..., Any] | None]:
@@ -105,7 +150,7 @@ def filter_tool_messages(messages: list[dict[str, Any]], enabled: bool) -> list[
 
         tool_name = str(message.get("name") or "tool_result")
         try:
-            result = filter_output(content, tool=tool_name)
+            result = _call_filter_output(filter_output, content, tool_name)
         except Exception as exc:
             logger.warning("filter_failed", tool=tool_name, error=str(exc))
             filtered_messages.append(message)
@@ -129,7 +174,7 @@ def filter_single_tool_result(content: str, tool_name: str = "unknown") -> str:
     if filter_output is None:
         return content
     try:
-        result = filter_output(content, tool=tool_name)
+        result = _call_filter_output(filter_output, content, tool_name)
         return result.output
     except Exception as exc:
         logger.debug("filter_single_failed", tool=tool_name, error=str(exc))
