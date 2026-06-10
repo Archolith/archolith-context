@@ -30,6 +30,24 @@ from archolith_proxy.trace.store import get_trace_store
 logger = structlog.get_logger()
 
 
+def _summarize_tool_calls(tool_calls: list[dict]) -> str:
+    """Render captured final-message tool_calls as a compact text summary.
+
+    Used (D8) when a re-sent response is a tool-call-only turn with empty
+    content, so extraction still receives a meaningful final-message
+    representation instead of being skipped on empty text.
+    """
+    parts: list[str] = []
+    for tc in tool_calls or []:
+        func = (tc or {}).get("function", {}) or {}
+        name = func.get("name") or "unknown"
+        args = func.get("arguments") or ""
+        if isinstance(args, (dict, list)):
+            args = json.dumps(args)
+        parts.append(f"[tool_call] {name}({args})")
+    return "\n".join(parts)
+
+
 async def _handle_streaming(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -194,7 +212,10 @@ async def _handle_streaming(
                 )
 
                 recall_result_obj = None
-                async for line, result, cap in stream_with_recall_detection(upstream_resp, RECALL_TOOL_NAME):
+                _recall_decision_timeout = get_settings().streaming_recall_decision_timeout_s
+                async for line, result, cap in stream_with_recall_detection(
+                    upstream_resp, RECALL_TOOL_NAME, decision_timeout_s=_recall_decision_timeout
+                ):
                     if result is not None and result.is_recall:
                         recall_result_obj = result
                         break
@@ -424,6 +445,10 @@ async def _handle_streaming(
     async def _finalize_streaming_trace_and_extraction():
         cap = capture_holder.get("capture")
         response_text = cap.get_full_text() if cap else ""
+        # D8: a tool-call-only final message has empty content; fall back to a
+        # tool_call summary so extraction is not skipped on empty response_text.
+        if not response_text and cap and cap.tool_calls:
+            response_text = _summarize_tool_calls(cap.tool_calls)
         stream_output_tokens = cap.output_tokens if cap else None
         _is_user_turn = bool(messages) and messages[-1].get("role") == "user"
 

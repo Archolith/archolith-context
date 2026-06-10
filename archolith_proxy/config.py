@@ -124,6 +124,10 @@ class Settings(BaseSettings):
 
     # Session recall as proxy-intercepted tool (injects __archolith_recall)
     session_recall_tool_enabled: bool = False
+    # Seconds to buffer a streaming response while deciding whether the model is
+    # calling the recall tool. A recall sentinel arriving after this window is
+    # not intercepted (logged as streaming_recall_sentinel_after_timeout).
+    streaming_recall_decision_timeout_s: float = 5.0
 
     # Agent-initiated synthetic tools (recall_session_work, recall_files_read)
     # Injects two tool definitions that the model can call to get structured
@@ -159,6 +163,9 @@ class Settings(BaseSettings):
     graph_backend: str = "neo4j"  # "neo4j" or "ladybug"
     ladybug_db_path: str = str(Path(__file__).parent.parent / "data" / "context.lbug")
     ladybug_max_concurrent: int = 8
+    # When True, abort startup if a configured graph backend fails to initialize
+    # instead of serving in a silently-degraded (passthrough-only) state.
+    require_graph_on_startup: bool = False
 
     # Optional: promotion to long-term memory
     memory_api_url: str = "http://localhost:8200"
@@ -172,6 +179,9 @@ class Settings(BaseSettings):
     # Promotion policy defaults
     promotion_min_confidence: float = 0.9
     promotion_dry_run: bool = False  # If True, generate records but don't write
+    # Directory for durable promotion-audit JSONL. When empty (default), the
+    # audit trail is in-memory only and lost on restart.
+    promotion_audit_dir: str = ""
 
     # File content cache
     file_cache_enabled: bool = True
@@ -271,6 +281,9 @@ class Settings(BaseSettings):
     # When empty (default), admin endpoints are open (localhost-only assumption).
     # When set, all operator endpoints require X-Admin-Token or Authorization: Bearer matching this value.
     admin_token: str = ""
+    # Escape hatch: when True, an empty admin_token leaves admin endpoints open
+    # even to non-loopback peers. Default False — empty token is loopback-only.
+    admin_allow_open_nonlocal: bool = False
 
     # Plugin enable/disable — comma-separated plugin IDs.
     # PLUGINS_ENABLED: when non-empty, only listed plugins activate.
@@ -467,7 +480,7 @@ _SNAPSHOT_EXCLUDE = frozenset({
     "assembler_base_url", "assembler_api_key",
     "session_neo4j_uri", "session_neo4j_database",
     "session_neo4j_user", "memory_api_url",
-    "ladybug_db_path", "trace_dir", "memory_engines_json",
+    "ladybug_db_path", "trace_dir", "promotion_audit_dir", "memory_engines_json",
     "pricing_input_per_million", "pricing_input_cached_per_million",
     "pricing_output_per_million",
 })

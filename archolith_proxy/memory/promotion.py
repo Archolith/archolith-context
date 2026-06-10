@@ -10,6 +10,8 @@ from __future__ import annotations
 
 __all__ = ["PromotionService"]
 
+import json
+import os
 import time
 
 import structlog
@@ -63,12 +65,13 @@ class PromotionService:
         registry: MemoryEngineRegistry | None = None,
         promotable_types: set[str] | None = None,
         min_confidence: float = _MIN_CONFIDENCE,
+        audit_dir: str | None = None,
     ) -> None:
         self.registry = registry or get_registry()
         self.promotable_types = promotable_types or _PROMOTABLE_FACT_TYPES
         self.min_confidence = min_confidence
 
-        # In-memory audit trail (process-level, reset on restart)
+        # In-memory audit trail (process-level, reset on restart).
         self._audit: list[PromotionResult] = []
         self._stats = {
             "attempted": 0,
@@ -76,6 +79,19 @@ class PromotionService:
             "failed": 0,
             "skipped": 0,
         }
+
+        # D5: optional durable audit trail. When a directory is configured the
+        # in-memory trail is mirrored to a JSONL file so it survives restarts.
+        if audit_dir is None:
+            from archolith_proxy.config import get_settings
+            audit_dir = get_settings().promotion_audit_dir
+        self._audit_path: str | None = None
+        if audit_dir:
+            try:
+                os.makedirs(audit_dir, exist_ok=True)
+                self._audit_path = os.path.join(audit_dir, "promotion_audit.jsonl")
+            except OSError as e:
+                logger.warning("promotion_audit_dir_unusable", dir=audit_dir, error=str(e))
 
     # --- Policy ---
 
@@ -272,7 +288,7 @@ class PromotionService:
         return self.registry.get_default_adapter()
 
     def _record(self, result: PromotionResult) -> None:
-        """Track result in audit trail and stats."""
+        """Track result in audit trail and stats; persist to JSONL if configured."""
         self._audit.append(result)
         self._stats["attempted"] += 1
         if result.outcome == PromotionOutcome.SUCCESS:
@@ -281,3 +297,13 @@ class PromotionService:
             self._stats["failed"] += 1
         elif result.outcome == PromotionOutcome.SKIPPED:
             self._stats["skipped"] += 1
+
+        # D5: append to the durable audit trail when configured. Best-effort —
+        # a persistence failure must never break promotion.
+        if self._audit_path:
+            try:
+                line = json.dumps(result.model_dump(), default=str)
+                with open(self._audit_path, "a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+            except Exception as e:
+                logger.warning("promotion_audit_persist_failed", error=str(e))

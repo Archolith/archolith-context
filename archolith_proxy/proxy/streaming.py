@@ -78,6 +78,7 @@ class ResponseCapture:
         self._finish_reason: str | None = None
         self._direct_text: str | None = None  # For non-streaming responses
         self._usage: dict | None = None  # Usage data from final SSE chunk
+        self._tool_calls: list[dict] = []  # tool_calls on the final message (D8)
 
     def add_chunk(self, chunk_data: str) -> None:
         """Add a parsed SSE chunk to the buffer."""
@@ -156,6 +157,11 @@ class ResponseCapture:
         if choices:
             message = choices[0].get("message", {})
             self._direct_text = _flatten_content(message.get("content"))
+            # D8: preserve tool_calls so the captured final message is complete
+            # (the re-send is often a tool-call-only turn with empty content).
+            tcs = message.get("tool_calls")
+            if tcs:
+                self._tool_calls = tcs
             fr = choices[0].get("finish_reason")
             if fr:
                 self._finish_reason = fr
@@ -192,6 +198,11 @@ class ResponseCapture:
     @property
     def finish_reason(self) -> str | None:
         return self._finish_reason
+
+    @property
+    def tool_calls(self) -> list[dict]:
+        """tool_calls on the captured final message (empty if none). D8."""
+        return self._tool_calls
 
     @property
     def truncated(self) -> bool:
@@ -561,6 +572,7 @@ async def stream_with_recall_detection(
     decision_made = False
     is_recall = False
     recall_buffered_lines: list[str] = []
+    late_recall_sentinel_seen = False
     start_time = time.monotonic()
 
     async for line in upstream_response.aiter_lines():
@@ -649,6 +661,16 @@ async def stream_with_recall_detection(
             continue
 
         if decision_made and not is_recall:
+            # D3: a recall sentinel arriving after the decision window closed is
+            # not intercepted (we are committed to passthrough). Surface it once
+            # so the bypass is observable rather than silent.
+            if not late_recall_sentinel_seen and recall_tool_name in line:
+                late_recall_sentinel_seen = True
+                logger.warning(
+                    "streaming_recall_sentinel_after_timeout",
+                    recall_tool_name=recall_tool_name,
+                    note="recall tool call appeared after the decision window; not intercepted",
+                )
             # Passthrough — yield lines directly
             yield (line, None, None)
 

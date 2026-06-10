@@ -62,14 +62,16 @@ async def get_file_content(execute, session_id: str, path: str) -> dict | None:
         return None
     suffix = "/" + norm_query
 
-    # Single Cypher query instead of N+1 list_cached_files + iteration
+    # Single Cypher query instead of N+1 list_cached_files + iteration.
+    # Secondary sort on stored_path makes the result deterministic when two
+    # suffix matches share the same path length (D2).
     rows = await execute(
         """
         MATCH (fc:FileContent {session_id: $session_id})
         WHERE fc.path = $norm_query OR fc.path ENDS WITH $suffix
         RETURN fc.content AS content, fc.sha256 AS sha256, fc.line_count AS line_count,
                fc.path AS stored_path, size(fc.path) AS path_len
-        ORDER BY path_len ASC
+        ORDER BY path_len ASC, stored_path ASC
         LIMIT 2
         """,
         {"session_id": session_id, "norm_query": norm_query, "suffix": suffix},
@@ -77,12 +79,17 @@ async def get_file_content(execute, session_id: str, path: str) -> dict | None:
     if not rows:
         return None
     if len(rows) > 1 and rows[0]["path_len"] == rows[1]["path_len"]:
+        # D2: ambiguous match. Previously returned None, which assembly could
+        # not distinguish from a cache miss (file context silently dropped).
+        # Resolve deterministically to the first (lexicographically-smallest)
+        # match and warn, so context is still served and the ambiguity is
+        # observable.
         logger.warning(
             "file_recall_ambiguous",
             session_id=session_id, query=path,
             matches=[r["stored_path"] for r in rows],
+            resolved_to=rows[0]["stored_path"],
         )
-        return None
     return rows[0]
 
 

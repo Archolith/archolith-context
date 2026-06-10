@@ -1,5 +1,30 @@
 # Changelog
 
+## [unreleased] — 2026-06-09 — Deferred hardening (design risks D1-D5, D7-D10)
+
+Final remediation pass from the 2026-06-09 full-project audit. Closes every
+remaining confirmed design risk (D6 was handled in the dedup pass below).
+
+### Security / robustness
+- **admin (D1)**: an empty `ADMIN_TOKEN` now opens admin endpoints only to loopback peers (`127.0.0.0/8`, `::1`, `::ffff:127.0.0.1`); non-loopback peers get 401. New `ADMIN_ALLOW_OPEN_NONLOCAL` (default False) is an explicit escape hatch. **Behavior change:** exposed (non-localhost) deployments must now set `ADMIN_TOKEN` or the escape hatch. (`archolith_proxy/admin.py`, `config.py`)
+- **memory (D7)**: `generic_http` adapter `validate_config` rejects a `base_url` that is not http(s) or has no host. (`archolith_proxy/memory/adapters/generic_http.py`)
+- **startup (D4)**: a configured graph backend that fails to initialize is now reported as `degraded` on `/health` (HTTP 503) with the reason, instead of an indistinguishable `not_configured`/200. New `REQUIRE_GRAPH_ON_STARTUP` (default False) aborts startup instead of serving silently degraded. (`archolith_proxy/main.py`, `config.py`)
+
+### Correctness
+- **graph (D2)**: file-cache recall resolves an ambiguous suffix match deterministically (stable secondary sort, lexicographically-smallest) and still warns, instead of returning `None` — which assembly could not distinguish from a cache miss (file context silently dropped). (`archolith_proxy/graph/ladybug_files.py`)
+- **streaming (D8)**: `ResponseCapture` preserves `tool_calls` from a non-streaming recall re-send (new `.tool_calls`); the streaming finalize path falls back to a tool_call summary so a tool-call-only final message still produces extraction input. (`archolith_proxy/proxy/streaming.py`, `openai/streaming.py`) NOTE: wiring tool_calls directly into the extraction message list needs `openai/extraction.py` (out of scope) — follow-up.
+- **streaming (D3)**: the recall decision timeout is configurable via `STREAMING_RECALL_DECISION_TIMEOUT_S` (default 5.0) and a recall sentinel arriving after the window logs `streaming_recall_sentinel_after_timeout` so the bypass is observable. Full correctness (dynamic buffering) remains a deferred follow-up. (`archolith_proxy/proxy/streaming.py`, `openai/streaming.py`, `config.py`)
+
+### Durability / performance / observability
+- **memory (D5)**: optional JSONL persistence for the promotion audit trail via `PROMOTION_AUDIT_DIR` (best-effort; unset keeps in-memory-only behavior). (`archolith_proxy/memory/promotion.py`, `config.py`)
+- **trace (D9)**: session LRU eviction is O(1) via `OrderedDict` (was O(n) `list.remove()` per touch); eviction semantics unchanged. (`archolith_proxy/trace/store.py`)
+- **metrics (D10)**: `/metrics` computes all trace-derived metrics (user turns, token/cost totals, curator latencies) under a single lock acquisition for one consistent snapshot, instead of three separate locked scans. (`archolith_proxy/routers/metrics_router.py`)
+
+### Tests
+- New: `test_admin_loopback_guard.py`, `test_generic_http_validate.py`, `test_health_degraded.py`, `test_graph/test_file_cache_ambiguity.py`, `test_proxy/test_streaming_tool_calls_capture.py`, `test_proxy/test_streaming_recall_late_sentinel.py`, `test_memory_promotion_audit.py`, `test_trace/test_lru_eviction_order.py`, `test_metrics_consistency.py`. Full suite green (953 passed).
+
+---
+
 ## [unreleased] — 2026-06-09 — Dedup + cheap hardening (defects #3, #4, #5, D6)
 
 ### Fixed
