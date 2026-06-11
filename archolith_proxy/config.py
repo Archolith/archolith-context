@@ -550,7 +550,6 @@ _SNAPSHOT_EXCLUDE = frozenset({
     "ladybug_db_path", "trace_dir", "promotion_audit_dir", "memory_engines_json",
     "pricing_input_per_million", "pricing_input_cached_per_million",
     "pricing_output_per_million",
-    "archolith_profile",
 })
 
 

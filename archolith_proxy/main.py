@@ -208,10 +208,17 @@ async def lifespan(app: FastAPI):
                         "Install archolith-filter or set a different profile or explicit FILTER_ENABLED=false."
                     ),
                 )
+                # Full degradation to passthrough — clear all profile-enabled flags
+                settings.archolith_profile = "passthrough"
                 settings.filter_enabled = False
                 settings.agent_solo_shrink_enabled = False
                 settings.agent_solo_dedup_enabled = False
                 settings.agent_solo_compress_middle_enabled = False
+                settings.curator_enabled = False
+                settings.background_pass_enabled = False
+                settings.embedding_enabled = False
+                settings.per_tool_extraction_enabled = False
+                settings.session_recall_tool_enabled = False
             else:
                 logger.error(
                     "filter_enabled_but_unavailable",
