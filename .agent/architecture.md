@@ -447,6 +447,18 @@ Cache methods on `LadybugBackend`: `upsert_file_content`, `get_file_content`,
 - Node families: session, fact, file, decision, checkpoint, issue, verification, cached file content, cached file outline
 
 ### Config (`archolith_proxy/config.py`)
+
+**Deployment Profiles.** `ARCHOLITH_PROFILE` bundles coherent flag sets:
+
+| Profile | What it enables | Requirements |
+|---------|----------------|-------------|
+| `passthrough` | Nothing (code default — all flags default-off) | None |
+| `mechanical` | Agent-solo compression (shrink/dedup/compress_middle at 3K threshold) + output filtering | `archolith_filter` peer package |
+| `curated` | Mechanical + curator LLM + background pass + file cache | `archolith_filter` + graph backend + curator API key |
+| `full` | Curated + embeddings + per-tool extraction + recall tool | All of the above + embedding API key |
+
+Precedence: `session > config_overrides.json > env > profile > default`. Explicit env vars always win over profile values.
+
 - Upstream API URL and credentials (validated: must be http/https)
 - Graph backend selection (`graph_backend`) plus backend-specific settings
 - Extraction model selection

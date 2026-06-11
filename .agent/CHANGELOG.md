@@ -1,5 +1,13 @@
 # Changelog — archolith-context
 
+## 2026-06-10 — Mechanical Mode — ARCHOLITH_PROFILE flag bundles
+
+- **`archolith_proxy/config.py`**: Added `ARCHOLITH_PROFILE` setting (passthrough | mechanical | curated | full) with `PROFILES` dict defining each bundle. `_apply_profile()` applies flags only when NOT explicitly set by env (env-wins precedence). Added to SESSION_CONFIG_DENYLIST. Profile exposed in `/admin/config` via config snapshots.
+- **`archolith_proxy/main.py`**: Logs active profile + bundle on startup. Profile-driven `filter_enabled` degrades gracefully when `archolith_filter` is missing (full passthrough degradation clears all profile-enabled flags). Explicit `FILTER_ENABLED=true` still fails fast.
+- **`.env.example`**: Added `ARCHOLITH_PROFILE=mechanical` with docstring describing all four profiles.
+- **`README.md`, `docker-compose.yml`, `.agent/architecture.md`**: Updated for mechanical default profile.
+- **Tests**: 16 tests covering profile definitions, env-wins precedence, snapshot inclusion, and startup degradation per-profile.
+
 ## 2026-06-10 — Helper-LLM Cost Telemetry (extractor/curator/embedding token usage)
 
 - **`archolith_proxy/models/dtos.py`**: Added 6 helper-LLM usage fields to `TurnTrace` (extractor_prompt/completion_tokens, extractor_llm_calls, curator_prompt/completion_tokens, embedding_tokens), 2 fields to `BackgroundPassTrace` (prompt/completion_tokens_used), and `usage` field to `ExtractionResult`.
