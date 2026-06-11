@@ -40,7 +40,7 @@ flowchart LR
 | `archolith_proxy/proxy/session.py` | Session ID resolution and fingerprint-based session fallback |
 | `archolith_proxy/proxy/rewrite.py` | Message rewriting and system-prompt merge |
 | `archolith_proxy/assembler/context.py` | Fact ranking, context assembly, token budgeting, retrieval heuristics |
-| `archolith_proxy/assembler/tail.py` | Smart coherence-tail preservation, including tool-call integrity handling |
+| `archolith_proxy/assembler/tail.py` | Smart coherence-tail preservation, including tool-call integrity handling ⚠ known issues with nullification and over-max fallback (remediation tracked separately) |
 | `archolith_proxy/proxy/tool_injection.py` | Hidden recall-tool injection, stripping, and result handling |
 | `archolith_proxy/graph/*` | Graph backend protocol plus LadybugDB and Neo4j implementations |
 | `archolith_proxy/trace/*` | In-memory turn traces, graph inspection endpoints, extraction QA endpoint |
@@ -81,11 +81,14 @@ Assembly can be skipped for several reasons:
 - graph unavailable
 - input size below `ASSEMBLY_MIN_INPUT_TOKENS`
 - estimated savings ratio below `ASSEMBLY_MIN_SAVINGS_RATIO`
-- assembly latency budget exceeded
+
+> **Note:** `ASSEMBLY_LATENCY_BUDGET_MS` and the savings-ratio gate (`ASSEMBLY_MIN_SAVINGS_RATIO`) are recorded in config but **not enforced** at runtime. The only hard gate on the user-turn assembly path is `ASSEMBLY_MIN_INPUT_TOKENS` (structural-token floor). The other two knobs are reserved for future enforcement — see `archolith_proxy/config.py` for current defaults.
 
 ### 4. Context Retrieval and Ranking
 
 If graph mode is active, the assembler retrieves active facts for the session and ranks them.
+
+> **Note:** The heuristic fact-ranking assembler described here (`assemble_context()` in `assembler/context.py`) serves the `__archolith_recall` tool path only. The main chat-assembly path (user-turn context rewriting) uses the Curator LLM (`curator/pipeline.py`) or passthrough fallback — not the scoring-based fact assembler.
 
 Without embeddings:
 

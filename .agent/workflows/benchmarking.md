@@ -129,14 +129,16 @@ The comparison script shows:
 | Setting | Default | What it controls |
 |---------|---------|-----------------|
 | `context_token_budget` | 15000 | Max tokens for assembled context block |
-| `coherence_tail_size` | 3 | Number of recent messages preserved verbatim |
+| `coherence_tail_size` | 10 | Number of recent messages preserved verbatim |
 | `max_tail_messages` | 20 | Cap on expanded tail (smart_tail won't exceed this) |
-| `cold_start_turns` | 1 | Turns before assembly activates |
-| `cold_start_token_threshold` | 200 | Token threshold for cold start bypass |
-| `embedding_enabled` | true | Use embeddings for semantic fact retrieval |
-| `query_rewrite_enabled` | true | Rewrite ambiguous queries before embedding |
-| `compaction_enabled` | true | Enable context compaction |
-| `session_recall_tool_enabled` | true | Inject session_recall tool |
+| `cold_start_turns` | 3 | Turns before assembly activates |
+| `cold_start_token_threshold` | 20000 | Token threshold for cold start bypass |
+| `embedding_enabled` | false | Use embeddings for semantic fact retrieval |
+| `query_rewrite_enabled` | false | Rewrite ambiguous queries before embedding |
+| `compaction_enabled` | false | Enable context compaction |
+| `session_recall_tool_enabled` | false | Inject session_recall tool |
+
+> **Maintenance note:** Default values in this table must be verified against `archolith_proxy/config.py` before every doc update. The `.env.example` file is the authoritative operator-facing default reference.
 
 ## Tuning changes that need code edits (not just config)
 

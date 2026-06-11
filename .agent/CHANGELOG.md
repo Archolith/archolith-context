@@ -1,5 +1,16 @@
 # Changelog — archolith-context
 
+## 2026-06-10 — Documentation Reconciliation (10 code/docs mismatches fixed)
+
+- **ARCHITECTURE.md §3**: Corrected assembly gate description — only `ASSEMBLY_MIN_INPUT_TOKENS` is enforced; savings-ratio and latency-budget knobs recorded as not-yet-enforced. Section §4 clarified that the heuristic fact-ranking assembler serves the `__archolith_recall` tool, not the main chat assembly path (which uses curator or passthrough).
+- **.agent/architecture.md**: `CURATOR_MAX_ITERATIONS` default corrected to 6 (was 4); Graphiti removed from tech stack with cross-reference to dead-code-removal plan; synthetic tools section given deprecation banner; assembler section clarified as recall-tool-only; smart-tail description updated with known-limitation note.
+- **.agent/workflows/benchmarking.md**: All 7 tunable defaults corrected (coherence_tail_size 3→10, cold_start_turns 1→3, cold_start_token_threshold 200→20000, embedding_enabled/query_rewrite_enabled/compaction_enabled/session_recall_tool_enabled true→false). Maintenance note added.
+- **README.md**: Re-read claim qualified (file cache + curator tools path; native-read-intercept deprecated/disabled).
+- **.env.example**: EXTRACTOR_API_KEY and EMBEDDING_API_KEY comments corrected (keys must be set explicitly; no fallback).
+- **CLAUDE.md**: Title updated from `cth.context-engine` to `archolith-context`.
+- **ARCHITECTURE.md component table**: smart_tail integrity-limitation note added.
+- All fixes verified against `config.py` and `chat.py` on `main`.
+
 ## 2026-06-09 — Plugin System (ProxyPlugin contract + built-in plugins + unified distribution)
 
 - **`archolith_proxy/plugins/`** (new): `ProxyPlugin` `@runtime_checkable` Protocol with six lifecycle members (`plugin_id`, `plugin_version`, `activate`, `deactivate`, `healthcheck`, `contribute_metrics`). `PluginRegistry` singleton manages lifecycle with fail-safe contract — no plugin misbehavior can prevent proxy startup. `PLUGINS_ENABLED` / `PLUGINS_DISABLED` env var gating; `MIN_PLUGIN_VERSIONS` enforces minimum compatible versions with clear error logging.
