@@ -1,5 +1,13 @@
 # Changelog — archolith-context
 
+## 2026-06-10 — Extraction Batching at User-Turn Boundaries
+
+- **`archolith_proxy/openai/extraction.py`**: Extracted file-cache capture into `_run_file_cache_capture()` (runs on every request). Added `_is_turn_boundary()` helper. Added turn-boundary guard: when `extraction_mode="turn_boundary"`, LLM extraction runs only on user-turn boundaries or `finish_reason="stop"` — skipping the ~85% of agent-solo continuations without information loss (the client resends full history). `_run_file_cache_capture` always runs regardless of mode.
+- **`archolith_proxy/config.py`**: Added `extraction_mode: str = "turn_boundary"` — accepts `"turn_boundary"` (default) or `"every_turn"` (legacy behavior).
+- **`.agent/architecture.md`**: Updated data-flow step 8 to document the turn-boundary default and fallback mode.
+- **Test**: 16 new tests — 11 parametrized `_is_turn_boundary` truth-table checks, 5 integration tests covering skip-on-agent-solo, run-on-user-turn, run-on-finish-stop, file-cache-runs-every-turn, and every_turn mode compatibility.
+- **Remediation**: `_collect_tool_call_records()` now collects every assistant/tool-call batch in the completed turn, including the previous completed agent turn when extraction runs on the next user request. Added regression tests for multi-batch per-tool extraction and real file-cache upsert on skipped continuation turns.
+
 ## 2026-06-10 — Documentation Reconciliation (10 code/docs mismatches fixed)
 
 - **ARCHITECTURE.md §3**: Corrected assembly gate description — only `ASSEMBLY_MIN_INPUT_TOKENS` is enforced; savings-ratio and latency-budget knobs recorded as not-yet-enforced. Section §4 clarified that the heuristic fact-ranking assembler serves the `__archolith_recall` tool, not the main chat assembly path (which uses curator or passthrough).

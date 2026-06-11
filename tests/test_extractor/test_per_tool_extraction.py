@@ -806,6 +806,59 @@ class TestCollectToolCallRecords:
         assert records[0].tool_call_id == "new1"
         assert records[0].tool_name == "Bash"
 
+    def test_collects_multiple_tool_batches_in_current_agent_turn(self):
+        """Turn-boundary extraction must keep every tool-call batch since the latest user."""
+        from archolith_proxy.openai.chat import _collect_tool_call_records
+
+        messages = [
+            {"role": "user", "content": "inspect then test"},
+            {"role": "assistant", "tool_calls": [
+                {
+                    "id": "read1",
+                    "function": {"name": "Read", "arguments": '{"file_path": "a.py"}'},
+                },
+            ]},
+            {"role": "tool", "tool_call_id": "read1", "content": "def a(): pass"},
+            {"role": "assistant", "tool_calls": [
+                {
+                    "id": "bash1",
+                    "function": {"name": "Bash", "arguments": '{"command": "pytest"}'},
+                },
+            ]},
+            {"role": "tool", "tool_call_id": "bash1", "content": "2 passed"},
+        ]
+
+        records = _collect_tool_call_records(messages)
+        assert [r.tool_call_id for r in records] == ["read1", "bash1"]
+        assert [r.tool_name for r in records] == ["Read", "Bash"]
+
+    def test_user_boundary_collects_previous_completed_agent_turn(self):
+        """A fresh user turn should extract the completed agent turn before the final user message."""
+        from archolith_proxy.openai.chat import _collect_tool_call_records
+
+        messages = [
+            {"role": "user", "content": "inspect then test"},
+            {"role": "assistant", "tool_calls": [
+                {
+                    "id": "read1",
+                    "function": {"name": "Read", "arguments": '{"file_path": "a.py"}'},
+                },
+            ]},
+            {"role": "tool", "tool_call_id": "read1", "content": "def a(): pass"},
+            {"role": "assistant", "tool_calls": [
+                {
+                    "id": "bash1",
+                    "function": {"name": "Bash", "arguments": '{"command": "pytest"}'},
+                },
+            ]},
+            {"role": "tool", "tool_call_id": "bash1", "content": "2 passed"},
+            {"role": "assistant", "content": "Done."},
+            {"role": "user", "content": "next task"},
+        ]
+
+        records = _collect_tool_call_records(messages)
+        assert [r.tool_call_id for r in records] == ["read1", "bash1"]
+
 
 # ---------------------------------------------------------------------------
 # TestInferFileTouchStatuses

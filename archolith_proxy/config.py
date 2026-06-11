@@ -144,7 +144,10 @@ class Settings(BaseSettings):
     max_input_tokens_per_session: int = 2_000_000  # 0 = unlimited
     session_token_budget_action: str = "passthrough"  # "passthrough" (forward raw) or "reject"
 
-    # Per-tool extraction dispatch (class-per-tool instead of single generic LLM call)
+    # Extraction mode: "turn_boundary" (default) runs LLM extraction on user-turn
+    # boundaries or finish_reason=stop only; "every_turn" preserves the pre-2026-06
+    # behavior of extracting on every request (including agent-solo continuations).
+    extraction_mode: str = "turn_boundary"
     per_tool_extraction_enabled: bool = False
     extractor_llm_concurrency: int = 3  # max concurrent LLM-backed extractor calls (turn-level excluded)
 
