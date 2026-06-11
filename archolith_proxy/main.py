@@ -158,6 +158,17 @@ async def lifespan(app: FastAPI):
     if proxy_missing:
         logger.warning("missing_required_env_vars", vars=proxy_missing, note="proxy calls will fail")
 
+    # Log active profile with resolved flag bundle for operator clarity
+    from archolith_proxy.config import PROFILES
+    _profile = getattr(settings, "archolith_profile", "passthrough")
+    _bundle = PROFILES.get(_profile, {})
+    logger.info(
+        "profile_active",
+        profile=_profile,
+        bundle=_bundle,
+        note=f"ARCHOLITH_PROFILE={_profile} active",
+    )
+
     # Loud startup check: the RTK_ENABLED env var was renamed to FILTER_ENABLED and is
     # no longer read. If a stale environment still sets RTK_ENABLED without FILTER_ENABLED,
     # filtering would silently turn off. Refuse to start rather than fail silently.
@@ -179,18 +190,41 @@ async def lifespan(app: FastAPI):
         if _filter_is_available():
             logger.info("filter_available", note="archolith_filter loaded")
         else:
-            logger.error(
-                "filter_enabled_but_unavailable",
-                note="FILTER_ENABLED=true but archolith_filter is not importable; refusing to start.",
+            # Check whether filter_enabled came from the profile (graceful) or
+            # from explicit env (fail-fast). A profile-driven enable degrades to
+            # passthrough instead of refusing to start.
+            _filter_from_profile = (
+                "filter_enabled" not in getattr(settings, "model_fields_set", set())
+                and _profile in PROFILES
+                and "filter_enabled" in PROFILES.get(_profile, {})
             )
-            # Fail fast: a proxy that silently does no curation is worse than one
-            # that won't boot. If filter is explicitly enabled it must be importable.
-            raise RuntimeError(
-                "FILTER_ENABLED=true but archolith_filter is not importable in this environment. "
-                "Agent-solo compression and filter would silently do nothing. "
-                "Install it into the active venv (pip install -e ../archolith-filter) "
-                "or set FILTER_ENABLED=false."
-            )
+            if _filter_from_profile:
+                logger.error(
+                    "filter_unavailable_profile_degraded",
+                    profile=_profile,
+                    note=(
+                        "ARCHOLITH_PROFILE enables filtering but archolith_filter is not "
+                        "importable. Degrading to passthrough profile. "
+                        "Install archolith-filter or set a different profile or explicit FILTER_ENABLED=false."
+                    ),
+                )
+                settings.filter_enabled = False
+                settings.agent_solo_shrink_enabled = False
+                settings.agent_solo_dedup_enabled = False
+                settings.agent_solo_compress_middle_enabled = False
+            else:
+                logger.error(
+                    "filter_enabled_but_unavailable",
+                    note="FILTER_ENABLED=true but archolith_filter is not importable; refusing to start.",
+                )
+                # Fail fast: a proxy that silently does no curation is worse than one
+                # that won't boot. If filter is explicitly enabled it must be importable.
+                raise RuntimeError(
+                    "FILTER_ENABLED=true but archolith_filter is not importable in this environment. "
+                    "Agent-solo compression and filter would silently do nothing. "
+                    "Install it into the active venv (pip install -e ../archolith-filter) "
+                    "or set FILTER_ENABLED=false."
+                )
 
     graph_missing = settings.check_required_for_graph()
     if graph_missing:

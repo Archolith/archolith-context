@@ -49,6 +49,7 @@ SESSION_CONFIG_DENYLIST: frozenset[str] = frozenset({
     "memory_api_key",
     "admin_token",
     "ladybug_db_path",
+    "archolith_profile",  # profile is not session-overridable; individual flags are
 })
 
 # Resolve .env relative to this file's directory (archolith_proxy/),
@@ -57,6 +58,43 @@ SESSION_CONFIG_DENYLIST: frozenset[str] = frozenset({
 _PROJECT_ROOT = Path(__file__).parent.parent
 _ENV_FILE = str(_PROJECT_ROOT / ".env")
 _OVERRIDES_FILE = _PROJECT_ROOT / "config_overrides.json"
+
+# Profile bundles — coherent flag sets that expand into individual settings.
+# Precedence: explicit env/.env > profile > code default.
+# A profile value is applied only when the field was NOT explicitly set by env.
+PROFILES: dict[str, dict[str, object]] = {
+    "passthrough": {},
+    "mechanical": {
+        "filter_enabled": True,
+        "agent_solo_shrink_enabled": True,
+        "agent_solo_dedup_enabled": True,
+        "agent_solo_compress_middle_enabled": True,
+        "agent_solo_min_input_tokens": 3000,
+    },
+    "curated": {
+        "filter_enabled": True,
+        "agent_solo_shrink_enabled": True,
+        "agent_solo_dedup_enabled": True,
+        "agent_solo_compress_middle_enabled": True,
+        "agent_solo_min_input_tokens": 3000,
+        "curator_enabled": True,
+        "background_pass_enabled": True,
+        "file_cache_enabled": True,
+    },
+    "full": {
+        "filter_enabled": True,
+        "agent_solo_shrink_enabled": True,
+        "agent_solo_dedup_enabled": True,
+        "agent_solo_compress_middle_enabled": True,
+        "agent_solo_min_input_tokens": 3000,
+        "curator_enabled": True,
+        "background_pass_enabled": True,
+        "file_cache_enabled": True,
+        "embedding_enabled": True,
+        "per_tool_extraction_enabled": True,
+        "session_recall_tool_enabled": True,
+    },
+}
 
 # In-memory snapshot of base env values (before overrides applied)
 _base_values: dict[str, object] = {}
@@ -147,6 +185,12 @@ class Settings(BaseSettings):
     # Per-tool extraction dispatch (class-per-tool instead of single generic LLM call)
     per_tool_extraction_enabled: bool = False
     extractor_llm_concurrency: int = 3  # max concurrent LLM-backed extractor calls (turn-level excluded)
+
+    # Deployment profile — expands to coherent flag bundles.
+    # One of: "passthrough" (default), "mechanical", "curated", "full".
+    # See PROFILES dict for bundle contents.  Explicit env vars take precedence
+    # over profile values.
+    archolith_profile: str = "passthrough"
 
     # Output filtering for outbound tool-role messages (via archolith_filter).
     # Reads the FILTER_ENABLED env var.
@@ -339,6 +383,26 @@ class Settings(BaseSettings):
         return missing
 
 
+def _apply_profile(settings: Settings) -> None:
+    """Apply the profile's flag bundle, respecting explicit env vars.
+
+    Precedence: explicit env/.env > profile > code default.
+    A profile value is applied only when the field was NOT explicitly set
+    by env (checked via model_fields_set).
+    """
+    profile = getattr(settings, "archolith_profile", "passthrough")
+    if profile not in PROFILES:
+        profile = "passthrough"
+    bundle = PROFILES[profile]
+    if not bundle:
+        return
+
+    explicit = getattr(settings, "model_fields_set", set())
+    for key, value in bundle.items():
+        if key not in explicit and hasattr(settings, key):
+            setattr(settings, key, value)
+
+
 def _get_global_settings() -> Settings:
     """Return the process-global settings singleton (no session overlay)."""
     global _settings, _base_values
@@ -347,6 +411,9 @@ def _get_global_settings() -> Settings:
             # Double-check pattern: another thread may have initialized while waiting
             if _settings is None:
                 _settings = Settings()
+                # Apply profile bundle before env/override check so explicit
+                # env vars still win (precedence: session > overrides > env > profile > default)
+                _apply_profile(_settings)
                 # Snapshot base values before applying overrides
                 _base_values = {k: getattr(_settings, k) for k in _settings.model_fields}
                 # Apply persisted overrides from config_overrides.json
@@ -483,6 +550,7 @@ _SNAPSHOT_EXCLUDE = frozenset({
     "ladybug_db_path", "trace_dir", "promotion_audit_dir", "memory_engines_json",
     "pricing_input_per_million", "pricing_input_cached_per_million",
     "pricing_output_per_million",
+    "archolith_profile",
 })
 
 

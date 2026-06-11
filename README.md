@@ -32,7 +32,10 @@ pip install -e ".[dev]"
 ```bash
 # Copy and configure
 cp .env.example .env
-# Set UPSTREAM_API_KEY and UPSTREAM_BASE_URL in .env
+# Set UPSTREAM_API_KEY and UPSTREAM_BASE_URL in .env.
+# The default ARCHOLITH_PROFILE=mechanical enables agent-solo compression
+# and output filtering (requires archolith_filter installed).
+# Set ARCHOLITH_PROFILE=passthrough to skip these features.
 
 # Run the proxy
 archolith-proxy

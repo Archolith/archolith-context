@@ -1,5 +1,15 @@
 # Changelog — archolith-context
 
+## 2026-06-10 — Mechanical Mode — ARCHOLITH_PROFILE flag bundles
+
+- **`archolith_proxy/config.py`**: Added `ARCHOLITH_PROFILE` setting (passthrough | mechanical | curated | full) with `PROFILES` dict defining each bundle. `_apply_profile()` applies flags only when NOT explicitly set by env (env-wins precedence). Added to SESSION_CONFIG_DENYLIST and snapshot exclusions.
+- **`archolith_proxy/main.py`**: Logs active profile + bundle on startup. Profile-driven `filter_enabled` degrades gracefully when `archolith_filter` is missing (disables filter + agent-solo flags, logs error, continues). Explicit `FILTER_ENABLED=true` still fails fast.
+- **`.env.example`**: Added `ARCHOLITH_PROFILE=mechanical` as the recommended quick-start profile with docstring.
+- **`README.md`**: Quick start updated to mention profile setting.
+- **`docker-compose.yml`**: Added `ARCHOLITH_PROFILE=mechanical` environment variable.
+- **`.agent/architecture.md`**: Added deployment profile documentation in Config section.
+- **Tests**: 11 new tests covering profile definitions, application, env-wins precedence, fallback, and denylist membership.
+
 ## 2026-06-09 — Plugin System (ProxyPlugin contract + built-in plugins + unified distribution)
 
 - **`archolith_proxy/plugins/`** (new): `ProxyPlugin` `@runtime_checkable` Protocol with six lifecycle members (`plugin_id`, `plugin_version`, `activate`, `deactivate`, `healthcheck`, `contribute_metrics`). `PluginRegistry` singleton manages lifecycle with fail-safe contract — no plugin misbehavior can prevent proxy startup. `PLUGINS_ENABLED` / `PLUGINS_DISABLED` env var gating; `MIN_PLUGIN_VERSIONS` enforces minimum compatible versions with clear error logging.

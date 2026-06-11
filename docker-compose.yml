@@ -7,6 +7,8 @@ services:
       # Required — override these in .env or at runtime
       - UPSTREAM_API_KEY=${UPSTREAM_API_KEY:-}
       - EXTRACTOR_API_KEY=${EXTRACTOR_API_KEY:-}
+      # Deployment profile (passthrough | mechanical | curated | full)
+      - ARCHOLITH_PROFILE=${ARCHOLITH_PROFILE:-mechanical}
       # Upstream and extraction endpoints
       - UPSTREAM_BASE_URL=${UPSTREAM_BASE_URL:-https://api.deepseek.com/v1}
       - EXTRACTOR_BASE_URL=${EXTRACTOR_BASE_URL:-https://api.openai.com/v1}
