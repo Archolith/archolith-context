@@ -26,6 +26,86 @@ from archolith_proxy.trace.builder import TraceBuilder
 logger = structlog.get_logger()
 
 
+# ── Turn-boundary detection ─────────────────────────────────────────────────
+
+
+def _is_turn_boundary(is_user_turn: bool, finish_reason: str | None) -> bool:
+    """Return True when extraction should run LLM fact extraction.
+
+    Extraction runs at a turn boundary when:
+    - The request was triggered by a fresh user turn (is_user_turn=True), or
+    - The upstream response finished with finish_reason="stop" (agent
+      completed its turn).
+    """
+    return bool(is_user_turn) or finish_reason == "stop"
+
+
+# ── File-cache capture (runs on EVERY request) ─────────────────────────────
+
+
+async def _run_file_cache_capture(
+    session_id: str,
+    turn_number: int,
+    messages: list[dict],
+) -> None:
+    """Capture file reads and writes from the request messages.
+
+    Runs on every request regardless of extraction_mode, because file-cache
+    freshness is what native read-serving and the curator depend on.
+    """
+    fc_settings = get_settings()
+    if not fc_settings.file_cache_enabled:
+        return
+
+    from archolith_proxy.openai.file_cache import (
+        _extract_file_writes,
+        _invalidate_file_cache,
+        _invalidate_written_files,
+        _upsert_file_cache,
+    )
+
+    try:
+        written_paths = _invalidate_written_files(messages)
+        if written_paths:
+            await _invalidate_file_cache(session_id, written_paths, turn_number)
+
+        file_reads = _extract_file_reads(messages)
+        logger.info(
+            "file_cache_extract_result",
+            session_id=session_id,
+            turn=turn_number,
+            found=len(file_reads),
+            paths=[fr["path"] for fr in file_reads],
+        )
+        if file_reads:
+            await _upsert_file_cache(session_id, file_reads, turn_number)
+            logger.info(
+                "file_cache_upserted",
+                session_id=session_id,
+                turn=turn_number,
+                count=len(file_reads),
+                paths=[fr["path"] for fr in file_reads],
+            )
+
+        file_writes = _extract_file_writes(messages)
+        if file_writes:
+            await _upsert_file_cache(session_id, file_writes, turn_number)
+            logger.info(
+                "file_cache_writes_captured",
+                session_id=session_id,
+                turn=turn_number,
+                count=len(file_writes),
+                paths=[fw["path"] for fw in file_writes],
+            )
+    except Exception:
+        logger.warning(
+            "file_cache_capture_failed",
+            session_id=session_id,
+            turn=turn_number,
+            exc_info=True,
+        )
+
+
 # ── _run_extraction ────────────────────────────────────────────────────────
 
 
@@ -72,47 +152,25 @@ async def _run_extraction(
 
         response_text = strip_reasoning(response_text)
 
-        fc_settings = get_settings()
-        if fc_settings.file_cache_enabled:
-            from archolith_proxy.openai.file_cache import (
-                _extract_file_writes, _invalidate_file_cache,
-                _invalidate_written_files, _upsert_file_cache,
+        # File-cache capture runs on EVERY request regardless of extraction_mode.
+        await _run_file_cache_capture(
+            session_id=session_id, turn_number=turn_number, messages=messages,
+        )
+
+        # Turn-boundary guard: in turn_boundary mode, skip LLM extraction on
+        # agent-solo continuations (which are ~85% of requests).
+        _extraction_settings = get_settings()
+        if _extraction_settings.extraction_mode == "turn_boundary" and not _is_turn_boundary(
+            is_user_turn, response_finish_reason,
+        ):
+            logger.debug(
+                "extraction_skipped_turn_boundary",
+                session_id=session_id,
+                turn=turn_number,
+                is_user_turn=is_user_turn,
+                finish_reason=response_finish_reason,
             )
-            try:
-                written_paths = _invalidate_written_files(messages)
-                if written_paths:
-                    await _invalidate_file_cache(session_id, written_paths, turn_number)
-
-                file_reads = _extract_file_reads(messages)
-                logger.info(
-                    "file_cache_extract_result",
-                    session_id=session_id,
-                    turn=turn_number,
-                    found=len(file_reads),
-                    paths=[fr["path"] for fr in file_reads],
-                )
-                if file_reads:
-                    await _upsert_file_cache(session_id, file_reads, turn_number)
-                    logger.info(
-                        "file_cache_upserted",
-                        session_id=session_id,
-                        turn=turn_number,
-                        count=len(file_reads),
-                        paths=[fr["path"] for fr in file_reads],
-                    )
-
-                file_writes = _extract_file_writes(messages)
-                if file_writes:
-                    await _upsert_file_cache(session_id, file_writes, turn_number)
-                    logger.info(
-                        "file_cache_writes_captured",
-                        session_id=session_id,
-                        turn=turn_number,
-                        count=len(file_writes),
-                        paths=[fw["path"] for fw in file_writes],
-                    )
-            except Exception:
-                logger.warning("file_cache_capture_failed", session_id=session_id, turn=turn_number, exc_info=True)
+            return
 
         extraction_settings = get_settings()
         extraction_start = time.monotonic()

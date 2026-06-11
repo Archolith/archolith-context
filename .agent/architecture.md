@@ -121,7 +121,13 @@ Harness → POST /v1/chat/completions → Proxy
 ├─ ON RESPONSE:
 │ 7. Stream response back to harness (unchanged)
 │ 8. Async: extract facts from response + tool results
-│    a. RTK Layer 1: filter_single_tool_result() denoises each tool result
+│    a. `extraction_mode=turn_boundary` (default): LLM fact extraction runs
+│       only on user-turn boundaries or when finish_reason=stop — skipping
+│       the ~85% of requests that are agent-solo continuations. File-cache
+│       capture (reads, writes, invalidation) always runs on every request.
+│    b. `extraction_mode=every_turn`: preserves legacy behavior (extract on
+│       every request).
+│    c. RTK Layer 1: filter_single_tool_result() denoises each tool result
 │       before packing into the 4000-char extractor budget
 │ 9. Store facts in session graph with temporal edges
 │ 9b. Cache file content: pair tool_call_id → file path → content (SHA-256 dedup)
