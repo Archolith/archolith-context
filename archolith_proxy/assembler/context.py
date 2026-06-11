@@ -650,7 +650,7 @@ async def _get_query_embedding(
         return None
 
     try:
-        results = await compute_embeddings_batch(http_client, [user_message[:8000]])
+        results, _usage = await compute_embeddings_batch(http_client, [user_message[:8000]])
         embedding = results[0] if results else None
         if embedding is not None:
             _embedding_cache[cache_key] = (embedding, time.monotonic())

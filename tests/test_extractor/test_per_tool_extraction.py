@@ -1125,7 +1125,7 @@ class TestComputeEmbeddingsBatch:
                 embedding_base_url="https://api.openai.com/v1",
                 embedding_model="text-embedding-3-small",
             )
-            result = await compute_embeddings_batch(
+            result, total_tokens = await compute_embeddings_batch(
                 client, ["fact one", "fact two", "fact three"]
             )
 

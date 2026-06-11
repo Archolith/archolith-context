@@ -375,7 +375,7 @@ async def _run_extraction(
             trace_builder.set_helper_usage(
                 extractor_prompt_tokens=usage.get("prompt_tokens", 0) or 0,
                 extractor_completion_tokens=usage.get("completion_tokens", 0) or 0,
-                extractor_llm_calls=1,
+                extractor_llm_calls=usage.get("llm_calls", 1) or 1,
                 embedding_tokens=embedding_tokens_used,
             )
 

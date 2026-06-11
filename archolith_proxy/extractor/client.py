@@ -82,6 +82,7 @@ async def extract_facts(
             parsed.usage = {
                 "prompt_tokens": usage.get("prompt_tokens", 0) or 0,
                 "completion_tokens": usage.get("completion_tokens", 0) or 0,
+                "llm_calls": 1,
             }
 
         logger.info(
@@ -387,12 +388,13 @@ async def extract_facts_per_tool(
         turn_result = _parse_extraction_response(turn_content, turn_number, source="Turn-level")
         _turn_level_facts_count = len(turn_result.facts)
 
-        # Capture fill-level usage from upstream response
+        # Capture turn-level usage from upstream response
         turn_usage = data.get("usage", {})
         if turn_usage:
             turn_result.usage = {
                 "prompt_tokens": turn_usage.get("prompt_tokens", 0) or 0,
                 "completion_tokens": turn_usage.get("completion_tokens", 0) or 0,
+                "llm_calls": 1 + llm_calls_made,
             }
 
         # Step 4: Merge — add turn-level facts that don't duplicate per-tool facts.
