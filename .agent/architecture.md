@@ -77,7 +77,7 @@ to adopt a custom memory SDK or internal framework.
 | Graph backend abstraction | `GraphBackend` protocol with Neo4j and LadybugDB implementations |
 | Graph database (bootstrap-friendly) | LadybugDB (embedded, file-backed, zero infra) |
 | Graph database (code default) | Neo4j (label-based isolation in default database) |
-| Graph framework | Graphiti (temporal knowledge graph) |
+| Graph framework | _removed (Graphiti was a never-imported dependency; see dead-code-removal plan)_ |
 | Fact extraction | gpt-4.1-mini (OpenAI API, cheap tier) |
 | Context Manager LLM | Any OpenAI-compatible model (gpt-4.1-mini default; configurable per-deployment) |
 | File content cache | LadybugDB FileContent table — SHA-256 dedup, 1-indexed line retrieval |
@@ -201,10 +201,14 @@ Queries session graph and briefing state for relevant facts given current user i
 
 **Core modules:**
 - `context.py` — main entry point: `assemble_context()` that queries graph, applies budgets, returns `AssembledContext`
+
+> **Note:** The heuristic fact-ranking assembler (`assemble_context()` in `context.py`) serves the `__archolith_recall` tool path only. The main chat-assembly path (user-turn context rewriting) uses the Curator LLM (`curator/pipeline.py`) or passthrough fallback — not the scoring-based fact assembler.
 - `intent.py` — parse current turn intent from latest user message (project/goal/action keywords)
 - `query_rewrite.py` — convert intent into graph query shape (keyword expansion, synonym mapping)
 - `compress.py` — apply token budgets to facts/files/decisions; handle overflow
-- `tail.py` — preserve coherence tail messages (last N turns always kept)
+- `tail.py` — preserve coherence tail messages (last N turns always kept, with tool-call integrity handling)
+
+> **Known limitation (2026-06):** The smart-tail integrity validation and over-max fallback have known issues tracked in the Coherence-Tail Integrity Fixes plan. Tool-call integrity handling may nullify valid tail messages when the message count exceeds `MAX_TAIL_MESSAGES`, and the fallback path drops tool-call associations rather than preserving them. These are targeted for remediation in a separate plan.
 - `compaction.py` — optional message compaction for middle section facts
 
 **Output contract:**
@@ -255,7 +259,7 @@ knowledge store.
    - `_build_briefing_from_result()` prefers `raw_result` over `result_preview` for file content and outlines
 
 **Loop:** `_run_curator_native()` in `curator/loop.py`
-- Up to `CURATOR_MAX_ITERATIONS` (default 4) tool-call iterations
+- Up to `CURATOR_MAX_ITERATIONS` (default 6) tool-call iterations
 - Stuck-loop detection: 4-wide error window, aborts on repeated identical calls
 - Nous XML fallback (`_run_curator_nous()`) for models without native tool calling
 - Exponential backoff with Retry-After header handling
@@ -514,6 +518,8 @@ Per-turn observability records and session-level telemetry.
 
 ### Synthetic Session-Summary Tools (`archolith_proxy/proxy/synthetic_tools.py`)
 
+> **DEPRECATED — Removal planned.** Synthetic tools caused the 2026-05-25 production meltdown and are documented as "direction change — not pursued" in the ROADMAP. The entire synthetic-tools subsystem (module, injection wiring, circuit-breaker counters, forced-non-streaming SSE conversion, config flags, metrics, docs) is targeted for deletion in the [Dead Code Removal plan](plans/archolith-context-dead-code-removal-plan.md). This section is retained until that plan executes, after which it should be removed in full.
+
 Agent-initiated tools that the proxy injects into every request when a session is active
 and `SYNTHETIC_TOOLS_ENABLED=true`. The model can call these to get structured summaries
 of session work and files accessed without the harness needing to support custom tools.
@@ -641,7 +647,7 @@ CURATOR_ENABLED=false             # disabled by default; enable to activate LLM-
 CURATOR_MODEL=                    # defaults to EXTRACTOR_MODEL if empty
 CURATOR_BASE_URL=                 # defaults to EXTRACTOR_BASE_URL if empty
 CURATOR_API_KEY=                  # defaults to EXTRACTOR_API_KEY if empty
-CURATOR_MAX_ITERATIONS=4
+CURATOR_MAX_ITERATIONS=6
 CURATOR_LATENCY_BUDGET_MS=6000 # hard timeout; falls back to heuristic on expiry
 
 # Two-pass curator (background pre-fetch + inline briefing)
