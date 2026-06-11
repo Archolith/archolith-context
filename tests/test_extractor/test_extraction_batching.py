@@ -63,9 +63,10 @@ def mock_settings() -> MagicMock:
 
 
 @pytest.fixture
-def mock_lock() -> AsyncMock:
-    lock = AsyncMock()
+def mock_lock() -> MagicMock:
+    lock = MagicMock()
     lock.acquire = AsyncMock()
+    lock.release = MagicMock()
     return lock
 
 
@@ -107,7 +108,7 @@ def _start_base_patches(mock_settings):
 
 @pytest.mark.asyncio
 async def test_turn_boundary_skips_llm_on_agent_solo(
-    mock_settings: MagicMock, mock_lock: AsyncMock
+    mock_settings: MagicMock, mock_lock: MagicMock
 ) -> None:
     """Agent-solo continuation should not call extract_facts."""
     from archolith_proxy.openai.extraction import _run_extraction
@@ -145,7 +146,7 @@ async def test_turn_boundary_skips_llm_on_agent_solo(
 
 @pytest.mark.asyncio
 async def test_turn_boundary_runs_llm_on_user_turn(
-    mock_settings: MagicMock, mock_lock: AsyncMock
+    mock_settings: MagicMock, mock_lock: MagicMock
 ) -> None:
     """User turn must call extract_facts."""
     from archolith_proxy.openai.extraction import _run_extraction
@@ -180,7 +181,7 @@ async def test_turn_boundary_runs_llm_on_user_turn(
 
 @pytest.mark.asyncio
 async def test_turn_boundary_runs_llm_on_finish_stop(
-    mock_settings: MagicMock, mock_lock: AsyncMock
+    mock_settings: MagicMock, mock_lock: MagicMock
 ) -> None:
     """finish_reason=stop triggers full extraction even without user turn."""
     from archolith_proxy.openai.extraction import _run_extraction
@@ -215,7 +216,7 @@ async def test_turn_boundary_runs_llm_on_finish_stop(
 
 @pytest.mark.asyncio
 async def test_file_cache_runs_every_turn(
-    mock_settings: MagicMock, mock_lock: AsyncMock
+    mock_settings: MagicMock, mock_lock: MagicMock
 ) -> None:
     """File cache capture must run even on non-boundary turns."""
     from archolith_proxy.openai.extraction import _run_extraction
@@ -249,8 +250,74 @@ async def test_file_cache_runs_every_turn(
 
 
 @pytest.mark.asyncio
+async def test_file_cache_upserts_on_agent_solo_continuation(
+    mock_settings: MagicMock, mock_lock: MagicMock
+) -> None:
+    """Continuation turns must still upsert file reads before LLM extraction is skipped."""
+    from archolith_proxy.openai.extraction import _run_extraction
+
+    base = _start_base_patches(mock_settings)
+    upsert_patch = patch(
+        "archolith_proxy.openai.file_cache._upsert_file_cache",
+        new_callable=AsyncMock,
+    )
+    upsert_mock = upsert_patch.start()
+    extract_patch = patch(
+        "archolith_proxy.openai.extraction.extract_facts",
+        new_callable=AsyncMock,
+    )
+    extract_mock = extract_patch.start()
+
+    messages = [
+        {"role": "user", "content": "Inspect the file"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "read-1",
+                    "function": {
+                        "name": "Read",
+                        "arguments": '{"file_path": "src/app.py"}',
+                    },
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "read-1",
+            "content": "def main():\n    return 42\n",
+        },
+    ]
+
+    try:
+        with patch("archolith_proxy.proxy.locks.get_session_lock", return_value=mock_lock):
+            await _run_extraction(
+                client=MagicMock(),
+                session_id="test-session",
+                turn_number=2,
+                messages=messages,
+                response_text="I inspected src/app.py",
+                is_user_turn=False,
+                response_finish_reason=None,
+            )
+
+        upsert_mock.assert_awaited()
+        args = upsert_mock.await_args.args
+        assert args[0] == "test-session"
+        assert args[1][0]["path"] == "src/app.py"
+        assert args[1][0]["content"] == "def main():\n    return 42\n"
+        assert args[2] == 2
+        extract_mock.assert_not_called()
+    finally:
+        for p in base:
+            p.stop()
+        upsert_patch.stop()
+        extract_patch.stop()
+
+
+@pytest.mark.asyncio
 async def test_every_turn_mode_preserves_behavior(
-    mock_settings: MagicMock, mock_lock: AsyncMock
+    mock_settings: MagicMock, mock_lock: MagicMock
 ) -> None:
     """With extraction_mode=every_turn, extraction runs on all turns."""
     from archolith_proxy.openai.extraction import _run_extraction

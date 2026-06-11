@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import structlog
 
@@ -170,11 +171,12 @@ def _infer_file_touch_statuses(messages: list[dict]) -> tuple[dict[str, FileStat
 
 
 def _collect_tool_call_records(messages: list[dict]) -> list:
-    """Build ToolCallRecord list from the CURRENT TURN's tool calls only.
+    """Build ToolCallRecord list from the completed/current turn's tool calls only.
 
-    "Current turn" = tool messages paired with the most recent assistant message
-    that has tool_calls. Scoped to this turn to avoid re-processing tool calls
-    from previous turns (which have already been extracted and stored).
+    The extraction call may run either when an assistant turn finishes, or on the
+    next user request. In the latter case the final user message belongs to the
+    next turn, so collect the assistant/tool messages between the previous user
+    and that final user.
 
     Applies Layer 1 filter — the messages array passed to extraction is the
     ORIGINAL (pre-rewrite) array; the outbound filter filter runs on a copy in
@@ -182,28 +184,31 @@ def _collect_tool_call_records(messages: list[dict]) -> list:
     """
     from archolith_proxy.extractor.base import ToolCallRecord
 
-    # Find the most recent assistant message with tool_calls — that defines the current turn.
-    # Older turns' tool results have already been extracted in prior calls.
-    last_assistant: dict | None = None
-    for msg in reversed(messages):
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            last_assistant = msg
-            break
-
-    if not last_assistant:
+    if not messages:
         return []
 
-    # Build id → (name, args) from the current-turn assistant message only
+    window_end = len(messages)
+    user_indexes = [idx for idx, msg in enumerate(messages) if msg.get("role") == "user"]
+    if messages[-1].get("role") == "user" and user_indexes:
+        window_end = user_indexes[-1]
+        window_start = user_indexes[-2] + 1 if len(user_indexes) >= 2 else 0
+    else:
+        window_start = user_indexes[-1] + 1 if user_indexes else 0
+
+    turn_messages = messages[window_start:window_end]
     current_turn_map: dict[str, tuple[str, dict]] = {}
-    for tc in (last_assistant.get("tool_calls") or []):
-        try:
-            args = json.loads(tc["function"]["arguments"])
-        except (KeyError, json.JSONDecodeError):
-            args = {}
-        current_turn_map[tc.get("id", "")] = (tc["function"]["name"], args)
+    for msg in turn_messages:
+        if msg.get("role") != "assistant":
+            continue
+        for tc in (msg.get("tool_calls") or []):
+            try:
+                args = json.loads(tc["function"]["arguments"])
+            except (KeyError, json.JSONDecodeError):
+                args = {}
+            current_turn_map[tc.get("id", "")] = (tc["function"]["name"], args)
 
     records = []
-    for msg in messages:
+    for msg in turn_messages:
         if msg.get("role") != "tool":
             continue
         tc_id = msg.get("tool_call_id", "")
@@ -254,7 +259,7 @@ def _extract_file_reads(messages: list[dict]) -> list[dict]:
     call_map = _build_call_map(messages)
 
     # Debug: log message structure when call_map is empty to diagnose extraction misses
-    if logger.isEnabledFor(__import__('logging').DEBUG):
+    if logging.getLogger(__name__).isEnabledFor(logging.DEBUG):
         role_counts = {}
         for m in messages:
             r = m.get("role", "unknown")

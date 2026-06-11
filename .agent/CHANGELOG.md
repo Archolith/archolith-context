@@ -6,6 +6,7 @@
 - **`archolith_proxy/config.py`**: Added `extraction_mode: str = "turn_boundary"` — accepts `"turn_boundary"` (default) or `"every_turn"` (legacy behavior).
 - **`.agent/architecture.md`**: Updated data-flow step 8 to document the turn-boundary default and fallback mode.
 - **Test**: 16 new tests — 11 parametrized `_is_turn_boundary` truth-table checks, 5 integration tests covering skip-on-agent-solo, run-on-user-turn, run-on-finish-stop, file-cache-runs-every-turn, and every_turn mode compatibility.
+- **Remediation**: `_collect_tool_call_records()` now collects every assistant/tool-call batch in the completed turn, including the previous completed agent turn when extraction runs on the next user request. Added regression tests for multi-batch per-tool extraction and real file-cache upsert on skipped continuation turns.
 
 ## 2026-06-10 — Documentation Reconciliation (10 code/docs mismatches fixed)
 
