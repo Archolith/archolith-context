@@ -184,6 +184,9 @@ async def _run_curator_native(
     curated_paths: set[str] = set()
     retained_turn_numbers: list[int] | None = None
     tool_log: list[CuratorToolCall] = []
+    # Token usage accumulated across all LLM calls
+    curator_prompt_tokens: int = 0
+    curator_completion_tokens: int = 0
     # Track seen queries to detect wasteful re-fetches of search results
     _seen_queries: set[str] = set()
 
@@ -219,6 +222,11 @@ async def _run_curator_native(
                 error_detail=str(exc))
             return None, tool_log, f"llm_error: {str(exc)[:200]}"
 
+        # Capture token usage from the LLM response
+        if response.usage:
+            curator_prompt_tokens += response.usage.prompt_tokens or 0
+            curator_completion_tokens += response.usage.completion_tokens or 0
+
         tool_count = len(choice.message.tool_calls or [])
         content_len = len((choice.message.content or "").strip())
         logger.info(
@@ -228,6 +236,10 @@ async def _run_curator_native(
             tool_calls=tool_count,
             content_len=content_len,
             session_id=session_id,
+            prompt_tokens=response.usage.prompt_tokens if response.usage else 0,
+            completion_tokens=response.usage.completion_tokens if response.usage else 0,
+            cumulative_prompt_tokens=curator_prompt_tokens,
+            cumulative_completion_tokens=curator_completion_tokens,
         )
 
         if choice.finish_reason == "stop":
@@ -268,6 +280,8 @@ async def _run_curator_native(
                 iterations_used=iterations_used,
                 estimated_tokens=_estimate_tokens(content),
                 tool_log=tool_log,
+                prompt_tokens_used=curator_prompt_tokens,
+                completion_tokens_used=curator_completion_tokens,
             ), tool_log, ""
 
         if choice.finish_reason == "length":

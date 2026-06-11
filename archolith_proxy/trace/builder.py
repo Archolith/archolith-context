@@ -162,6 +162,27 @@ class TraceBuilder:
         # estimate-vs-actual reconciliation (TODO #8).
         self._data["prompt_tokens_actual"] = prompt_tokens
 
+    def set_helper_usage(
+        self,
+        extractor_prompt_tokens: int = 0,
+        extractor_completion_tokens: int = 0,
+        extractor_llm_calls: int = 0,
+        curator_prompt_tokens: int = 0,
+        curator_completion_tokens: int = 0,
+        embedding_tokens: int = 0,
+    ) -> None:
+        """Record helper-LLM token usage for this turn.
+
+        Called after extraction, curator, and embedding steps complete.
+        Aggregate counters for the archolith-bench cost model.
+        """
+        self._data["extractor_prompt_tokens"] = extractor_prompt_tokens
+        self._data["extractor_completion_tokens"] = extractor_completion_tokens
+        self._data["extractor_llm_calls"] = extractor_llm_calls
+        self._data["curator_prompt_tokens"] = curator_prompt_tokens
+        self._data["curator_completion_tokens"] = curator_completion_tokens
+        self._data["embedding_tokens"] = embedding_tokens
+
     def set_extraction(
         self,
         facts_stored: int = 0,

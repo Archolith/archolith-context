@@ -289,6 +289,8 @@ async def _run_with_briefing(
         decisions_selected=[], compression_ratio=1.0,
         retained_turn_numbers=result.retained_turn_numbers,
         curator_tool_log=[tc.to_dict() for tc in result.tool_log],
+        curator_prompt_tokens=result.prompt_tokens_used,
+        curator_completion_tokens=result.completion_tokens_used,
     )
 
 
@@ -420,6 +422,8 @@ async def curate_context(
         decisions_selected=[], compression_ratio=1.0,
         retained_turn_numbers=result.retained_turn_numbers,
         curator_tool_log=[tc.to_dict() for tc in result.tool_log],
+        curator_prompt_tokens=result.prompt_tokens_used,
+        curator_completion_tokens=result.completion_tokens_used,
     )
 
 

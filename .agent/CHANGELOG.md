@@ -1,5 +1,23 @@
 # Changelog — archolith-context
 
+## 2026-06-10 — Helper-LLM Cost Telemetry (extractor/curator/embedding token usage)
+
+- **`archolith_proxy/models/dtos.py`**: Added 6 helper-LLM usage fields to `TurnTrace` (extractor_prompt/completion_tokens, extractor_llm_calls, curator_prompt/completion_tokens, embedding_tokens), 2 fields to `BackgroundPassTrace` (prompt/completion_tokens_used), and `usage` field to `ExtractionResult`.
+- **`archolith_proxy/trace/builder.py`**: Added `set_helper_usage()` to accept extractor/curator/embedding token counts.
+- **`archolith_proxy/extractor/client.py`**: `extract_facts()` and `extract_facts_per_tool()` now capture upstream LLM usage from the API response into `ExtractionResult.usage`.
+- **`archolith_proxy/extractor/embeddings.py`**: `compute_embeddings_batch()` now returns `(embeddings, total_tokens)` tuple capturing usage from the embeddings API.
+- **`archolith_proxy/curator/result.py`**: Added `prompt_tokens_used` and `completion_tokens_used` to `CuratorResult`.
+- **`archolith_proxy/curator/loop.py`**: `_run_curator_native()` accumulates `response.usage` per iteration and passes through to `CuratorResult`.
+- **`archolith_proxy/curator/pipeline.py`**: Both `curate_context()` and `_run_with_briefing()` thread curator token usage through `AssembledContext`.
+- **`archolith_proxy/openai/extraction.py`**: Updated `_compute_fact_embeddings` return type to include token usage; wires extractor + embedding usage into trace builder and `/metrics`.
+- **`archolith_proxy/metrics.py`**: Added 5 cumulative counters: `extractor_prompt_tokens_total`, `extractor_completion_tokens_total`, `curator_prompt_tokens_total`, `curator_completion_tokens_total`, `embedding_tokens_total`.
+- **Tests**: 12 new tests covering DTO serialization, trace builder, CuratorResult/ExtractionResult/BackgroundPassTrace fields, and embedding usage capture.
+
+## 2026-06-11 — Documentation Reconciliation Review Fixes
+
+- **ARCHITECTURE.md §3**: Removed the contradictory active skip-reason bullet for the unenforced `ASSEMBLY_MIN_SAVINGS_RATIO`; the section now lists only enforced skip reasons and keeps savings-ratio/latency-budget as recorded-but-not-enforced knobs.
+- **.agent/architecture.md**: Corrected the remaining two-curator prepper `CURATOR_MAX_ITERATIONS` default from 4 to 6.
+
 ## 2026-06-10 — Extraction Batching at User-Turn Boundaries
 
 - **`archolith_proxy/openai/extraction.py`**: Extracted file-cache capture into `_run_file_cache_capture()` (runs on every request). Added `_is_turn_boundary()` helper. Added turn-boundary guard: when `extraction_mode="turn_boundary"`, LLM extraction runs only on user-turn boundaries or `finish_reason="stop"` — skipping the ~85% of agent-solo continuations without information loss (the client resends full history). `_run_file_cache_capture` always runs regardless of mode.
