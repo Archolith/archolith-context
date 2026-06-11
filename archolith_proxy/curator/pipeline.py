@@ -151,6 +151,8 @@ async def _run_background_pass_inner(
     bp_trace.files_fetched = len(briefing.files)
     bp_trace.context_chars = len(result.context_text)
     bp_trace.briefing_cached = True
+    bp_trace.prompt_tokens_used = result.prompt_tokens_used
+    bp_trace.completion_tokens_used = result.completion_tokens_used
 
     try:
         from archolith_proxy.metrics import record_metric
@@ -289,6 +291,8 @@ async def _run_with_briefing(
         decisions_selected=[], compression_ratio=1.0,
         retained_turn_numbers=result.retained_turn_numbers,
         curator_tool_log=[tc.to_dict() for tc in result.tool_log],
+        curator_prompt_tokens=result.prompt_tokens_used,
+        curator_completion_tokens=result.completion_tokens_used,
     )
 
 
@@ -420,6 +424,8 @@ async def curate_context(
         decisions_selected=[], compression_ratio=1.0,
         retained_turn_numbers=result.retained_turn_numbers,
         curator_tool_log=[tc.to_dict() for tc in result.tool_log],
+        curator_prompt_tokens=result.prompt_tokens_used,
+        curator_completion_tokens=result.completion_tokens_used,
     )
 
 

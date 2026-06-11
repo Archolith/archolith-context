@@ -235,7 +235,7 @@ async def _run_extraction(
             )
 
         fact_contents = [fact.get("content", "") for fact in unique_facts]
-        embeddings = await _compute_fact_embeddings(client, fact_contents)
+        embeddings, embedding_tokens_used = await _compute_fact_embeddings(client, fact_contents)
 
         enriched_facts = []
         for i, fact in enumerate(unique_facts):
@@ -337,6 +337,12 @@ async def _run_extraction(
         active_count = await get_backend().get_active_fact_count(session_id)
         embedding_count = sum(1 for e in embeddings if e is not None)
         record_metric("extraction_successes", 1)
+
+        # Record helper-LLM token usage metrics
+        _usage = result.usage or {}
+        record_metric("extractor_prompt_tokens_total", _usage.get("prompt_tokens", 0) or 0)
+        record_metric("extractor_completion_tokens_total", _usage.get("completion_tokens", 0) or 0)
+        record_metric("embedding_tokens_total", embedding_tokens_used)
         logger.info(
             "extraction_stored",
             session_id=session_id, turn=turn_number,
@@ -363,6 +369,14 @@ async def _run_extraction(
                 invalidations_matched=invalidations_matched_count,
                 extraction_latency_ms=extraction_latency_ms,
                 extracted_facts=[{"content": f.get("content", "")[:200], "type": f.get("fact_type", "observation")} for f in unique_facts],
+            )
+            # Record helper-LLM token usage for cost-model telemetry
+            usage = result.usage or {}
+            trace_builder.set_helper_usage(
+                extractor_prompt_tokens=usage.get("prompt_tokens", 0) or 0,
+                extractor_completion_tokens=usage.get("completion_tokens", 0) or 0,
+                extractor_llm_calls=usage.get("llm_calls", 1) or 1,
+                embedding_tokens=embedding_tokens_used,
             )
 
         if promotion_service is not None:
@@ -453,11 +467,14 @@ async def _run_extraction(
 async def _compute_fact_embeddings(
     client: httpx.AsyncClient,
     texts: list[str],
-) -> list[list[float] | None]:
-    """Compute batch embeddings for extracted fact texts."""
+) -> tuple[list[list[float] | None], int]:
+    """Compute batch embeddings for extracted fact texts.
+
+    Returns (embeddings, total_tokens_used).
+    """
     try:
         from archolith_proxy.extractor.embeddings import compute_embeddings_batch
         return await compute_embeddings_batch(client, texts)
     except Exception as e:
         logger.warning("embedding_computation_failed", error=str(e))
-        return [None] * len(texts)
+        return [None] * len(texts), 0

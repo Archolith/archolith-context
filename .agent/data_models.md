@@ -223,6 +223,8 @@ What the assembler or curator returns to the chat handler.
 | `compression_ratio` | `float` | Output-size ratio for the rewrite |
 | `retained_turn_numbers` | `list[int] \| None` | Explicit middle turns kept by the curator |
 | `curator_tool_log` | `list[dict]` | Per-tool call log for trace surfaces |
+| `curator_prompt_tokens` | `int` | Curator LLM prompt tokens for this turn |
+| `curator_completion_tokens` | `int` | Curator LLM completion tokens for this turn |
 
 ### ExtractionResult
 
@@ -239,6 +241,7 @@ Structured output from either legacy extraction or per-tool extraction.
 | `checkpoint` | `dict \| None` | Working-state summary block |
 | `issues` | `list[dict]` | Open/resolved issues |
 | `verifications` | `list[dict]` | Recorded verification results |
+| `usage` | `dict` | Upstream LLM token usage from extraction API response |
 
 ### TurnTrace
 
@@ -320,6 +323,17 @@ Primary observability record for one proxied request. **67 fields total.**
 | `invalidations_attempted` | `int` | Supersession descriptions produced |
 | `invalidations_matched` | `int` | Supersession descriptions matched to fact ids |
 | `extracted_facts` | `list[dict]` | Facts extracted from turn |
+
+**Helper-LLM Usage:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `extractor_prompt_tokens` | `int` | Extractor LLM prompt tokens for this turn |
+| `extractor_completion_tokens` | `int` | Extractor LLM completion tokens for this turn |
+| `extractor_llm_calls` | `int` | Number of extractor LLM calls this turn |
+| `curator_prompt_tokens` | `int` | Curator LLM prompt tokens for this turn |
+| `curator_completion_tokens` | `int` | Curator LLM completion tokens for this turn |
+| `embedding_tokens` | `int` | Embedding API tokens for this turn |
 
 **Compression:**
 
@@ -418,6 +432,8 @@ Record for a single background curator pass (prepper) run post-turn.
 | `files_fetched` | `int` | Number of files pre-fetched via `prefetch_file` |
 | `context_chars` | `int` | Length of context block produced |
 | `briefing_cached` | `bool` | Whether a `SessionBriefing` was written to cache |
+| `prompt_tokens_used` | `int` | Curator LLM prompt tokens consumed during this pass |
+| `completion_tokens_used` | `int` | Curator LLM completion tokens consumed during this pass |
 
 ### SessionTraceSummary
 

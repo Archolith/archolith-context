@@ -50,6 +50,12 @@ _metrics: dict = {
     "curator_calls": 0,
     "curator_timeouts": 0,
     "curator_fallbacks": 0,
+    # Helper-LLM token usage counters (cumulative, for cost telemetry)
+    "extractor_prompt_tokens_total": 0,
+    "extractor_completion_tokens_total": 0,
+    "curator_prompt_tokens_total": 0,
+    "curator_completion_tokens_total": 0,
+    "embedding_tokens_total": 0,
     "synthetic_circuit_opens": 0,
     "synthetic_circuit_hard_disables": 0,
     "synthetic_tool_failures": 0,

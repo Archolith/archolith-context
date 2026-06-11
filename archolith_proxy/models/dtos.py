@@ -24,6 +24,9 @@ class AssembledContext(BaseModel):
     retained_turn_numbers: list[int] | None = None
     # Curator tool dispatch log — carried through to trace
     curator_tool_log: list[dict] = Field(default_factory=list)
+    # Curator LLM token usage (populated when curator succeeded)
+    curator_prompt_tokens: int = 0
+    curator_completion_tokens: int = 0
 
 
 class ExtractionResult(BaseModel):
@@ -39,6 +42,10 @@ class ExtractionResult(BaseModel):
     checkpoint: dict | None = None          # {summary, next_step, confidence}
     issues: list[dict] = Field(default_factory=list)        # [{summary, status, related_file, related_command}]
     verifications: list[dict] = Field(default_factory=list) # [{command, status, summary}]
+
+    # Token usage from the extractor LLM call(s) — populated when the upstream response
+    # includes usage data. Keys: prompt_tokens, completion_tokens.
+    usage: dict = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +130,14 @@ class TurnTrace(BaseModel):
     invalidations_matched: int = 0
     extracted_facts: list[dict] = Field(default_factory=list)
 
+    # Helper-LLM token usage — extractor, curator, embedding
+    extractor_prompt_tokens: int = 0
+    extractor_completion_tokens: int = 0
+    extractor_llm_calls: int = 0
+    curator_prompt_tokens: int = 0
+    curator_completion_tokens: int = 0
+    embedding_tokens: int = 0
+
     # Compression
     compression_ratio: float = 1.0
 
@@ -204,6 +219,10 @@ class BackgroundPassTrace(BaseModel):
     files_fetched: int = 0
     context_chars: int = 0     # Length of context block produced
     briefing_cached: bool = False  # Whether a SessionBriefing was written
+
+    # Helper-LLM token usage (background pass is curator-driven)
+    prompt_tokens_used: int = 0
+    completion_tokens_used: int = 0
 
 
 class SessionTraceSummary(BaseModel):

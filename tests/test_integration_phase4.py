@@ -598,8 +598,9 @@ class TestBatchEmbeddings:
         """Empty input returns empty list."""
         from archolith_proxy.extractor.embeddings import compute_embeddings_batch
         client = httpx.AsyncClient()
-        result = await compute_embeddings_batch(client, [])
+        result, total_tokens = await compute_embeddings_batch(client, [])
         assert result == []
+        assert total_tokens == 0
         await client.aclose()
 
     @pytest.mark.asyncio
@@ -611,8 +612,9 @@ class TestBatchEmbeddings:
         client = httpx.AsyncClient()
         # Patch settings to ensure embedding_api_key is empty
         with patch.object(get_settings(), "embedding_api_key", ""):
-            result = await compute_embeddings_batch(client, ["text1", "text2"])
+            result, total_tokens = await compute_embeddings_batch(client, ["text1", "text2"])
             assert result == [None, None]
+            assert total_tokens == 0
         await client.aclose()
 
     @pytest.mark.asyncio
@@ -643,10 +645,11 @@ class TestBatchEmbeddings:
         reset_settings()
 
         try:
-            result = await compute_embeddings_batch(client, ["hello world", "test fact"])
+            result, total_tokens = await compute_embeddings_batch(client, ["hello world", "test fact"])
             assert len(result) == 2
             assert result[0] == [0.1, 0.2, 0.3]
             assert result[1] == [0.1, 0.2, 0.3]
+            assert total_tokens == 10
         finally:
             os.environ.pop("EMBEDDING_API_KEY", None)
             reset_settings()
@@ -669,9 +672,10 @@ class TestBatchEmbeddings:
         reset_settings()
 
         try:
-            result = await compute_embeddings_batch(client, ["text1", "text2", "text3"])
+            result, total_tokens = await compute_embeddings_batch(client, ["text1", "text2", "text3"])
             assert len(result) == 3
             assert all(e is None for e in result)
+            assert total_tokens == 0
         finally:
             os.environ.pop("EMBEDDING_API_KEY", None)
             reset_settings()

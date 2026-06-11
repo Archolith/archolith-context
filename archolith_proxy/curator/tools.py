@@ -186,7 +186,7 @@ async def search_facts_semantic(
         try:
             from archolith_proxy.extractor.embeddings import compute_embeddings_batch
             _client = await _get_semantic_client()
-            results = await compute_embeddings_batch(_client, [query[:8000]])
+            results, _usage = await compute_embeddings_batch(_client, [query[:8000]])
             query_embedding = results[0] if results else None
         except Exception as exc:
             logger.warning(

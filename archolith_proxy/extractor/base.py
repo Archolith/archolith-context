@@ -42,6 +42,8 @@ class PartialExtractionResult:
     # Each fact: {content, fact_type, confidence}
     files_touched: list[str] = field(default_factory=list)
     used_llm: bool = False
+    # Token usage from LLM calls (populated by LLM-backed extractors)
+    usage: dict = field(default_factory=dict)
 
 
 class ToolExtractor(ABC):

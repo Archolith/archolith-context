@@ -29,27 +29,29 @@ MAX_BATCH_SIZE = 100
 async def compute_embeddings_batch(
     http_client: httpx.AsyncClient,
     texts: list[str],
-) -> list[list[float] | None]:
+) -> tuple[list[list[float] | None], int]:
     """Compute embeddings for a batch of texts in a single API call.
 
-    Returns a list of embedding vectors aligned with the input texts.
-    If the embedding API fails, returns None for each text (graceful fallback).
+    Returns (embeddings, total_tokens) where total_tokens is the summed
+    token usage across all batch requests (0 if unavailable or failed).
+    If the embedding API fails, returns (None-list, 0) (graceful fallback).
     """
     if not texts:
-        return []
+        return [], 0
 
     settings = get_settings()
 
     # Skip if no API key configured
     if not settings.embedding_api_key:
         logger.debug("embedding_skipped_no_key")
-        return [None] * len(texts)
+        return [None] * len(texts), 0
 
     # Truncate individual texts to avoid token limits
     truncated_texts = [t[:8000] for t in texts]
 
     # Batch in chunks if needed
     all_embeddings: list[list[float] | None] = []
+    total_tokens_used: int = 0
 
     for i in range(0, len(truncated_texts), MAX_BATCH_SIZE):
         batch = truncated_texts[i : i + MAX_BATCH_SIZE]
@@ -68,6 +70,11 @@ async def compute_embeddings_batch(
             resp.raise_for_status()
             data = resp.json()
 
+            # Capture embedding token usage from upstream response
+            usage = data.get("usage", {})
+            if usage:
+                total_tokens_used += usage.get("total_tokens", 0) or 0
+
             # Build explicit mapping from API response index to embedding.
             # API returns items with "index" field that corresponds to position in the input batch.
             embeddings_map: dict[int, list[float]] = {}
@@ -83,6 +90,7 @@ async def compute_embeddings_batch(
             logger.debug(
                 "embedding_batch_computed",
                 batch_size=len(batch),
+                total_tokens=total_tokens_used,
                 total=len(all_embeddings),
             )
 
@@ -96,4 +104,4 @@ async def compute_embeddings_batch(
             # Graceful fallback: no embeddings for this batch
             all_embeddings.extend([None] * len(batch))
 
-    return all_embeddings
+    return all_embeddings, total_tokens_used

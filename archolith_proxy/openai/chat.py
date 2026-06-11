@@ -515,6 +515,15 @@ async def chat_completions(
             savings_ratio = round(savings / input_tokens, 4) if input_tokens > 0 else 0.0
             record_metric("curator_calls", 1)
 
+            # Record curator LLM token usage in trace and metrics
+            if assembled.curator_prompt_tokens or assembled.curator_completion_tokens:
+                trace_builder.set_helper_usage(
+                    curator_prompt_tokens=assembled.curator_prompt_tokens,
+                    curator_completion_tokens=assembled.curator_completion_tokens,
+                )
+                record_metric("curator_prompt_tokens_total", assembled.curator_prompt_tokens)
+                record_metric("curator_completion_tokens_total", assembled.curator_completion_tokens)
+
     # ── Record curator skip reason when eligible but skipped/failed ──
     if session_id and graph_ready and not session_over_budget and is_user_turn and not assembled:
         from archolith_proxy.curator.pipeline import get_last_attempt
