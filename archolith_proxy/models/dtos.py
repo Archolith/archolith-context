@@ -27,6 +27,7 @@ class AssembledContext(BaseModel):
     # Curator LLM token usage (populated when curator succeeded)
     curator_prompt_tokens: int = 0
     curator_completion_tokens: int = 0
+    curator_cached_tokens: int = 0
 
 
 class ExtractionResult(BaseModel):
@@ -134,8 +135,10 @@ class TurnTrace(BaseModel):
     extractor_prompt_tokens: int = 0
     extractor_completion_tokens: int = 0
     extractor_llm_calls: int = 0
+    extractor_cached_tokens: int = 0
     curator_prompt_tokens: int = 0
     curator_completion_tokens: int = 0
+    curator_cached_tokens: int = 0
     embedding_tokens: int = 0
 
     # Compression

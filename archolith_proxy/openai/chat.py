@@ -520,9 +520,11 @@ async def chat_completions(
                 trace_builder.set_helper_usage(
                     curator_prompt_tokens=assembled.curator_prompt_tokens,
                     curator_completion_tokens=assembled.curator_completion_tokens,
+                    curator_cached_tokens=assembled.curator_cached_tokens,
                 )
                 record_metric("curator_prompt_tokens_total", assembled.curator_prompt_tokens)
                 record_metric("curator_completion_tokens_total", assembled.curator_completion_tokens)
+                record_metric("curator_cached_tokens_total", assembled.curator_cached_tokens)
 
     # ── Record curator skip reason when eligible but skipped/failed ──
     if session_id and graph_ready and not session_over_budget and is_user_turn and not assembled:
