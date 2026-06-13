@@ -176,12 +176,17 @@ class TraceBuilder:
         Called after extraction, curator, and embedding steps complete.
         Aggregate counters for the archolith-bench cost model.
         """
-        self._data["extractor_prompt_tokens"] = extractor_prompt_tokens
-        self._data["extractor_completion_tokens"] = extractor_completion_tokens
-        self._data["extractor_llm_calls"] = extractor_llm_calls
-        self._data["curator_prompt_tokens"] = curator_prompt_tokens
-        self._data["curator_completion_tokens"] = curator_completion_tokens
-        self._data["embedding_tokens"] = embedding_tokens
+        updates = {
+            "extractor_prompt_tokens": extractor_prompt_tokens,
+            "extractor_completion_tokens": extractor_completion_tokens,
+            "extractor_llm_calls": extractor_llm_calls,
+            "curator_prompt_tokens": curator_prompt_tokens,
+            "curator_completion_tokens": curator_completion_tokens,
+            "embedding_tokens": embedding_tokens,
+        }
+        for key, value in updates.items():
+            if value:
+                self._data[key] = value
 
     def set_extraction(
         self,

@@ -75,6 +75,12 @@ class DefaultExtractor(ToolExtractor):
                 text = "\n".join(lines)
 
             parsed = json.loads(text)
+            usage_raw = data.get("usage", {})
+            usage = {
+                "prompt_tokens": usage_raw.get("prompt_tokens", 0) or 0,
+                "completion_tokens": usage_raw.get("completion_tokens", 0) or 0,
+                "llm_calls": 1,
+            }
             facts = parsed.get("facts", [])
             # Prefix with tool name
             for f in facts:
@@ -96,6 +102,7 @@ class DefaultExtractor(ToolExtractor):
                 facts=facts if isinstance(facts, list) and all(isinstance(f, dict) for f in facts) else [],
                 files_touched=files_touched,
                 used_llm=True,
+                usage=usage,
             )
         except Exception as e:
             logger.warning("default_extractor_llm_failed", tool=tool_name, error=str(e))

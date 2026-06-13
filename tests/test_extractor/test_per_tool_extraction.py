@@ -1031,6 +1031,66 @@ class TestExtractFactsPerTool:
         assert len(grep_facts) >= 1
 
     @pytest.mark.asyncio
+    async def test_per_tool_usage_carried_to_combined_result(self):
+        """Per-tool and turn-level LLM usage is preserved on the returned result."""
+        from archolith_proxy.extractor.client import extract_facts_per_tool
+
+        class LlmExtractor(ToolExtractor):
+            tool_names = ("LlmTool",)
+            may_use_llm = True
+
+            async def extract(self, record, http_client, turn_number, session_goal):
+                return PartialExtractionResult(
+                    source_tool="LlmTool",
+                    facts=[{"content": "[LlmTool] fact", "fact_type": "tool_result", "confidence": 0.8}],
+                    files_touched=[],
+                    used_llm=True,
+                    usage={"prompt_tokens": 7, "completion_tokens": 3, "llm_calls": 1},
+                )
+
+        reg = ToolExtractorRegistry()
+        reg.register(LlmExtractor())
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({
+                "facts": [], "decisions": [], "session_goal": None, "checkpoint": None,
+                "issues": [], "verifications": [], "files_touched": [], "invalidated": [],
+            })}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 5},
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        with patch("archolith_proxy.extractor.client.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                extractor_model="gpt-4.1-mini",
+                extractor_base_url="https://api.openai.com/v1",
+                extractor_api_key="test",
+                extractor_llm_concurrency=3,
+            )
+            import archolith_proxy.extractor.client as client_mod
+            client_mod._llm_semaphore = None
+
+            result = await extract_facts_per_tool(
+                http_client=mock_client,
+                turn_number=1,
+                user_message="test",
+                assistant_response="test",
+                tool_records=[
+                    ToolCallRecord(tool_call_id="1", tool_name="LlmTool", args={}, result="x")
+                ],
+                session_goal=None,
+                registry=reg,
+            )
+
+        assert result is not None
+        assert result.usage["prompt_tokens"] == 18
+        assert result.usage["completion_tokens"] == 8
+        assert result.usage["llm_calls"] == 2
+
+    @pytest.mark.asyncio
     async def test_extractor_returning_none_facts_does_not_crash_merge(self):
         """An extractor returning facts=None/files_touched=None must not break the merge (D6).
 

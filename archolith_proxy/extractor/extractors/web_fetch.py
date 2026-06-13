@@ -61,6 +61,12 @@ class WebFetchExtractor(ToolExtractor):
             data = resp.json()
             raw = data["choices"][0]["message"]["content"]
             parsed = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+            usage_raw = data.get("usage", {})
+            usage = {
+                "prompt_tokens": usage_raw.get("prompt_tokens", 0) or 0,
+                "completion_tokens": usage_raw.get("completion_tokens", 0) or 0,
+                "llm_calls": 1,
+            }
 
             facts = parsed.get("facts", [])
             # Prefix with [web_fetch]
@@ -82,6 +88,7 @@ class WebFetchExtractor(ToolExtractor):
                 facts=prefixed,
                 files_touched=[],
                 used_llm=True,
+                usage=usage,
             )
         except Exception as e:
             logger.warning("web_fetch_extractor_llm_failed", error=str(e))

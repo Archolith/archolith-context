@@ -1,5 +1,12 @@
 # Changelog — archolith-context
 
+## 2026-06-11 — Helper-cost telemetry review closure
+
+- **`archolith_proxy/trace/builder.py`**: `set_helper_usage()` now preserves prior helper-stage fields across multiple calls so curator usage is not zeroed by later extractor/embedding updates.
+- **`archolith_proxy/extractor/client.py`**: Per-tool extraction now returns combined helper usage, including per-tool LLM calls plus turn-level prompt/completion usage.
+- **`archolith_proxy/extractor/extractors/{bash,default,web_fetch}.py`**: LLM-backed extractors now capture upstream prompt/completion usage when available.
+- **Tests**: Added regressions for helper-usage preservation and per-tool usage propagation.
+
 ## 2026-06-10 — Mechanical Mode — ARCHOLITH_PROFILE flag bundles
 
 - **`archolith_proxy/config.py`**: Added `ARCHOLITH_PROFILE` setting (passthrough | mechanical | curated | full) with `PROFILES` dict defining each bundle. `_apply_profile()` applies flags only when NOT explicitly set by env (env-wins precedence). Added to SESSION_CONFIG_DENYLIST. Profile exposed in `/admin/config` via config snapshots.

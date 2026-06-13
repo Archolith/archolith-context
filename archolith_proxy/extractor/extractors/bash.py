@@ -287,6 +287,12 @@ class BashExtractor(ToolExtractor):
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
             parsed = json.loads(content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+            usage_raw = data.get("usage", {})
+            usage = {
+                "prompt_tokens": usage_raw.get("prompt_tokens", 0) or 0,
+                "completion_tokens": usage_raw.get("completion_tokens", 0) or 0,
+                "llm_calls": 1,
+            }
 
             facts = parsed.get("facts", [])
             verifications = parsed.get("verifications", [])
@@ -314,6 +320,7 @@ class BashExtractor(ToolExtractor):
                 facts=prefixed_facts,
                 files_touched=[],
                 used_llm=True,
+                usage=usage,
             )
         except Exception as e:
             logger.warning("bash_extractor_llm_failed", error=str(e))

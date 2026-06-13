@@ -90,6 +90,26 @@ def test_trace_builder_set_helper_usage_partial() -> None:
     assert trace.embedding_tokens == 0
 
 
+def test_trace_builder_set_helper_usage_preserves_prior_fields() -> None:
+    """Separate helper stages must not zero each other's usage fields."""
+    builder = TraceBuilder()
+    builder.set_helper_usage(curator_prompt_tokens=300, curator_completion_tokens=200)
+    builder.set_helper_usage(
+        extractor_prompt_tokens=100,
+        extractor_completion_tokens=50,
+        extractor_llm_calls=2,
+        embedding_tokens=500,
+    )
+
+    trace = builder.build()
+    assert trace.curator_prompt_tokens == 300
+    assert trace.curator_completion_tokens == 200
+    assert trace.extractor_prompt_tokens == 100
+    assert trace.extractor_completion_tokens == 50
+    assert trace.extractor_llm_calls == 2
+    assert trace.embedding_tokens == 500
+
+
 # ---------------------------------------------------------------------------
 # CuratorResult new fields
 # ---------------------------------------------------------------------------

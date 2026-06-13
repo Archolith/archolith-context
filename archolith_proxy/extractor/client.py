@@ -334,6 +334,7 @@ async def extract_facts_per_tool(
     all_facts: list[dict] = []
     all_files: list[str] = []
     llm_calls_made = 0
+    usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "llm_calls": 0}
     for r in partial_results:
         if isinstance(r, Exception):
             logger.warning("per_tool_extractor_failed", error=str(r))
@@ -341,7 +342,11 @@ async def extract_facts_per_tool(
         all_facts.extend(r.facts or [])
         all_files.extend(r.files_touched or [])
         if r.used_llm:
-            llm_calls_made += 1
+            calls = r.usage.get("llm_calls", 1) or 1
+            llm_calls_made += calls
+            usage["llm_calls"] += calls
+            usage["prompt_tokens"] += r.usage.get("prompt_tokens", 0) or 0
+            usage["completion_tokens"] += r.usage.get("completion_tokens", 0) or 0
 
     logger.info(
         "per_tool_extraction_gathered",
@@ -391,11 +396,10 @@ async def extract_facts_per_tool(
         # Capture turn-level usage from upstream response
         turn_usage = data.get("usage", {})
         if turn_usage:
-            turn_result.usage = {
-                "prompt_tokens": turn_usage.get("prompt_tokens", 0) or 0,
-                "completion_tokens": turn_usage.get("completion_tokens", 0) or 0,
-                "llm_calls": 1 + llm_calls_made,
-            }
+            usage["prompt_tokens"] += turn_usage.get("prompt_tokens", 0) or 0
+            usage["completion_tokens"] += turn_usage.get("completion_tokens", 0) or 0
+        usage["llm_calls"] += 1
+        turn_result.usage = usage.copy()
 
         # Step 4: Merge — add turn-level facts that don't duplicate per-tool facts.
         # Use Jaccard near-duplicate check (not just exact MD5) to catch similar facts.
@@ -447,4 +451,5 @@ async def extract_facts_per_tool(
         checkpoint=checkpoint,
         issues=issues,
         verifications=verifications,
+        usage=usage,
     )
