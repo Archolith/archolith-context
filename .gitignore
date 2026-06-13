@@ -60,6 +60,10 @@ scripts/*.json
 scripts/results/
 audit_results.json
 
+# Eval calibration corpus (large local session captures + generated results)
+eval/calibration/*.json
+eval/calibration/results/
+
 # Runtime state files
 .bench_state.json
 .scripted_bench_state.json
