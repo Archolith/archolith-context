@@ -1,5 +1,32 @@
 # Changelog
 
+## [unreleased] — 2026-06-13 — Helper-LLM prompt-cache hit tokens on TurnTrace
+
+Thread `cached_tokens` (OpenAI `prompt_tokens_details.cached_tokens`) through the curator
+and extractor telemetry paths and record them on `TurnTrace`.
+
+- **curator/loop.py**: accumulate `curator_cached_tokens` across iterations via `getattr`-safe
+  `response.usage.prompt_tokens_details.cached_tokens`; default 0 when field absent.
+- **curator/result.py**: `CuratorResult.cached_tokens_used: int = 0`.
+- **curator/pipeline.py**: pass `curator_cached_tokens=result.cached_tokens_used` in both
+  `AssembledContext` construction sites.
+- **models/dtos.py**: `AssembledContext.curator_cached_tokens: int = 0`;
+  `TurnTrace.extractor_cached_tokens: int = 0` + `TurnTrace.curator_cached_tokens: int = 0`.
+- **extractor/client.py**: single-call path captures `cached_tokens` from
+  `prompt_tokens_details`; accumulator init includes `"cached_tokens": 0`; per-tool merge
+  loop and turn-level capture both accumulate it.
+- **openai/extraction.py**: `extractor_cached_tokens` threaded into `set_helper_usage`;
+  `record_metric("extractor_cached_tokens_total", ...)`.
+- **openai/chat.py**: `curator_cached_tokens` threaded into `set_helper_usage`;
+  `record_metric("curator_cached_tokens_total", ...)`.
+- **trace/builder.py**: `set_helper_usage` gains `extractor_cached_tokens` and
+  `curator_cached_tokens` params; both written to `_data` via existing `if value:` pattern.
+- **metrics.py**: counters `extractor_cached_tokens_total` and `curator_cached_tokens_total`
+  initialised to 0.
+- **tests/test_helper_cached_tokens.py**: new test file; 13 tests covering JSONL round-trip,
+  `set_helper_usage`, curator accumulation (with and without `prompt_tokens_details`), and
+  extractor usage dict handling.
+
 ## [unreleased] — 2026-06-12 — Coherence-tail integrity + prefetch workspace default
 
 Tail-handling correctness fixes from the 2026-06-09 review, plus a prefetch

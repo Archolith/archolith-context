@@ -187,6 +187,7 @@ async def _run_curator_native(
     # Token usage accumulated across all LLM calls
     curator_prompt_tokens: int = 0
     curator_completion_tokens: int = 0
+    curator_cached_tokens: int = 0
     # Track seen queries to detect wasteful re-fetches of search results
     _seen_queries: set[str] = set()
 
@@ -226,6 +227,7 @@ async def _run_curator_native(
         if response.usage:
             curator_prompt_tokens += response.usage.prompt_tokens or 0
             curator_completion_tokens += response.usage.completion_tokens or 0
+            curator_cached_tokens += (getattr(getattr(response.usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0)
 
         tool_count = len(choice.message.tool_calls or [])
         content_len = len((choice.message.content or "").strip())
@@ -282,6 +284,7 @@ async def _run_curator_native(
                 tool_log=tool_log,
                 prompt_tokens_used=curator_prompt_tokens,
                 completion_tokens_used=curator_completion_tokens,
+                cached_tokens_used=curator_cached_tokens,
             ), tool_log, ""
 
         if choice.finish_reason == "length":

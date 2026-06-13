@@ -49,6 +49,7 @@ class CuratorResult:
     # Token usage from curator LLM calls — accumulated across all iterations
     prompt_tokens_used: int = 0
     completion_tokens_used: int = 0
+    cached_tokens_used: int = 0
     # Turn numbers the curator selected to retain in the middle section.
     # None = keep all (curator did not call select_relevant_turns).
     retained_turn_numbers: list[int] | None = None

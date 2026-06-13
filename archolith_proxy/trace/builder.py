@@ -167,8 +167,10 @@ class TraceBuilder:
         extractor_prompt_tokens: int = 0,
         extractor_completion_tokens: int = 0,
         extractor_llm_calls: int = 0,
+        extractor_cached_tokens: int = 0,
         curator_prompt_tokens: int = 0,
         curator_completion_tokens: int = 0,
+        curator_cached_tokens: int = 0,
         embedding_tokens: int = 0,
     ) -> None:
         """Record helper-LLM token usage for this turn.
@@ -180,8 +182,10 @@ class TraceBuilder:
             "extractor_prompt_tokens": extractor_prompt_tokens,
             "extractor_completion_tokens": extractor_completion_tokens,
             "extractor_llm_calls": extractor_llm_calls,
+            "extractor_cached_tokens": extractor_cached_tokens,
             "curator_prompt_tokens": curator_prompt_tokens,
             "curator_completion_tokens": curator_completion_tokens,
+            "curator_cached_tokens": curator_cached_tokens,
             "embedding_tokens": embedding_tokens,
         }
         for key, value in updates.items():
