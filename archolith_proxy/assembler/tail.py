@@ -84,10 +84,52 @@ def smart_tail(
             expanded_size=expanded_size,
             max_size=max_size,
             base_size=base_size,
-            fallback="fixed_tail",
+            fallback="turn_boundary",
         )
-        # Fall back to the fixed tail (original behavior)
-        return messages[tail_start:]
+        # Fall back to turn-boundary strategy: take the last max_size messages,
+        # then advance to the first user message or past leading orphaned tools.
+        window_start = max(0, len(messages) - max_size)
+        new_start = window_start
+
+        # First, search for the first user message at index >= window_start
+        user_found = False
+        for i in range(window_start, len(messages)):
+            if messages[i].get("role") == "user":
+                new_start = i
+                user_found = True
+                break
+
+        # If no user message found, skip leading orphaned tool messages
+        if not user_found:
+            for i in range(window_start, len(messages)):
+                msg = messages[i]
+                if msg.get("role") != "tool":
+                    # Not a tool message — stop skipping
+                    new_start = i
+                    break
+
+                # This is a tool message — check if it's orphaned
+                tool_call_id = msg.get("tool_call_id")
+                if not tool_call_id:
+                    # Tool message without tool_call_id is always orphaned
+                    continue
+
+                # Check if there's a matching assistant in the window
+                # _find_assistant_with_tool_call searches backward from search_before
+                # We want to find a match within [window_start, i), so search_before=i
+                match_index = _find_assistant_with_tool_call(messages, tool_call_id, i)
+                if match_index is not None and match_index >= window_start:
+                    # Matching assistant is in the window — not orphaned
+                    new_start = i
+                    break
+                # else: orphaned, continue skipping
+
+            else:
+                # All messages in window were orphaned tools — return from end of window
+                # (this edge case results in empty or near-empty tail, but keeps integrity)
+                new_start = len(messages)
+
+        return messages[new_start:]
 
     return messages[expanded_start:]
 
