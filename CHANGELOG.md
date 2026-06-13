@@ -1,5 +1,23 @@
 # Changelog
 
+## [unreleased] — 2026-06-12 — Coherence-tail integrity + prefetch workspace default
+
+Tail-handling correctness fixes from the 2026-06-09 review, plus a prefetch
+security default.
+
+### Correctness
+- **rewrite**: `_validate_tail` is now tool-call-aware. A leading `assistant(tool_calls)` whose tool results follow within the tail is kept intact (previously the leading-strip loop discarded exactly the expansion `smart_tail` performed, silently restarting the curated tail at the last user message). Truly orphaned leading `tool` messages are dropped one at a time; plain leading assistants are still dropped conservatively. The same-role merge no longer merges across a `tool_calls` boundary (which silently dropped the second message's tool_calls). (`archolith_proxy/proxy/rewrite.py`)
+- **rewrite (F10)**: removed the duplicate user-first comprehension that used `result.index(m)` (misbehaves on duplicate messages, 2026-06-07 audit F10); `_ensure_user_first()` is now the sole authority. (`archolith_proxy/proxy/rewrite.py`)
+- **tail**: when expanding the coherence tail would exceed `max_size`, `smart_tail` now truncates at a turn boundary (first `user` message in the last `max_size` window, else past leading orphaned `tool` messages) instead of returning the naive fixed slice that reintroduced orphaned-tool 400s. Warning detail changed to `fallback="turn_boundary"`. (`archolith_proxy/assembler/tail.py`)
+
+### Security
+- **curator**: new `prefetch_restrict_to_workspace` (default True). When `prefetch_allowed_roots` is empty, `prefetch_file` resolves the session `working_directory` (+ `workspace_root`) from the trace-store `harness_env` metadata and denies reads outside it; no workspace on record denies prefetch entirely. Explicit `prefetch_allowed_roots` keeps precedence; set the flag False to restore legacy unrestricted reads. Closes a prompt-injection path that could read arbitrary host files into upstream prompts. (`archolith_proxy/config.py`, `archolith_proxy/curator/tools.py`)
+
+### Tests
+- New: `tests/test_tail_validation.py`, `tests/test_assembler/test_tail_fallback.py`, `tests/test_curator/test_prefetch_workspace.py`. Full suite: 1020 passed (2 pre-existing `TestSearchFactsSemantic` failures unrelated to this change).
+
+---
+
 ## [unreleased] — 2026-06-09 — Deferred hardening (design risks D1-D5, D7-D10)
 
 Final remediation pass from the 2026-06-09 full-project audit. Closes every
