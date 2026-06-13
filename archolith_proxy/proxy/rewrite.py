@@ -288,13 +288,11 @@ def rewrite_messages(
             result, max_rewritten_tokens, middle_msg_count, compression_priority,
         )
 
-    # Final validation: ensure first non-system is user
-    first_non_system = next((i for i, m in enumerate(result) if m.get("role") != "system"), None)
-    if first_non_system is not None and result[first_non_system].get("role") != "user":
-        result = [m for m in result[:first_non_system] if m.get("role") == "system"] + \
-                 [m for m in result[first_non_system:] if m.get("role") == "user" or
-                  result.index(m) > first_non_system or m.get("role") == "system"]
-        result = _ensure_user_first(result)
+    # Final validation: ensure first non-system is user. _ensure_user_first is
+    # the sole authority here — it strips every leading non-user message
+    # (including orphaned tool messages) without the duplicate-message index
+    # bug of the old inline comprehension (audit finding F10).
+    result = _ensure_user_first(result)
 
     return result
 
@@ -633,22 +631,62 @@ def _compress_tool_result_ceiling(content: str) -> str:
 
 
 def _validate_tail(tail: list[dict]) -> list[dict]:
-    """Ensure the tail starts with a user message and has valid role alternation."""
-    # Strip leading non-user messages
-    while tail and tail[0].get("role") not in ("user",):
+    """Validate a coherence tail without discarding tool-call structure.
+
+    Drops leading messages that would orphan or dangle a tool-call group, but
+    preserves a complete leading ``assistant(tool_calls) + tool...`` group so
+    the expansion performed by ``smart_tail`` is not silently undone:
+
+    - A leading ``assistant`` carrying ``tool_calls`` whose tool results follow
+      within the tail is a valid group head and is kept.
+    - A leading ``tool`` message (its matching assistant has already been
+      stripped above it) is orphaned and is dropped, one at a time.
+    - A leading plain ``assistant`` (no tool_calls), or an ``assistant`` with
+      tool_calls whose results do NOT follow, is dropped conservatively to keep
+      the tail user-first for upstreams that reject assistant-first payloads.
+
+    The same-role merge never merges a message carrying ``tool_calls`` (merging
+    would silently drop the second message's tool_calls and orphan its results).
+    """
+    # Drop leading messages until the tail starts at a user message or a
+    # complete leading tool-call group.
+    while tail:
+        head = tail[0]
+        role = head.get("role")
+        if role == "user":
+            break
+        if role == "assistant" and head.get("tool_calls"):
+            call_ids = {
+                tc.get("id") for tc in head["tool_calls"] if isinstance(tc, dict)
+            }
+            has_following_result = any(
+                m.get("role") == "tool" and m.get("tool_call_id") in call_ids
+                for m in tail[1:]
+            )
+            if has_following_result:
+                break
+        # Plain leading assistant, dangling assistant(tool_calls), or orphaned
+        # leading tool message — drop just this one and re-check.
         tail = tail[1:]
 
-    # Merge consecutive same-role messages
+    # Merge consecutive same-role messages, but never across a tool_calls
+    # boundary (merging would drop the second message's tool_calls).
     validated = []
     for msg in tail:
         if validated:
-            prev_role = validated[-1].get("role")
+            prev = validated[-1]
+            prev_role = prev.get("role")
             curr_role = msg.get("role")
-            if prev_role == curr_role and curr_role in ("user", "assistant"):
-                prev_content = validated[-1].get("content", "")
+            if (
+                prev_role == curr_role
+                and curr_role in ("user", "assistant")
+                and not prev.get("tool_calls")
+                and not msg.get("tool_calls")
+            ):
+                prev_content = prev.get("content", "")
                 curr_content = msg.get("content", "")
                 if isinstance(prev_content, str) and isinstance(curr_content, str):
-                    validated[-1] = {**validated[-1], "content": prev_content + "\n\n" + curr_content}
+                    validated[-1] = {**prev, "content": prev_content + "\n\n" + curr_content}
                     continue
         validated.append(msg)
     return validated
