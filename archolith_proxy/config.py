@@ -246,6 +246,12 @@ class Settings(BaseSettings):
     # Empty list = unrestricted (backward compat).
     prefetch_allowed_roots: list[str] = []
 
+    # When prefetch_allowed_roots is empty, restrict prefetch_file to the
+    # session's working_directory (resolved from harness_env metadata) instead
+    # of the unrestricted host filesystem. Set False to restore legacy
+    # unrestricted reads. Explicit prefetch_allowed_roots always takes precedence.
+    prefetch_restrict_to_workspace: bool = True
+
     # Transparent native Read call interception — serves Read results from file cache
     # when the file has been previously read this session. Rides on synthetic_tools_enabled.
     native_read_intercept_enabled: bool = True

@@ -446,16 +446,44 @@ async def prefetch_file(
     from pathlib import Path
 
     from archolith_proxy.config import get_settings
+    from archolith_proxy.trace.store import get_trace_store
 
     settings = get_settings()
     file_path = Path(path)
 
-    # Workspace allowlist — reject paths outside permitted roots
+    # Compute effective allowed roots: precedence is explicit roots > workspace restriction > unrestricted
+    effective_roots: list[str] = []
+
     if settings.prefetch_allowed_roots:
+        # Explicit roots take precedence
+        effective_roots = settings.prefetch_allowed_roots
+    elif settings.prefetch_restrict_to_workspace:
+        # Restrict to session workspace from harness_env metadata
+        harness_env = await get_trace_store().get_session_metadata(session_id, "harness_env")
+        if harness_env and isinstance(harness_env, dict):
+            # Collect roots from harness_env: working_directory (required) and workspace_root (optional)
+            workspace_roots = []
+            if harness_env.get("working_directory"):
+                workspace_roots.append(harness_env["working_directory"])
+            if harness_env.get("workspace_root"):
+                workspace_roots.append(harness_env["workspace_root"])
+
+            if workspace_roots:
+                effective_roots = workspace_roots
+            else:
+                # harness_env present but no usable roots
+                return "(blocked: no session workspace on record; prefetch_file is restricted to the session workspace. Set prefetch_allowed_roots or prefetch_restrict_to_workspace=false to override.)"
+        else:
+            # No harness_env metadata available
+            return "(blocked: no session workspace on record; prefetch_file is restricted to the session workspace. Set prefetch_allowed_roots or prefetch_restrict_to_workspace=false to override.)"
+    # else: effective_roots remains empty, meaning unrestricted (legacy behavior)
+
+    # Workspace allowlist — reject paths outside permitted roots
+    if effective_roots:
         resolved = file_path.resolve()
         if not any(
             resolved == Path(root).resolve() or resolved.is_relative_to(Path(root).resolve())
-            for root in settings.prefetch_allowed_roots
+            for root in effective_roots
         ):
             return f"(blocked: {path} is outside allowed workspace roots)"
 
@@ -488,11 +516,11 @@ async def prefetch_file(
             return f"(cannot resolve relative path: {path} — use absolute paths or ensure related files are already cached)"
 
     # Validate final resolved path against allowed roots
-    if settings.prefetch_allowed_roots:
+    if effective_roots:
         resolved = file_path.resolve()
         if not any(
             resolved == Path(root).resolve() or resolved.is_relative_to(Path(root).resolve())
-            for root in settings.prefetch_allowed_roots
+            for root in effective_roots
         ):
             return f"(blocked: resolved path {resolved} is outside allowed workspace roots)"
 
