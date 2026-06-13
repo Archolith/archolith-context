@@ -83,6 +83,7 @@ async def extract_facts(
                 "prompt_tokens": usage.get("prompt_tokens", 0) or 0,
                 "completion_tokens": usage.get("completion_tokens", 0) or 0,
                 "llm_calls": 1,
+                "cached_tokens": (usage.get("prompt_tokens_details", {}) or {}).get("cached_tokens", 0) or 0,
             }
 
         logger.info(
@@ -334,7 +335,7 @@ async def extract_facts_per_tool(
     all_facts: list[dict] = []
     all_files: list[str] = []
     llm_calls_made = 0
-    usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "llm_calls": 0}
+    usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "llm_calls": 0, "cached_tokens": 0}
     for r in partial_results:
         if isinstance(r, Exception):
             logger.warning("per_tool_extractor_failed", error=str(r))
@@ -347,6 +348,7 @@ async def extract_facts_per_tool(
             usage["llm_calls"] += calls
             usage["prompt_tokens"] += r.usage.get("prompt_tokens", 0) or 0
             usage["completion_tokens"] += r.usage.get("completion_tokens", 0) or 0
+            usage["cached_tokens"] += r.usage.get("cached_tokens", 0) or 0
 
     logger.info(
         "per_tool_extraction_gathered",
@@ -398,6 +400,7 @@ async def extract_facts_per_tool(
         if turn_usage:
             usage["prompt_tokens"] += turn_usage.get("prompt_tokens", 0) or 0
             usage["completion_tokens"] += turn_usage.get("completion_tokens", 0) or 0
+            usage["cached_tokens"] += (turn_usage.get("prompt_tokens_details", {}) or {}).get("cached_tokens", 0) or 0
         usage["llm_calls"] += 1
         turn_result.usage = usage.copy()
 

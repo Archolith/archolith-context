@@ -376,8 +376,10 @@ async def _run_extraction(
                 extractor_prompt_tokens=usage.get("prompt_tokens", 0) or 0,
                 extractor_completion_tokens=usage.get("completion_tokens", 0) or 0,
                 extractor_llm_calls=usage.get("llm_calls", 1) or 1,
+                extractor_cached_tokens=usage.get("cached_tokens", 0),
                 embedding_tokens=embedding_tokens_used,
             )
+            record_metric("extractor_cached_tokens_total", usage.get("cached_tokens", 0))
 
         if promotion_service is not None:
             try:
