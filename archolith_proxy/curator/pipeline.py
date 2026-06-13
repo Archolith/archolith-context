@@ -293,6 +293,7 @@ async def _run_with_briefing(
         curator_tool_log=[tc.to_dict() for tc in result.tool_log],
         curator_prompt_tokens=result.prompt_tokens_used,
         curator_completion_tokens=result.completion_tokens_used,
+        curator_cached_tokens=result.cached_tokens_used,
     )
 
 
@@ -426,6 +427,7 @@ async def curate_context(
         curator_tool_log=[tc.to_dict() for tc in result.tool_log],
         curator_prompt_tokens=result.prompt_tokens_used,
         curator_completion_tokens=result.completion_tokens_used,
+        curator_cached_tokens=result.cached_tokens_used,
     )
 
 
