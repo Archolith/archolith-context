@@ -59,10 +59,22 @@ def _truncate_with_closed_fence(text: str, max_chars: int) -> str:
     return truncated + "\n... [code truncated to fit budget]"
 
 
-def build_deterministic_context(briefing: SessionBriefing, token_budget: int) -> tuple[str, list[dict]]:
+def build_deterministic_context(
+    briefing: SessionBriefing,
+    token_budget: int,
+    *,
+    scored: bool = False,
+    query: str = "",
+    weights: tuple[float, float, float] = (1.0, 1.0, 1.0),
+) -> tuple[str, list[dict]]:
     """Compose the context block from the briefing's typed pools, fit to budget.
 
     Returns ``(context_block, files_selected)``. Pure function — no I/O, no LLM.
+
+    When ``scored`` is True the elastic RELEVANT CODE pool is filled in
+    generative-agents score order (recency x importance x relevance vs ``query``)
+    instead of briefing insertion order, so the highest-value files win the
+    budget. When False, behavior is byte-identical to insertion-order fill.
     """
     budget_chars = max(0, token_budget) * _CHARS_PER_TOKEN
 
@@ -88,7 +100,13 @@ def build_deterministic_context(briefing: SessionBriefing, token_budget: int) ->
     code_blocks: list[str] = []
     remaining = budget_chars - len(head) - len("\n\n=== RELEVANT CODE ===\n")
 
-    for f in briefing.files:
+    if scored:
+        from archolith_proxy.curator.scoring import score_files
+        ordered_files = [f for (_score, f) in score_files(briefing.files, query, weights)]
+    else:
+        ordered_files = briefing.files
+
+    for f in ordered_files:
         block = _format_file_block(f)
         if not block:
             continue
@@ -131,7 +149,10 @@ async def run_deterministic_assembler(
     """
     try:
         token_budget = getattr(settings, "assembler_token_budget", 6000)
-        context_block, files_selected = build_deterministic_context(briefing, token_budget)
+        scored = bool(getattr(settings, "assembler_scored_selection", False))
+        context_block, files_selected = build_deterministic_context(
+            briefing, token_budget, scored=scored, query=user_message or "",
+        )
 
         if not context_block.strip():
             logger.info(

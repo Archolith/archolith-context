@@ -359,6 +359,22 @@ async def lifespan(app: FastAPI):
 
     configure_curation_mode()
 
+    # ARC working set (Phase 4) — bound the in-memory caches to N sessions.
+    # Registered BEFORE the persistence restore below so restore_caches seeds the
+    # working set and the bound applies from the first reloaded session.
+    if settings.curator_workingset_enabled:
+        try:
+            from archolith_proxy.curator.working_set import ARCWorkingSet
+            from archolith_proxy.curator.state import set_working_set
+
+            set_working_set(ARCWorkingSet(settings.curator_workingset_max_sessions))
+            logger.info(
+                "curator_workingset_enabled",
+                max_sessions=settings.curator_workingset_max_sessions,
+            )
+        except Exception:
+            logger.warning("curator_workingset_init_failed", exc_info=True)
+
     # Curator state durability (Phase 3) — reload persisted briefing/snapshot
     # caches, then register the write-through callback (AFTER restore so the
     # reload itself is not re-persisted).
@@ -425,6 +441,14 @@ async def lifespan(app: FastAPI):
             await app.state.curator_state_persistence.stop()
         except Exception:
             logger.warning("curator_state_persistence_stop_failed", exc_info=True)
+
+    # Clear the ARC working set (Phase 4).
+    if settings.curator_workingset_enabled:
+        try:
+            from archolith_proxy.curator.state import set_working_set
+            set_working_set(None)
+        except Exception:
+            pass
 
     await plugin_registry.deactivate_all()
 

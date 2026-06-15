@@ -79,23 +79,73 @@ def restore_caches(
         _briefing_cache.update(briefings)
     if snapshots:
         _cache.update(snapshots)
+    # Seed the working set (if active) with the restored sessions so the bound
+    # applies from the first turn.
+    if _working_set is not None:
+        for sid in (*(briefings or {}), *(snapshots or {})):
+            _touch_working_set(sid)
+
+
+# ---------------------------------------------------------------------------
+# ARC working set — adaptive recency+frequency bound on the session caches.
+# None = disabled (default): caches are unbounded (current behavior). Set by
+# main.py at startup when curator_workingset_enabled. Mirror of the persist hook.
+# ---------------------------------------------------------------------------
+
+_working_set = None
+
+
+def set_working_set(ws) -> None:
+    """Register (or clear with None) the ARC working set bounding the caches."""
+    global _working_set
+    _working_set = ws
+
+
+def _touch_working_set(session_id: str) -> None:
+    """Record an access; evict the cold victim's data from both caches if any.
+
+    Eviction is memory pressure, NOT session end, so it pops the dicts directly
+    and does NOT fire the persist delete — the persisted row stays so a later
+    restart can still warm-start that session.
+    """
+    ws = _working_set
+    if ws is None:
+        return
+    try:
+        evicted = ws.record_access(session_id)
+    except Exception:
+        return
+    if evicted is not None and evicted != session_id:
+        _briefing_cache.pop(evicted, None)
+        _cache.pop(evicted, None)
+        try:
+            from archolith_proxy.metrics import record_metric
+            record_metric("curator_workingset_evictions", 1)
+        except Exception:
+            pass
 
 
 def cache_snapshot(session_id: str, snapshot: CuratorSnapshot) -> None:
     """Store the latest curator snapshot for a session."""
     _cache[session_id] = snapshot
     _persist("snapshot", session_id, snapshot)
+    _touch_working_set(session_id)
 
 
 def get_snapshot(session_id: str) -> CuratorSnapshot | None:
     """Retrieve the cached curator snapshot, or None if absent."""
-    return _cache.get(session_id)
+    snap = _cache.get(session_id)
+    if snap is not None:
+        _touch_working_set(session_id)  # refresh recency on a hit
+    return snap
 
 
 def clear_snapshot(session_id: str) -> None:
     """Remove cached snapshot for a session (e.g. on session end)."""
     _cache.pop(session_id, None)
     _persist("delete", session_id)
+    if _working_set is not None:
+        _working_set.remove(session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -106,11 +156,15 @@ def cache_briefing(session_id: str, briefing: SessionBriefing) -> None:
     """Store the background pass briefing for a session."""
     _briefing_cache[session_id] = briefing
     _persist("briefing", session_id, briefing)
+    _touch_working_set(session_id)
 
 
 def get_briefing(session_id: str) -> SessionBriefing | None:
     """Retrieve the cached briefing, or None if absent."""
-    return _briefing_cache.get(session_id)
+    briefing = _briefing_cache.get(session_id)
+    if briefing is not None:
+        _touch_working_set(session_id)  # refresh recency on a hit
+    return briefing
 
 
 def is_briefing_fresh(session_id: str, current_turn: int) -> bool:
@@ -130,6 +184,8 @@ def clear_briefing(session_id: str) -> None:
     """Remove cached briefing for a session."""
     _briefing_cache.pop(session_id, None)
     _persist("delete", session_id)
+    if _working_set is not None:
+        _working_set.remove(session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -190,4 +246,5 @@ __all__ = [
     "cache_briefing", "get_briefing", "is_briefing_fresh", "clear_briefing",
     "swap_background_task", "cancel_background_task", "prune_session_state",
     "set_persist_callback", "restore_caches",
+    "set_working_set",
 ]

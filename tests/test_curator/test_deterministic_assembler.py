@@ -154,3 +154,34 @@ async def test_run_increments_deterministic_assemblies_metric():
         client=None, model="unused", settings=_Settings(),
     )
     assert get_metrics()["deterministic_assemblies"] == before + 1
+
+
+# ── Phase 4: scored file selection ──────────────────────────────────────────
+
+
+def test_scored_selection_prefers_relevant_file_over_insertion_order():
+    big = "X" * 4000  # large bodies so the budget is contended
+    files = [
+        PreFetchedFile(path="noise.py", outline="",
+                       sections=[(1, 10, big)], relevance="score 0.5"),
+        PreFetchedFile(path="calculator.py", outline="",
+                       sections=[(1, 10, "def multiply(self, x): return " + big)],
+                       relevance="score 0.5"),
+    ]
+    b = _briefing(files=files)
+    budget = 1200  # tokens — fits roughly one big block
+
+    fifo_text, fifo_files = build_deterministic_context(b, budget)
+    scored_text, scored_files = build_deterministic_context(
+        b, budget, scored=True, query="calculator multiply",
+    )
+    # Insertion order takes the first (irrelevant) file first; scoring takes the
+    # query-relevant file first regardless of briefing order.
+    assert fifo_files and fifo_files[0]["path"] == "noise.py"
+    assert scored_files and scored_files[0]["path"] == "calculator.py"
+
+
+def test_scored_false_is_identical_to_default():
+    files = [_file("a.py", "aaa"), _file("b.py", "bbb")]
+    b = _briefing(files=files)
+    assert build_deterministic_context(b, 6000) == build_deterministic_context(b, 6000, scored=False)

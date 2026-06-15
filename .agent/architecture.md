@@ -392,6 +392,33 @@ deterministic-assembler-only session persists briefings but zero snapshots — e
 2026-06-15: a briefing cached in one session reloaded after a full proxy restart
 (`curator_state_restored briefings=1`).
 
+**Scored file selection** (when `ASSEMBLER_SCORED_SELECTION=true` — `curator/scoring.py`, Phase 4,
+default off):
+
+The deterministic assembler fills the elastic `RELEVANT CODE` pool in **generative-agents score order**
+(`recency x importance x relevance`) instead of briefing insertion order, so the highest-value files win
+the token budget. Signals are LLM-free: importance is parsed from the prepper's `score_file_relevance`
+reason string (`parse_importance`); relevance is cheap token overlap between the current user message and
+each file's path+outline+section text (`keyword_relevance`); recency is ~uniform within one prepper pass
+(constant) and the parameter is kept for a future timestamped ledger. The small head pools
+(goal/state/issues/verification/decisions/facts) stay verbatim — only the elastic code pool is scored.
+Off = insertion order (byte-identical to Phase 2). Live-validated 2026-06-15 (`deterministic_assemblies`
+climbed with the flag on — scored reads served without fall-through).
+
+**ARC working set** (when `CURATOR_WORKINGSET_ENABLED=true` — `curator/working_set.py`, Phase 4,
+default off):
+
+The in-memory `_briefing_cache` / `_cache` are otherwise pruned only when a session leaves the graph,
+so within a long-lived process they grow with sessions-ever-seen. `ARCWorkingSet` (Adaptive Replacement
+Cache: T1/T2 resident + B1/B2 ghosts, adaptive target `p`) bounds them to
+`CURATOR_WORKINGSET_MAX_SESSIONS` (default 256). `state.py` calls `record_access` on cache writes and on
+read hits (refresh recency); admitting a new session past the cap evicts the coldest one. Eviction is
+**memory pressure, not session end**: it pops both dicts directly but does NOT fire the persist delete, so
+the Phase-3 sqlite row survives for a later warm-start; only `clear_*` deletes. An existing key is never
+the eviction victim, so a read mid-turn never evicts the session being read. Registered before the Phase-3
+restore so the bound applies to reloaded sessions. Metric `curator_workingset_evictions`. Live-validated
+2026-06-15 (cap 2, 4 distinct sessions -> evictions climbed 0->2, caches stayed bounded).
+
 **Operational tuning (learned 2026-06-15, live-validated):**
 - `PREPPER_LATENCY_BUDGET_MS` default is **60s** (was 30s): at 30s the gpt-4.1-mini prepper timed out on
   ~every pass, so no briefing was ever cached and the curator always fell back. 60s lets it complete.

@@ -367,6 +367,18 @@ class Settings(BaseSettings):
     curator_state_persist_enabled: bool = False
     curator_state_persist_path: str = ""      # default: data/curator_state.db
 
+    # Phase 4 scoring + eviction.
+    # Scored file selection: the deterministic assembler fills the elastic
+    # RELEVANT CODE pool in generative-agents score order (recency x importance x
+    # relevance vs the current turn) instead of briefing insertion order, so the
+    # highest-value files win the token budget. Off = insertion order (current).
+    assembler_scored_selection: bool = False
+    # ARC working set: bound the in-memory briefing + snapshot caches to N
+    # sessions with adaptive recency+frequency eviction. Off = unbounded (current,
+    # pruned only when a session leaves the graph).
+    curator_workingset_enabled: bool = False
+    curator_workingset_max_sessions: int = 256
+
     # Pricing — per-million-token rates for cost estimation on dashboard.
     # Defaults to DeepSeek V4-Flash pricing. Override for other models.
     pricing_input_per_million: float = 0.14       # $/M input tokens (cache miss)

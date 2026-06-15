@@ -211,6 +211,7 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
             "deterministic_assemblies": get_metrics()["deterministic_assemblies"],
             "prepper_block_topups": get_metrics()["prepper_block_topups"],
             "prepper_block_timeouts": get_metrics()["prepper_block_timeouts"],
+            "curator_workingset_evictions": get_metrics()["curator_workingset_evictions"],
         },
         "background_pass_successes": get_metrics()["background_pass_successes"],
         # Helper-LLM token totals (cumulative) — recorded into _metrics but

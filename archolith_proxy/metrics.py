@@ -75,6 +75,9 @@ _metrics: dict = {
     # (held) vs. another process is leader so workers are skipped here (blocked).
     "curator_worker_lease_held": 0,
     "curator_worker_lease_blocked": 0,
+    # Phase 4 — ARC working set evicted a session's cached state under memory
+    # pressure (bound exceeded). The persisted row (if any) is kept for warm-start.
+    "curator_workingset_evictions": 0,
     # Helper-LLM token usage counters (cumulative, for cost telemetry)
     "extractor_prompt_tokens_total": 0,
     "extractor_completion_tokens_total": 0,
