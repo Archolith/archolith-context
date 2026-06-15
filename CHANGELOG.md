@@ -1,5 +1,14 @@
 # Changelog
 
+## [unreleased] — 2026-06-15 — Fix stale TestSearchFactsSemantic mocks (suite fully green)
+
+The two long-failing `TestSearchFactsSemantic` tests had a stale collaborator mock:
+`compute_embeddings_batch` now returns `(embeddings, tokens_used)` (the cost-telemetry
+change), but the tests' `mock_compute` still returned just `[query_embedding]`, so the
+tool's `results, _usage = await compute_embeddings_batch(...)` unpack failed. Updated all
+three mocks to return the `(embeddings, 0)` tuple (assertions unchanged). Full suite now
+1062 passed, 0 failed.
+
 ## [unreleased] — 2026-06-15 — Debugging tools: surface curator-worker telemetry + sweep diagnostics
 
 - **scripts/proxy_status.py** (`metrics`): now surfaces the `curator_worker_diag` block

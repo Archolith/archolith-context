@@ -182,7 +182,8 @@ class TestSearchFactsSemantic:
         mock_httpx_module.AsyncClient.return_value = mock_async_client
 
         async def mock_compute(client, texts):
-            return [query_embedding]
+            # compute_embeddings_batch returns (embeddings, tokens_used).
+            return [query_embedding], 0
 
         with (
             patch("archolith_proxy.curator.tools.get_backend", return_value=mock_backend),
@@ -220,7 +221,8 @@ class TestSearchFactsSemantic:
         mock_httpx_module.AsyncClient.return_value = mock_async_client
 
         async def mock_compute(client, texts):
-            return [query_embedding]
+            # compute_embeddings_batch returns (embeddings, tokens_used).
+            return [query_embedding], 0
 
         with (
             patch("archolith_proxy.curator.tools.get_backend", return_value=mock_backend),
@@ -254,7 +256,8 @@ class TestSearchFactsSemantic:
         mock_httpx_module.AsyncClient.return_value = mock_async_client
 
         async def mock_compute(client, texts):
-            return [query_embedding]
+            # compute_embeddings_batch returns (embeddings, tokens_used).
+            return [query_embedding], 0
 
         with (
             patch("archolith_proxy.curator.tools.get_backend", return_value=mock_backend),
