@@ -12,6 +12,10 @@
   loudly when 0 (the prepper can't fetch -> the sweep under-represents the live
   file-fetch workload; this explains the earlier `files=0`). Outcome breakdown now
   distinguishes complete / no_result / timeout, and reports median + max latency.
+- **scripts/diag_pipeline.py**: ported off the removed Neo4j-driver init to the active
+  graph backend (ladybug) on a fresh temp DB (never touches/locks the live DB), using the
+  backend's own session methods instead of the Neo4j-only `graph.session` path. Works
+  end-to-end again (session create/find/touch/turn + extraction).
 
 ## [unreleased] — 2026-06-15 — Synchronous prepper top-up (flexible, off by default)
 
