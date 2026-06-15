@@ -1,5 +1,24 @@
 # Changelog
 
+## [unreleased] — 2026-06-15 — Phase 2: deterministic LLM-free hot-path read
+
+Removes the synchronous LLM call from the two_curator inline read. The prepper's
+`SessionBriefing` already carries the typed pools, so the hot path can compose the
+context block in pure code and fit it to a token budget — no LLM, no 3s race.
+
+- **curator/deterministic_assembler.py** (new): `build_deterministic_context()` composes the
+  `=== SECTION ===` block from the briefing's typed pools (goal/state/issues/verification/
+  decisions/facts kept verbatim; `RELEVANT CODE` fills the remaining budget, fence-closed on
+  truncation). `run_deterministic_assembler()` matches the inline_pass_fn signature, makes NO LLM
+  call, and falls through (returns None) on an empty briefing.
+- **config.py**: `assembler_deterministic` (default off), `assembler_token_budget` (6000).
+- **curator/__init__.py**: `configure_curation_mode()` registers `run_deterministic_assembler` when
+  `assembler_deterministic` + two_curator; otherwise the LLM `run_assembler` (unchanged).
+- **curator/pipeline.py**: don't count `hot_path_llm_calls` when the deterministic read serves the turn.
+- **metrics.py / routers/metrics_router.py**: `deterministic_assemblies` counter, surfaced in `curator_worker_diag`.
+- **tests**: `test_deterministic_assembler.py` (10) + a two_curator deterministic-registration test.
+  Full suite 1057 passed (2 pre-existing unrelated `TestSearchFactsSemantic` failures).
+
 ## [unreleased] — 2026-06-15 — Event-driven curator worker (Phase 0+1) + metrics/passthrough fixes
 
 Branch `feat/event-driven-curator-worker`. Implements Phases 0-1 of the event-driven

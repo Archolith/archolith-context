@@ -315,6 +315,13 @@ class Settings(BaseSettings):
     assembler_max_iterations: int = 2
     assembler_latency_budget_ms: int = 3000
 
+    # Deterministic assembler (Phase 2) — when true, the inline two_curator read
+    # composes the context block from the prepper's SessionBriefing in pure code
+    # (no LLM call on the hot path), fitting to assembler_token_budget. The
+    # LLM assembler stays available behind this flag for A/B. Off by default.
+    assembler_deterministic: bool = False
+    assembler_token_budget: int = 6000   # target context-block size for the deterministic read
+
     # Event-driven curator worker (Phase 1) — replaces the request-coupled
     # prepper scheduling with a long-lived per-session worker fed by an event
     # queue. When enabled, the extraction tail enqueues a turn event instead of

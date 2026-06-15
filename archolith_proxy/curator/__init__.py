@@ -30,11 +30,18 @@ def configure_curation_mode() -> None:
     settings = get_settings()
     if settings.curation_mode == "two_curator":
         from archolith_proxy.curator.prepper import run_prepper
-        from archolith_proxy.curator.assembler import run_assembler
-        register_curation_mode(background_pass_fn=run_prepper, inline_pass_fn=run_assembler)
+        if settings.assembler_deterministic:
+            from archolith_proxy.curator.deterministic_assembler import run_deterministic_assembler
+            register_curation_mode(background_pass_fn=run_prepper, inline_pass_fn=run_deterministic_assembler)
+            assembler_kind = "deterministic"
+        else:
+            from archolith_proxy.curator.assembler import run_assembler
+            register_curation_mode(background_pass_fn=run_prepper, inline_pass_fn=run_assembler)
+            assembler_kind = "llm"
         logger.info(
             "curation_mode_configured",
             mode="two_curator",
+            assembler=assembler_kind,
             prepper_model=settings.prepper_model or settings.curator_model or settings.extractor_model,
             assembler_model=settings.assembler_model or settings.curator_model or settings.extractor_model,
         )

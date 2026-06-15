@@ -64,6 +64,9 @@ _metrics: dict = {
     "hot_path_llm_calls": 0,
     "hot_path_briefing_lag_sum": 0,
     "hot_path_briefing_lag_count": 0,
+    # Phase 2 — deterministic LLM-free hot-path reads (count of inline reads
+    # served from the briefing in pure code, no LLM call).
+    "deterministic_assemblies": 0,
     # Helper-LLM token usage counters (cumulative, for cost telemetry)
     "extractor_prompt_tokens_total": 0,
     "extractor_completion_tokens_total": 0,

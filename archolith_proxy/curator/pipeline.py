@@ -350,7 +350,13 @@ async def curate_context(
         from archolith_proxy.curator import _inline_pass_fn
         from archolith_proxy.metrics import record_metric
 
-        record_metric("hot_path_llm_calls", 1)
+        # The deterministic assembler (Phase 2) serves this read with NO LLM call,
+        # so only count a hot-path LLM call when the inline read actually uses one.
+        _deterministic_read = (
+            settings.curation_mode == "two_curator" and settings.assembler_deterministic
+        )
+        if not _deterministic_read:
+            record_metric("hot_path_llm_calls", 1)
         if _inline_pass_fn is not None:
             result = await _inline_pass_fn(
                 session_id, turn_number, user_message, session_goal,

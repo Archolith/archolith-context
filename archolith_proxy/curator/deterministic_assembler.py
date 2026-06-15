@@ -1,0 +1,192 @@
+"""Deterministic inline assembler — LLM-free hot-path read (Phase 2).
+
+The two_curator assembler (``run_assembler``) makes a synchronous LLM call on the
+request hot path to reformat the prepper's briefing and select turns. Phase 2 of
+the event-driven curator-worker plan removes that call: the prepper already
+produced a structured ``SessionBriefing`` (the typed pools — goal, current state,
+open issues, last verification, decisions, facts, pre-fetched files, retained
+turns), so the inline read can compose the context block **deterministically in
+pure code** and fit it to a token budget. No LLM, no 3s race, no fall-through.
+
+Budget policy: the small high-value pools (goal, state, issues, verification,
+decisions, facts) are kept verbatim; the elastic ``RELEVANT CODE`` pool fills the
+remaining budget and is truncated (fence-closed) when it would overflow. This
+mirrors the heterogeneous-per-type retention idea in the plan (small pools kept,
+code paged to budget).
+
+Registered via ``register_curation_mode(inline_pass_fn=run_deterministic_assembler)``
+when ``assembler_deterministic=true``. Returns ``None`` on any failure so the
+caller falls through to the full curator loop (graceful degradation).
+"""
+
+from __future__ import annotations
+
+import structlog
+
+from archolith_proxy.curator.briefing import PreFetchedFile, SessionBriefing
+from archolith_proxy.curator.state import CuratorSnapshot, cache_snapshot
+from archolith_proxy.models.dtos import AssembledContext
+
+logger = structlog.get_logger()
+
+# Rough chars-per-token for budget math (matches the proxy's other estimates).
+_CHARS_PER_TOKEN = 4
+
+
+def _estimate_tokens(text: str) -> int:
+    return len(text) // _CHARS_PER_TOKEN
+
+
+def _format_file_block(f: PreFetchedFile) -> str:
+    """Render one pre-fetched file as the prepper's RELEVANT CODE entry."""
+    if f.sections:
+        chunks = []
+        for start, end, content in f.sections:
+            chunks.append(f"{f.path} lines {start}-{end}:\n```\n{content}\n```")
+        return "\n".join(chunks)
+    if f.outline:
+        return f"{f.path} outline:\n{f.outline}"
+    return ""
+
+
+def _truncate_with_closed_fence(text: str, max_chars: int) -> str:
+    """Truncate code text to max_chars, closing an open code fence if needed."""
+    if max_chars <= 0:
+        return ""
+    truncated = text[:max_chars]
+    if truncated.count("```") % 2 == 1:
+        truncated += "\n```"
+    return truncated + "\n... [code truncated to fit budget]"
+
+
+def build_deterministic_context(briefing: SessionBriefing, token_budget: int) -> tuple[str, list[dict]]:
+    """Compose the context block from the briefing's typed pools, fit to budget.
+
+    Returns ``(context_block, files_selected)``. Pure function — no I/O, no LLM.
+    """
+    budget_chars = max(0, token_budget) * _CHARS_PER_TOKEN
+
+    # Small, high-value pools — kept verbatim, in canonical section order.
+    head_parts: list[str] = []
+    if briefing.session_goal:
+        head_parts.append(f"=== SESSION GOAL ===\n{briefing.session_goal}")
+    if briefing.checkpoint_text:
+        head_parts.append(f"=== CURRENT STATE ===\n{briefing.checkpoint_text}")
+    if briefing.open_issues_text:
+        head_parts.append(f"=== OPEN ISSUES ===\n{briefing.open_issues_text}")
+    if briefing.last_verification_text:
+        head_parts.append(f"=== LAST VERIFICATION ===\n{briefing.last_verification_text}")
+    if briefing.decisions_text:
+        head_parts.append(f"=== DECISIONS ===\n{briefing.decisions_text}")
+    if briefing.facts_text:
+        head_parts.append(f"=== KEY FACTS ===\n{briefing.facts_text}")
+
+    head = "\n\n".join(head_parts)
+
+    # Elastic pool: RELEVANT CODE fills whatever budget remains.
+    files_selected: list[dict] = []
+    code_blocks: list[str] = []
+    remaining = budget_chars - len(head) - len("\n\n=== RELEVANT CODE ===\n")
+
+    for f in briefing.files:
+        block = _format_file_block(f)
+        if not block:
+            continue
+        cost = len(block) + 1  # +1 for the join newline
+        if cost <= remaining:
+            code_blocks.append(block)
+            files_selected.append({"path": f.path})
+            remaining -= cost
+        elif remaining > 200:
+            # Partially include this file's block, then stop.
+            code_blocks.append(_truncate_with_closed_fence(block, remaining))
+            files_selected.append({"path": f.path})
+            remaining = 0
+            break
+        else:
+            break
+
+    if code_blocks:
+        head = head + "\n\n=== RELEVANT CODE ===\n" + "\n".join(code_blocks)
+
+    return head, files_selected
+
+
+async def run_deterministic_assembler(
+    session_id: str,
+    turn_number: int,
+    user_message: str,
+    session_goal: str | None,
+    briefing: SessionBriefing,
+    messages: list[dict],
+    client,            # unused — kept for inline_pass_fn signature parity
+    model: str,        # unused
+    settings,
+) -> AssembledContext | None:
+    """Deterministic inline read — formats the briefing into a context block.
+
+    Same call signature as ``run_assembler`` so it can be registered as the
+    inline pass function. Makes NO LLM call. Returns None only if the briefing
+    yields no usable content (caller then falls through to the full loop).
+    """
+    try:
+        token_budget = getattr(settings, "assembler_token_budget", 6000)
+        context_block, files_selected = build_deterministic_context(briefing, token_budget)
+
+        if not context_block.strip():
+            logger.info(
+                "deterministic_assembler_empty_briefing",
+                session_id=session_id, turn=turn_number,
+            )
+            return None
+
+        retained = briefing.retained_turns
+
+        # Cache a snapshot for next turn's delta behaviour, same as run_assembler.
+        cache_snapshot(session_id, CuratorSnapshot(
+            curated_paths=tuple(sorted(f["path"] for f in files_selected)),
+            retained_turn_numbers=tuple(retained) if retained else None,
+            context_summary=context_block[:2000],
+            tool_calls_used=0,
+            turn_number=turn_number,
+        ))
+
+        logger.info(
+            "deterministic_assembler_complete",
+            session_id=session_id, turn=turn_number,
+            files=len(files_selected),
+            context_len=len(context_block),
+            source_turn=briefing.source_turn,
+        )
+
+        try:
+            from archolith_proxy.metrics import record_metric
+            record_metric("deterministic_assemblies", 1)
+        except Exception:
+            pass
+
+        return AssembledContext(
+            system_message={"role": "system", "content": context_block},
+            graph_context=[{"role": "system", "content": context_block}],
+            coherence_tail=[],
+            token_estimate=_estimate_tokens(context_block),
+            facts_retrieved=0,
+            session_id=session_id,
+            files_selected=files_selected,
+            decisions_selected=[],
+            compression_ratio=1.0,
+            retained_turn_numbers=retained,
+            curator_tool_log=[],
+        )
+    except Exception as exc:
+        logger.warning(
+            "deterministic_assembler_failed",
+            session_id=session_id, turn=turn_number, error=str(exc), exc_info=True,
+        )
+        return None
+
+
+__all__ = [
+    "build_deterministic_context",
+    "run_deterministic_assembler",
+]

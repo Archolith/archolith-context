@@ -122,6 +122,7 @@ def test_configure_two_curator_registers(mock_settings):
     settings.curator_model = "curie"
     settings.extractor_model = "extractor"
     settings.assembler_model = ""
+    settings.assembler_deterministic = False  # default: register the LLM assembler
     mock_settings.return_value = settings
 
     from archolith_proxy.curator import configure_curation_mode
@@ -131,6 +132,25 @@ def test_configure_two_curator_registers(mock_settings):
     assert _get_inline_fn() is not None
     assert _get_bg_fn().__name__ == "run_prepper"
     assert _get_inline_fn().__name__ == "run_assembler"
+
+
+@patch("archolith_proxy.curator.get_settings")
+def test_configure_two_curator_deterministic_registers_deterministic_assembler(mock_settings):
+    """assembler_deterministic=True registers the LLM-free deterministic assembler."""
+    settings = MagicMock()
+    settings.curation_mode = "two_curator"
+    settings.prepper_model = ""
+    settings.curator_model = "curie"
+    settings.extractor_model = "extractor"
+    settings.assembler_model = ""
+    settings.assembler_deterministic = True
+    mock_settings.return_value = settings
+
+    from archolith_proxy.curator import configure_curation_mode
+    configure_curation_mode()
+
+    assert _get_bg_fn().__name__ == "run_prepper"
+    assert _get_inline_fn().__name__ == "run_deterministic_assembler"
 
 
 @patch("archolith_proxy.curator.get_settings")
