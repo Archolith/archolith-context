@@ -1,5 +1,23 @@
 # Changelog
 
+## [unreleased] — 2026-06-15 — Synchronous prepper top-up (flexible, off by default)
+
+When no usable briefing exists on a curator-eligible user turn, optionally block on ONE
+bounded prepper pass and retry the (cheap, deterministic) inline read on the fresh briefing,
+instead of falling through to the expensive full curator loop. This guarantees the curator
+delivers on eligible turns — the background worker becomes a best-effort prefetch and this is
+the correctness net (the plan's "optional synchronous top-up"). Cost: prepper latency on miss
+turns only (~4-7s with the converge prompt).
+
+- **config.py**: `prepper_block_on_miss` (default off) + `prepper_block_budget_ms` (10s).
+- **curator/pipeline.py**: in `curate_context`, after the briefing read and before the full
+  loop, block on the registered prepper (bounded by `prepper_block_budget_ms`), cache the
+  briefing, and serve the inline read. Flexible: respects `briefing_max_staleness` and works
+  whether or not the background worker / background pass is enabled (calls the registered
+  prepper directly, so a synchronous-only config is valid).
+- **metrics**: `prepper_block_topups` / `prepper_block_timeouts`, surfaced in `curator_worker_diag`.
+- **tests**: 3 tests (serves from fresh briefing, no-op when disabled, timeout records metric).
+
 ## [unreleased] — 2026-06-15 — Prepper converge prompt (cap tool calls) + lever-sweep tool
 
 The prepper returned `no_result` ~half the time live (model kept fetching files and hit

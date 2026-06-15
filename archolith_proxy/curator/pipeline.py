@@ -372,6 +372,65 @@ async def curate_context(
         if result is not None:
             return result
 
+    # --- Synchronous prepper top-up (flexible, off by default) ---
+    # We only reach here when no usable briefing served the turn above. If enabled,
+    # block on ONE bounded prepper pass and retry the (cheap, deterministic) inline
+    # read on the fresh briefing, instead of falling through to the expensive full
+    # loop. Cost: prepper latency on miss turns only. Works whether or not the
+    # background worker is enabled — it calls the registered prepper directly so a
+    # "synchronous-only" configuration is also valid.
+    if settings.prepper_block_on_miss:
+        from archolith_proxy.curator import _background_pass_fn, _inline_pass_fn
+        from archolith_proxy.metrics import record_metric
+
+        _block_budget_s = max(0.1, settings.prepper_block_budget_ms / 1000)
+        try:
+            if _background_pass_fn is not None:
+                _topped = await asyncio.wait_for(
+                    _background_pass_fn(session_id, turn_number, user_message, session_goal, messages),
+                    timeout=_block_budget_s,
+                )
+                if _topped:
+                    cache_briefing(session_id, _topped)
+            else:
+                await asyncio.wait_for(
+                    run_background_pass(
+                        session_id=session_id, turn_number=turn_number,
+                        user_message=user_message, session_goal=session_goal,
+                        messages=messages,
+                    ),
+                    timeout=_block_budget_s,
+                )
+        except asyncio.TimeoutError:
+            record_metric("prepper_block_timeouts", 1)
+            logger.info("prepper_block_topup_timeout", session_id=session_id, turn=turn_number)
+        except Exception:
+            logger.debug("prepper_block_topup_failed", session_id=session_id, exc_info=True)
+
+        briefing = get_briefing(session_id)
+        if briefing is not None and (
+            is_briefing_fresh(session_id, turn_number)
+            or briefing.source_turn >= turn_number - settings.briefing_max_staleness
+        ):
+            record_metric("prepper_block_topups", 1)
+            _det = settings.curation_mode == "two_curator" and settings.assembler_deterministic
+            if not _det:
+                record_metric("hot_path_llm_calls", 1)
+            if _inline_pass_fn is not None:
+                result = await _inline_pass_fn(
+                    session_id, turn_number, user_message, session_goal,
+                    briefing, messages, client, model, settings,
+                )
+            else:
+                result = await _run_with_briefing(
+                    session_id=session_id, turn_number=turn_number,
+                    user_message=user_message, session_goal=session_goal,
+                    briefing=briefing, messages=messages, client=client,
+                    model=model, settings=settings,
+                )
+            if result is not None:
+                return result
+
     # --- Full curator loop ---
     checkpoint = None
     try:

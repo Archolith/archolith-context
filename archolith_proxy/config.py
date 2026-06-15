@@ -327,6 +327,16 @@ class Settings(BaseSettings):
     assembler_deterministic: bool = False
     assembler_token_budget: int = 6000   # target context-block size for the deterministic read
 
+    # Synchronous prepper top-up — when no usable briefing exists on an eligible
+    # user turn, block on ONE bounded prepper pass and retry the inline read on the
+    # fresh briefing, instead of falling through to the expensive full loop. This
+    # guarantees the curator delivers (the background worker becomes best-effort
+    # prefetch; this is the correctness net). Flexible: master flag + budget; it
+    # respects briefing_max_staleness and works whether or not the background
+    # worker / background pass is enabled (calls the registered prepper directly).
+    prepper_block_on_miss: bool = False
+    prepper_block_budget_ms: int = 10_000   # hard timeout for the synchronous pass
+
     # Event-driven curator worker (Phase 1) — replaces the request-coupled
     # prepper scheduling with a long-lived per-session worker fed by an event
     # queue. When enabled, the extraction tail enqueues a turn event instead of

@@ -449,6 +449,131 @@ class TestCurateContextDispatch:
         cfg._settings = None  # cleanup
 
 
+class TestSynchronousPrepperTopup:
+    """Synchronous prepper top-up: block on a prepper pass when no fresh briefing."""
+
+    def setup_method(self):
+        from archolith_proxy.config import reset_settings
+        _briefing_cache.clear()
+        reset_settings()
+
+    def teardown_method(self):
+        from archolith_proxy.curator import unregister_curation_mode
+        import archolith_proxy.config as cfg
+        unregister_curation_mode()
+        cfg._settings = None
+
+    def _settings(self, **extra):
+        # Settings() reads .env; uppercase constructor kwargs are ignored, so set
+        # the fields the test depends on explicitly on the instance (self-contained).
+        from archolith_proxy.config import Settings
+        s = Settings()
+        s.curator_enabled = True
+        s.file_cache_enabled = True
+        s.curation_mode = "two_curator"
+        s.assembler_deterministic = True
+        s.cold_start_turns = 3
+        s.curator_api_key = "test-key"
+        s.extractor_api_key = "test-key"
+        s.prepper_block_on_miss = False
+        s.prepper_block_budget_ms = 10000
+        s.briefing_max_staleness = 2
+        for k, v in extra.items():
+            setattr(s, k, v)
+        return s
+
+    @pytest.mark.asyncio
+    async def test_topup_serves_from_fresh_briefing_when_enabled(self):
+        import archolith_proxy.config as cfg
+        from archolith_proxy.curator import curate_context, register_curation_mode
+        from archolith_proxy.models.dtos import AssembledContext
+
+        async def _fake_prepper(session_id, turn_number, user_message, session_goal, messages):
+            return SessionBriefing(session_id=session_id, source_turn=turn_number,
+                                   session_goal="g", checkpoint_text="cp")
+
+        served = {}
+
+        async def _fake_inline(session_id, turn_number, user_message, session_goal,
+                               briefing, messages, client, model, settings):
+            served["briefing"] = briefing
+            return AssembledContext(
+                system_message={"role": "system", "content": "TOPUP"},
+                graph_context=[], coherence_tail=[], session_id=session_id,
+            )
+
+        cfg._settings = self._settings(prepper_block_on_miss=True)
+        register_curation_mode(background_pass_fn=_fake_prepper, inline_pass_fn=_fake_inline)
+
+        result = await curate_context(
+            session_id="s1", turn_number=5, user_message="t", session_goal=None,
+            http_client=None, messages=[{"role": "user", "content": "hi"}] * 4,
+        )
+        assert result is not None
+        assert result.system_message["content"] == "TOPUP"
+        # The top-up cached a fresh briefing and served the inline read from it.
+        assert get_briefing("s1") is not None
+        assert served["briefing"].source_turn == 5
+
+    @pytest.mark.asyncio
+    async def test_no_topup_when_disabled(self):
+        import archolith_proxy.config as cfg
+        from archolith_proxy.curator import curate_context, register_curation_mode
+
+        called = {"prepper": False}
+
+        async def _fake_prepper(session_id, turn_number, user_message, session_goal, messages):
+            called["prepper"] = True
+            return SessionBriefing(session_id=session_id, source_turn=turn_number)
+
+        async def _fake_inline(*a, **k):
+            return None
+
+        cfg._settings = self._settings(prepper_block_on_miss=False)
+        register_curation_mode(background_pass_fn=_fake_prepper, inline_pass_fn=_fake_inline)
+
+        with patch("archolith_proxy.curator.loop._run_curator_native",
+                   new_callable=AsyncMock) as mock_loop:
+            mock_loop.return_value = (None, [], "no_result")
+            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                result = await curate_context(
+                    session_id="s1", turn_number=5, user_message="t", session_goal=None,
+                    http_client=None, messages=[{"role": "user", "content": "hi"}] * 4,
+                )
+        # Disabled: the top-up never runs the prepper; falls through to the full loop.
+        assert called["prepper"] is False
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_topup_timeout_records_metric_and_falls_through(self):
+        import asyncio as _asyncio
+        import archolith_proxy.config as cfg
+        from archolith_proxy.curator import curate_context, register_curation_mode
+        from archolith_proxy.metrics import get_metrics
+
+        async def _slow_prepper(session_id, turn_number, user_message, session_goal, messages):
+            await _asyncio.sleep(5)
+            return SessionBriefing(session_id=session_id, source_turn=turn_number)
+
+        async def _fake_inline(*a, **k):
+            return None
+
+        cfg._settings = self._settings(prepper_block_on_miss=True, prepper_block_budget_ms=100)
+        register_curation_mode(background_pass_fn=_slow_prepper, inline_pass_fn=_fake_inline)
+
+        before = get_metrics()["prepper_block_timeouts"]
+        with patch("archolith_proxy.curator.loop._run_curator_native",
+                   new_callable=AsyncMock) as mock_loop:
+            mock_loop.return_value = (None, [], "no_result")
+            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                result = await curate_context(
+                    session_id="s1", turn_number=5, user_message="t", session_goal=None,
+                    http_client=None, messages=[{"role": "user", "content": "hi"}] * 4,
+                )
+        assert get_metrics()["prepper_block_timeouts"] == before + 1
+        assert result is None
+
+
 # ---------------------------------------------------------------------------
 # Integration: run_background_pass with mocked _run_curator_native
 # ---------------------------------------------------------------------------

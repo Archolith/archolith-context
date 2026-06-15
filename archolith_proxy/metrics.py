@@ -67,6 +67,10 @@ _metrics: dict = {
     # Phase 2 — deterministic LLM-free hot-path reads (count of inline reads
     # served from the briefing in pure code, no LLM call).
     "deterministic_assemblies": 0,
+    # Synchronous prepper top-up: a user turn that blocked on a prepper pass and
+    # then served from the fresh briefing (topups) vs. blocked but timed out.
+    "prepper_block_topups": 0,
+    "prepper_block_timeouts": 0,
     # Helper-LLM token usage counters (cumulative, for cost telemetry)
     "extractor_prompt_tokens_total": 0,
     "extractor_completion_tokens_total": 0,
