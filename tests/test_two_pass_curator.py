@@ -505,10 +505,13 @@ class TestSynchronousPrepperTopup:
         cfg._settings = self._settings(prepper_block_on_miss=True)
         register_curation_mode(background_pass_fn=_fake_prepper, inline_pass_fn=_fake_inline)
 
-        result = await curate_context(
-            session_id="s1", turn_number=5, user_message="t", session_goal=None,
-            http_client=None, messages=[{"role": "user", "content": "hi"}] * 4,
-        )
+        # The synchronous top-up calls the LIGHT prepper directly (not the
+        # registered background pass), so patch that as the briefing source.
+        with patch("archolith_proxy.curator.prepper.run_light_prepper", _fake_prepper):
+            result = await curate_context(
+                session_id="s1", turn_number=5, user_message="t", session_goal=None,
+                http_client=None, messages=[{"role": "user", "content": "hi"}] * 4,
+            )
         assert result is not None
         assert result.system_message["content"] == "TOPUP"
         # The top-up cached a fresh briefing and served the inline read from it.
@@ -562,14 +565,17 @@ class TestSynchronousPrepperTopup:
         register_curation_mode(background_pass_fn=_slow_prepper, inline_pass_fn=_fake_inline)
 
         before = get_metrics()["prepper_block_timeouts"]
-        with patch("archolith_proxy.curator.loop._run_curator_native",
-                   new_callable=AsyncMock) as mock_loop:
-            mock_loop.return_value = (None, [], "no_result")
-            with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
-                result = await curate_context(
-                    session_id="s1", turn_number=5, user_message="t", session_goal=None,
-                    http_client=None, messages=[{"role": "user", "content": "hi"}] * 4,
-                )
+        # The top-up blocks on the LIGHT prepper; make it slow so the bounded
+        # wait times out, records the metric, and falls through to the full loop.
+        with patch("archolith_proxy.curator.prepper.run_light_prepper", _slow_prepper):
+            with patch("archolith_proxy.curator.loop._run_curator_native",
+                       new_callable=AsyncMock) as mock_loop:
+                mock_loop.return_value = (None, [], "no_result")
+                with patch("archolith_proxy.graph.backend.is_graph_ready", return_value=False):
+                    result = await curate_context(
+                        session_id="s1", turn_number=5, user_message="t", session_goal=None,
+                        http_client=None, messages=[{"role": "user", "content": "hi"}] * 4,
+                    )
         assert get_metrics()["prepper_block_timeouts"] == before + 1
         assert result is None
 

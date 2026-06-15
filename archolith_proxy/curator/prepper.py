@@ -21,7 +21,7 @@ from archolith_proxy.curator.briefing import (
     SessionBriefing, build_briefing_from_result,
 )
 from archolith_proxy.curator.loop import _run_curator_native
-from archolith_proxy.curator.schemas import PREPPER_TOOLS
+from archolith_proxy.curator.schemas import PREPPER_TOOLS, LIGHT_PREPPER_TOOLS
 from archolith_proxy.curator.state import get_snapshot
 from archolith_proxy.curator.prompts import build_curator_user_prompt
 
@@ -209,4 +209,160 @@ async def run_prepper(
     return briefing
 
 
-__all__ = ["run_prepper"]
+LIGHT_PREPPER_SYSTEM_PROMPT = """\
+You are a FAST context prepper for a coding agent session. You run on the hot
+path as a synchronous top-up, so you must be quick. You have METADATA and FACT
+tools ONLY — no file-fetch. Do NOT attempt to read file contents; you cannot.
+
+Your job: assemble the session's state plus the facts and decisions most
+relevant to the current question, fast.
+
+Your strategy:
+1. Check the checkpoint, session goal, and open issues.
+2. Retrieve the facts (search_facts / search_facts_semantic) and decisions most
+   relevant to the current question.
+3. Use get_last_verification / get_open_issues when recent work involved tests or
+   has unresolved problems. Use get_touched_files / list_session_files to name
+   the relevant files by PATH only — you cannot fetch their contents.
+4. Call tools AT MOST 3-4 times total, then IMMEDIATELY emit the context block.
+   A focused briefing that is actually produced beats an exhaustive one that
+   never finishes.
+5. Your final response must be the context block, formatted exactly:
+
+=== SESSION GOAL ===
+<goal>
+
+=== CURRENT STATE ===
+<checkpoint summary and next step>
+
+=== OPEN ISSUES ===
+- <issue>
+
+=== LAST VERIFICATION ===
+<command and result>
+
+=== KEY FACTS ===
+- <fact>
+
+=== DECISIONS ===
+- <decision>
+
+Critical output rules:
+- Omit any section that has no content. Do NOT write section headers with "None" or "N/A".
+- Do NOT include a RELEVANT CODE section — you have no file content. Naming the
+  relevant file paths inside KEY FACTS is fine.
+- Write plain prose context blocks — do NOT emit tool calls, XML tags, or JSON in your final response.
+"""
+
+
+async def run_light_prepper(
+    session_id: str,
+    turn_number: int,
+    user_message: str,
+    session_goal: str | None,
+    messages: list[dict],
+) -> SessionBriefing | None:
+    """Fast metadata/fact-only prepper for the synchronous top-up path.
+
+    Same plumbing as run_prepper but with LIGHT_PREPPER_TOOLS (no file fetch),
+    the LIGHT_PREPPER_SYSTEM_PROMPT, and a tight iteration cap
+    (prepper_light_max_iterations). A full prepper pass is ~10-30s — too slow to
+    block the hot path on; this file-less pass finishes inside the caller's
+    prepper_block_budget_ms. The caller (curate_context top-up block) wraps this
+    in asyncio.wait_for, so this function does not impose its own timeout.
+
+    Produces a file-less SessionBriefing the deterministic assembler can serve.
+    Returns None on any failure — errors are logged, never raised.
+    """
+    settings = get_settings()
+
+    model = settings.prepper_model or settings.curator_model or settings.extractor_model
+    base_url = settings.prepper_base_url or settings.curator_base_url or settings.extractor_base_url
+    api_key = settings.prepper_api_key or settings.curator_api_key or settings.extractor_api_key
+
+    if not api_key:
+        logger.warning("light_prepper_no_api_key", session_id=session_id)
+        return None
+
+    checkpoint = None
+    try:
+        from archolith_proxy.graph.backend import get_backend, is_graph_ready
+        if is_graph_ready():
+            checkpoint = await get_backend().get_checkpoint(session_id)
+    except Exception:
+        pass
+
+    previous_snapshot = get_snapshot(session_id)
+
+    user_prompt = build_curator_user_prompt(
+        session_goal,
+        user_message,
+        messages=messages,
+        coherence_tail_size=settings.coherence_tail_size,
+        max_tail_messages=settings.max_tail_messages,
+        checkpoint=checkpoint,
+        previous_snapshot=previous_snapshot,
+    )
+
+    client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+    t0 = time.monotonic()
+
+    try:
+        result, _tool_log, failure = await _run_curator_native(
+            client=client,
+            session_id=session_id,
+            user_prompt=user_prompt,
+            max_iterations=settings.prepper_light_max_iterations,
+            system_prompt=LIGHT_PREPPER_SYSTEM_PROMPT,
+            model=model,
+            tool_set=LIGHT_PREPPER_TOOLS,
+        )
+    except asyncio.CancelledError:
+        # Caller's wait_for timed out and cancelled us — propagate so it becomes
+        # a TimeoutError at the call site.
+        raise
+    except Exception as exc:
+        logger.warning("light_prepper_failed", session_id=session_id, turn=turn_number, error=str(exc))
+        return None
+
+    if result is None:
+        logger.info("light_prepper_no_result", session_id=session_id, turn=turn_number,
+                     failure=failure[:100] if failure else "")
+        return None
+
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    # Count the light prepper's curator-model spend in the helper-token totals so
+    # /metrics reflects the true cost of the synchronous top-up path.
+    try:
+        from archolith_proxy.metrics import record_metric
+        record_metric("curator_prompt_tokens_total", getattr(result, "prompt_tokens_used", 0) or 0)
+        record_metric("curator_completion_tokens_total", getattr(result, "completion_tokens_used", 0) or 0)
+        record_metric("curator_cached_tokens_total", getattr(result, "cached_tokens_used", 0) or 0)
+    except Exception:
+        pass
+
+    briefing = build_briefing_from_result(
+        result=result,
+        session_id=session_id,
+        turn_number=turn_number,
+        latency_ms=latency_ms,
+        session_goal=session_goal,
+        messages=messages,
+        mode="two_curator",
+        retained_turns=None,  # light prepper does not do turn selection
+    )
+
+    logger.info(
+        "light_prepper_complete",
+        session_id=session_id, turn=turn_number,
+        tool_calls=result.tool_calls_used,
+        latency_ms=round(latency_ms, 1),
+        files=len(briefing.files),
+        context_len=len(result.context_text),
+    )
+
+    return briefing
+
+
+__all__ = ["run_prepper", "run_light_prepper"]

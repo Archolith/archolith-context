@@ -336,6 +336,13 @@ class Settings(BaseSettings):
     # worker / background pass is enabled (calls the registered prepper directly).
     prepper_block_on_miss: bool = False
     prepper_block_budget_ms: int = 10_000   # hard timeout for the synchronous pass
+    # The synchronous top-up runs a LIGHT prepper (LIGHT_PREPPER_TOOLS — metadata
+    # and facts only, NO file-fetch) rather than the full background prepper: a
+    # full pass is ~10-30s (too slow to block the hot path on), while a file-less
+    # metadata/fact pass finishes inside prepper_block_budget_ms. Tight iteration
+    # cap keeps it fast; the briefing it produces is file-less but the
+    # deterministic assembler can serve it, which beats the full curator loop.
+    prepper_light_max_iterations: int = 5
 
     # Event-driven curator worker (Phase 1) — replaces the request-coupled
     # prepper scheduling with a long-lived per-session worker fed by an event

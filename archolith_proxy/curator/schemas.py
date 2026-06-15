@@ -323,4 +323,27 @@ ASSEMBLER_TOOLS: list[dict] = [
     if t.get("function", {}).get("name") in _ASSEMBLER_TOOL_NAMES
 ]
 
-__all__ = ["ALL_CURATOR_TOOLS", "PREPPER_TOOLS", "ASSEMBLER_TOOLS"]
+# Light prepper tool set — cheap metadata/fact tools ONLY, no file-fetch.
+# Used by the synchronous top-up (prepper_block_on_miss). A full prepper pass is
+# too slow to block the hot path on, so the top-up runs a metadata/fact-only pass
+# that produces a file-less briefing fast enough to block on inline. Deliberately
+# excludes get_file / get_file_outline / get_file_lines / prefetch_file (file
+# fetch), select_relevant_turns (the assembler's job), and score_file_relevance
+# (pointless without the ability to then fetch the ranked files).
+_LIGHT_PREPPER_TOOL_NAMES = {
+    "list_session_files",
+    "search_facts",
+    "search_facts_semantic",
+    "get_session_goal",
+    "get_recent_decisions",
+    "get_touched_files",
+    "get_checkpoint",
+    "get_open_issues",
+    "get_last_verification",
+}
+LIGHT_PREPPER_TOOLS: list[dict] = [
+    t for t in ALL_CURATOR_TOOLS
+    if t.get("function", {}).get("name") in _LIGHT_PREPPER_TOOL_NAMES
+]
+
+__all__ = ["ALL_CURATOR_TOOLS", "PREPPER_TOOLS", "ASSEMBLER_TOOLS", "LIGHT_PREPPER_TOOLS"]

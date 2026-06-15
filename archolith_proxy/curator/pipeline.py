@@ -374,33 +374,26 @@ async def curate_context(
 
     # --- Synchronous prepper top-up (flexible, off by default) ---
     # We only reach here when no usable briefing served the turn above. If enabled,
-    # block on ONE bounded prepper pass and retry the (cheap, deterministic) inline
-    # read on the fresh briefing, instead of falling through to the expensive full
-    # loop. Cost: prepper latency on miss turns only. Works whether or not the
-    # background worker is enabled — it calls the registered prepper directly so a
-    # "synchronous-only" configuration is also valid.
+    # block on ONE bounded LIGHT prepper pass (metadata/facts only, no file-fetch)
+    # and retry the (cheap, deterministic) inline read on the fresh briefing,
+    # instead of falling through to the expensive full loop. The full background
+    # prepper is ~10-30s — too slow to block the hot path on; the light pass
+    # finishes inside prepper_block_budget_ms. Cost: light-prepper latency on miss
+    # turns only. Works whether or not the background worker is enabled — it calls
+    # run_light_prepper directly, so a "synchronous-only" configuration is valid.
     if settings.prepper_block_on_miss:
-        from archolith_proxy.curator import _background_pass_fn, _inline_pass_fn
+        from archolith_proxy.curator.prepper import run_light_prepper
+        from archolith_proxy.curator import _inline_pass_fn
         from archolith_proxy.metrics import record_metric
 
         _block_budget_s = max(0.1, settings.prepper_block_budget_ms / 1000)
         try:
-            if _background_pass_fn is not None:
-                _topped = await asyncio.wait_for(
-                    _background_pass_fn(session_id, turn_number, user_message, session_goal, messages),
-                    timeout=_block_budget_s,
-                )
-                if _topped:
-                    cache_briefing(session_id, _topped)
-            else:
-                await asyncio.wait_for(
-                    run_background_pass(
-                        session_id=session_id, turn_number=turn_number,
-                        user_message=user_message, session_goal=session_goal,
-                        messages=messages,
-                    ),
-                    timeout=_block_budget_s,
-                )
+            _topped = await asyncio.wait_for(
+                run_light_prepper(session_id, turn_number, user_message, session_goal, messages),
+                timeout=_block_budget_s,
+            )
+            if _topped:
+                cache_briefing(session_id, _topped)
         except asyncio.TimeoutError:
             record_metric("prepper_block_timeouts", 1)
             logger.info("prepper_block_topup_timeout", session_id=session_id, turn=turn_number)
