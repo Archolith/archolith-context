@@ -437,53 +437,69 @@ async def _run_extraction(
         if acquired:
             lock.release()
 
+    _bg_settings = get_settings()
+    _bg_active = bool(
+        _bg_settings.background_pass_enabled and _bg_settings.curator_enabled and session_id
+    )
+
+    def _latest_user_message() -> str:
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                return _normalize_message_content(msg.get("content"))
+        return ""
+
+    # Event-driven worker (Phase 1): feed the worker on EVERY turn boundary,
+    # DECOUPLED from the is_user_turn/tool_calls guard that starved the old
+    # prepper. We only reach here at a turn boundary (see the _is_turn_boundary
+    # early-return above), so an agentic turn that completes with
+    # finish_reason="stop" and is_user_turn=False still enqueues — exactly the
+    # case the legacy guard dropped. The worker debounces bursts and never
+    # cancels an in-flight pass.
+    if _bg_active and _bg_settings.curator_worker_enabled:
+        try:
+            _bg_user_msg = _latest_user_message()
+            if _bg_user_msg:
+                from archolith_proxy.curator.worker import enqueue_curator_event
+                enqueue_curator_event(
+                    session_id=session_id,
+                    turn_number=turn_number,
+                    user_message=_bg_user_msg[:4000],
+                    session_goal=session_goal,
+                    messages=messages,
+                )
+                record_metric("prepper_fires", 1)
+                logger.debug("curator_worker_event_enqueued", session_id=session_id, turn=turn_number)
+        except Exception:
+            logger.debug("curator_worker_enqueue_failed", session_id=session_id, exc_info=True)
+        return
+
+    # Legacy request-coupled prepper (worker disabled): scheduled only when
+    # is_user_turn AND not tool_calls — so it is starved on agentic turns that
+    # end in tool_calls / a tool result. Preserved unchanged for worker-off mode.
     if not is_user_turn or response_finish_reason == "tool_calls":
-        # Phase 0: count turn boundaries where the prepper is skipped purely
-        # because the turn ended in tool_calls / was not a user turn — the
-        # starvation signal the event-driven-worker plan diagnoses.
-        _starve_settings = get_settings()
-        if _starve_settings.background_pass_enabled and _starve_settings.curator_enabled and session_id:
+        # Phase 0: count turn boundaries where the legacy prepper is starved.
+        if _bg_active:
             record_metric("prepper_starved", 1)
         return
 
     try:
-        _bg_settings = get_settings()
-        if _bg_settings.background_pass_enabled and _bg_settings.curator_enabled and session_id:
-            _bg_user_msg = ""
-            for msg in reversed(messages):
-                if msg.get("role") == "user":
-                    _bg_user_msg = _normalize_message_content(msg.get("content"))
-                    break
+        if _bg_active:
+            _bg_user_msg = _latest_user_message()
             if _bg_user_msg:
-                if _bg_settings.curator_worker_enabled:
-                    # Event-driven worker (Phase 1): enqueue a turn event. The
-                    # long-lived per-session worker debounces and runs the pass
-                    # without cancel-on-next-turn. Non-blocking.
-                    from archolith_proxy.curator.worker import enqueue_curator_event
-                    enqueue_curator_event(
+                from archolith_proxy.curator import run_background_pass
+                from archolith_proxy.curator.state import swap_background_task
+                _bg_task = asyncio.create_task(
+                    run_background_pass(
                         session_id=session_id,
                         turn_number=turn_number,
                         user_message=_bg_user_msg[:4000],
                         session_goal=session_goal,
                         messages=messages,
                     )
-                    record_metric("prepper_fires", 1)
-                    logger.debug("curator_worker_event_enqueued", session_id=session_id, turn=turn_number)
-                else:
-                    from archolith_proxy.curator import run_background_pass
-                    from archolith_proxy.curator.state import swap_background_task
-                    _bg_task = asyncio.create_task(
-                        run_background_pass(
-                            session_id=session_id,
-                            turn_number=turn_number,
-                            user_message=_bg_user_msg[:4000],
-                            session_goal=session_goal,
-                            messages=messages,
-                        )
-                    )
-                    swap_background_task(session_id, _bg_task)
-                    record_metric("prepper_fires", 1)
-                    logger.debug("background_pass_triggered", session_id=session_id, turn=turn_number)
+                )
+                swap_background_task(session_id, _bg_task)
+                record_metric("prepper_fires", 1)
+                logger.debug("background_pass_triggered", session_id=session_id, turn=turn_number)
     except Exception:
         logger.debug("background_pass_trigger_failed", session_id=session_id, exc_info=True)
 
