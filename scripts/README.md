@@ -113,33 +113,12 @@ python scripts/e2e_smoke_test.py
 Quick sanity check: starts a session, sends a turn through the proxy, verifies the
 response and graph state. Exits non-zero if any assertion fails.
 
-### `test_e2e.py` — Full e2e test suite
-```bash
-python scripts/test_e2e.py
-```
-Extended end-to-end tests covering multi-turn sessions, extraction, recall, and
-cold-start gate behavior.
-
-### `test_multi_turn.py` — Multi-turn session test
-```bash
-python scripts/test_multi_turn.py
-```
-Simulates a multi-turn conversation through the proxy and verifies assembly fires
-at the correct turn threshold.
-
-### `test_extraction_direct.py` — Extraction pipeline test
-```bash
-python scripts/test_extraction_direct.py
-```
-Tests the extraction pipeline in isolation (no proxy, no upstream) against
-predefined response fixtures.
-
-### `test_phase3_e2e.py` / `test_phase3_validation.py` — Phase 3 integration tests
-```bash
-python scripts/test_phase3_e2e.py
-python scripts/test_phase3_validation.py
-```
-End-to-end and validation tests for Phase 3 (model hint injection).
+> **Removed (2026-06-15):** `test_e2e.py`, `test_multi_turn.py`,
+> `test_extraction_direct.py`, `test_phase3_e2e.py`, `test_phase3_validation.py` were
+> Neo4j-era manual e2e scripts, broken since the ladybug migration and superseded by the
+> pytest suite (`pytest`), `diag_pipeline.py` (extraction/pipeline smoke), and the
+> archolith-bench harness (multi-turn / context-assembly validation). Recover from git
+> history if needed.
 
 ### `diag_pipeline.py` — Pipeline diagnostics
 ```bash
