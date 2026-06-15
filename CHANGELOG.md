@@ -1,5 +1,37 @@
 # Changelog
 
+## [unreleased] — 2026-06-15 — Event-driven curator worker (Phase 0+1) + metrics/passthrough fixes
+
+Branch `feat/event-driven-curator-worker`. Implements Phases 0-1 of the event-driven
+curator-worker plan and fixes metric/passthrough recording gaps surfaced by live validation.
+
+- **metrics.py**: Phase 0 counters `prepper_fires`, `prepper_starved`, `prepper_cancels`,
+  `hot_path_llm_calls`, `hot_path_briefing_lag_{sum,count}`.
+- **openai/extraction.py**: increment the Phase 0 counters at the starvation guard, the trigger,
+  and (state.py) the cancel. **Phase 1**: when `curator_worker_enabled`, feed the event-driven
+  worker on every turn boundary — DECOUPLED from the `is_user_turn/tool_calls` guard that starved
+  the legacy prepper (the guard dropped agentic `finish_reason=stop` turns). Legacy path unchanged
+  when the flag is off.
+- **curator/worker.py** (new): long-lived per-session `CuratorWorker` + `WorkerRegistry` — idle-gated,
+  debounced, no cancel-and-lose. Reuses `run_background_pass`. 15 unit tests in
+  `tests/test_curator/test_worker.py`.
+- **curator/pipeline.py**: Phase 0 hot-path LLM-call + briefing-lag instrumentation; count
+  `background_pass_successes` in the two_curator/prepper path (previously only the default path).
+- **curator/prepper.py**: record the background prepper's curator-model token spend into
+  `curator_*_tokens_total` so two_curator cost is visible.
+- **openai/chat.py**: call `record_assembly_mode()` for both curated and passthrough requests
+  (was never called → `assembly_modes` always 0); record passthrough `total_input_tokens_seen`
+  symmetrically so the A/B passthrough arm is recorded like a curated session.
+- **routers/metrics_router.py**: surface `curator_worker_diag` (prepper starvation/cancel/hot-path
+  LLM rates + briefing lag), `helper_tokens` (extractor/curator/embedding totals), and
+  `background_pass_successes` on `/metrics`.
+- **config.py**: `curator_worker_enabled` (default off), `curator_worker_debounce_ms`,
+  `curator_worker_max_queue`, `curator_worker_idle_ttl_s`.
+- **Live gate (archolith-bench context_quality_ab)**: worker fires reliably on agentic turns
+  (`prepper_fires` climbs, `prepper_starved=0`, `prepper_cancels=0`), the prepper pass completes and
+  caches briefings, and the hot path consumes one (`briefing_reads=1`, lag 1.0 fresh). Full suite
+  1046 passed (2 pre-existing unrelated `TestSearchFactsSemantic` failures).
+
 ## [unreleased] — 2026-06-13 — Helper-LLM prompt-cache hit tokens on TurnTrace
 
 Thread `cached_tokens` (OpenAI `prompt_tokens_details.cached_tokens`) through the curator

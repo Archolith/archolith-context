@@ -170,6 +170,19 @@ async def run_prepper(
 
     latency_ms = (time.monotonic() - t0) * 1000
 
+    # Record the background prepper's curator-model token spend so /metrics
+    # reflects the true cost of the two_curator setup. The prepper is a real
+    # curator-model call separate from any inline curator pass; counting both
+    # in curator_*_tokens_total gives total curator-model spend (no double
+    # count — different calls).
+    try:
+        from archolith_proxy.metrics import record_metric
+        record_metric("curator_prompt_tokens_total", getattr(result, "prompt_tokens_used", 0) or 0)
+        record_metric("curator_completion_tokens_total", getattr(result, "completion_tokens_used", 0) or 0)
+        record_metric("curator_cached_tokens_total", getattr(result, "cached_tokens_used", 0) or 0)
+    except Exception:
+        pass
+
     briefing = build_briefing_from_result(
         result=result,
         session_id=session_id,
