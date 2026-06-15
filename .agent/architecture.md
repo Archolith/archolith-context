@@ -365,12 +365,15 @@ fence-closed on truncation). No LLM, no 3s race, no fall-through. Registered in 
 
 **Synchronous prepper top-up** (when `PREPPER_BLOCK_ON_MISS=true` — `curator/pipeline.py`, default off):
 
-When no usable briefing exists on a curator-eligible user turn, block on ONE bounded prepper pass
+When no usable briefing exists on a curator-eligible user turn, block on ONE bounded **light** prepper pass
 (`PREPPER_BLOCK_BUDGET_MS`) and retry the cheap deterministic read on the fresh briefing, instead of
 falling through to the full loop. Guarantees the curator delivers (worker becomes best-effort prefetch).
-Metrics `prepper_block_topups` / `prepper_block_timeouts`. NOTE: a full prepper pass (file-fetching) is
-often ~10-30s — too slow for an inline block; the in-progress fix is a lightweight pass that skips
-file-fetch. (See `.agent/workflows/` and the event-driven-worker plan.)
+Metrics `prepper_block_topups` / `prepper_block_timeouts`. A full prepper pass (file-fetching) is often
+~10-30s — too slow for an inline block, so the top-up calls `run_light_prepper` with `LIGHT_PREPPER_TOOLS`
+(metadata/fact tools only — no file-fetch, no `select_relevant_turns`, no `score_file_relevance`) and a
+tight iteration cap (`PREPPER_LIGHT_MAX_ITERATIONS`, default 5). The light pass yields a file-less briefing
+that finishes inside the block budget; the deterministic assembler serves it. (See `.agent/workflows/` and
+the event-driven-worker plan.)
 
 **Operational tuning (learned 2026-06-15, live-validated):**
 - `PREPPER_LATENCY_BUDGET_MS` default is **60s** (was 30s): at 30s the gpt-4.1-mini prepper timed out on
