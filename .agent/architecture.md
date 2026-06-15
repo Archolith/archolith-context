@@ -334,6 +334,22 @@ Decouples briefing generation (background prepper) from context assembly (inline
    - `get_briefing(session_id)`: retrieve for assembler
    - `is_briefing_fresh(briefing, current_turn)`: staleness check (default threshold: source_turn >= turn_number - 2)
 
+**Event-driven curator worker** (when `CURATOR_WORKER_ENABLED=true` — `curator/worker.py`, Phase 1):
+
+Replaces the request-coupled prepper scheduling. Instead of spawning `run_background_pass()`
+from the `_run_extraction()` tail only when `is_user_turn AND not tool_calls` (which starves the
+prepper on agentic turns that complete with `finish_reason=stop`/`is_user_turn=False`, and which
+`swap_background_task()` cancelled on the next turn), the extraction tail enqueues a `SessionEvent`
+onto a long-lived per-session `CuratorWorker` on **every turn boundary**:
+   - `WorkerRegistry` owns one `CuratorWorker` per active session; idle-gated (sleeps on an empty
+     queue) and evicted after `CURATOR_WORKER_IDLE_TTL_S` of inactivity (pruned in the main.py cleanup loop).
+   - The worker debounces a burst of events (`CURATOR_WORKER_DEBOUNCE_MS`) and runs exactly one
+     `run_background_pass()` per coalesced burst — **never cancelling an in-flight pass** (the fix vs
+     `swap_background_task`). The pass reuses the registered prepper, so curation logic is unchanged.
+   - Observability: the `/metrics` `curator_worker_diag` block (`prepper_fires`, `prepper_starved`,
+     `prepper_cancels`, `hot_path_llm_calls`, `avg_briefing_lag_turns`) quantifies firing vs starvation.
+   - Default off; when off, the legacy `swap_background_task` path is preserved unchanged.
+
 **System prompt** (`curator/prompts.py`):
 - Pre-loaded checkpoint in user prompt — skip `get_checkpoint` unless a refresh is needed
 - For files >100 lines: call `get_file_outline` first, then `get_file_lines` for relevant range
