@@ -9,8 +9,11 @@ The two-pass curator extends this with a SessionBriefing cache: the background
 pass writes a briefing, the inline pass reads it. Briefings are in-memory only
 and considered fresh when source_turn >= current_turn - 1.
 
-In-memory only — lost on restart, which is fine since the curator rebuilds
-from the graph/cache backend anyway.
+In-memory primary. When CURATOR_STATE_PERSIST_ENABLED is set, a write-through
+callback (registered by curator.persistence at startup) mirrors the briefing and
+snapshot caches to a durable sidecar so a warm restart can reload them. The
+in-memory dict write stays synchronous and primary; persistence is async and
+off the hot path. Disabled by default — then this module is in-memory only.
 """
 
 from __future__ import annotations
@@ -41,10 +44,47 @@ _cache: dict[str, CuratorSnapshot] = {}
 # THREAD-SAFETY: safe under single asyncio event loop
 _briefing_cache: dict[str, SessionBriefing] = {}
 
+# Optional write-through persistence callback: cb(kind, session_id, obj) where
+# kind is "briefing" | "snapshot" | "delete". Set by curator.persistence at
+# startup when persistence is enabled; None means persistence is off (default).
+_persist_cb = None
+
+
+def set_persist_callback(cb) -> None:
+    """Register (or clear with None) the write-through persistence callback."""
+    global _persist_cb
+    _persist_cb = cb
+
+
+def _persist(kind: str, session_id: str, obj=None) -> None:
+    """Fire the persistence callback if set; never let it break the hot path."""
+    cb = _persist_cb
+    if cb is None:
+        return
+    try:
+        cb(kind, session_id, obj)
+    except Exception:
+        pass
+
+
+def restore_caches(
+    briefings: dict[str, SessionBriefing] | None,
+    snapshots: dict[str, CuratorSnapshot] | None,
+) -> None:
+    """Repopulate the in-memory caches from persisted state at startup.
+
+    Call BEFORE set_persist_callback so the restore itself is not re-persisted.
+    """
+    if briefings:
+        _briefing_cache.update(briefings)
+    if snapshots:
+        _cache.update(snapshots)
+
 
 def cache_snapshot(session_id: str, snapshot: CuratorSnapshot) -> None:
     """Store the latest curator snapshot for a session."""
     _cache[session_id] = snapshot
+    _persist("snapshot", session_id, snapshot)
 
 
 def get_snapshot(session_id: str) -> CuratorSnapshot | None:
@@ -55,6 +95,7 @@ def get_snapshot(session_id: str) -> CuratorSnapshot | None:
 def clear_snapshot(session_id: str) -> None:
     """Remove cached snapshot for a session (e.g. on session end)."""
     _cache.pop(session_id, None)
+    _persist("delete", session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +105,7 @@ def clear_snapshot(session_id: str) -> None:
 def cache_briefing(session_id: str, briefing: SessionBriefing) -> None:
     """Store the background pass briefing for a session."""
     _briefing_cache[session_id] = briefing
+    _persist("briefing", session_id, briefing)
 
 
 def get_briefing(session_id: str) -> SessionBriefing | None:
@@ -87,6 +129,7 @@ def is_briefing_fresh(session_id: str, current_turn: int) -> bool:
 def clear_briefing(session_id: str) -> None:
     """Remove cached briefing for a session."""
     _briefing_cache.pop(session_id, None)
+    _persist("delete", session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -146,4 +189,5 @@ __all__ = [
     "cache_snapshot", "get_snapshot", "clear_snapshot",
     "cache_briefing", "get_briefing", "is_briefing_fresh", "clear_briefing",
     "swap_background_task", "cancel_background_task", "prune_session_state",
+    "set_persist_callback", "restore_caches",
 ]

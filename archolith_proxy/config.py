@@ -359,6 +359,14 @@ class Settings(BaseSettings):
     curator_worker_lease_db_path: str = ""    # default: alongside the ladybug DB
     curator_worker_lease_duration_s: int = 90
 
+    # Curator state durability (Phase 3, slice 1) — when on, the in-memory
+    # briefing + snapshot caches (curator/state.py) are mirrored write-through to
+    # a sqlite sidecar (async, off the hot path) and reloaded on startup, so a
+    # warm restart resumes instead of starting cold. Off by default; when off the
+    # caches are in-memory only (current behavior) and no db is opened.
+    curator_state_persist_enabled: bool = False
+    curator_state_persist_path: str = ""      # default: data/curator_state.db
+
     # Pricing — per-million-token rates for cost estimation on dashboard.
     # Defaults to DeepSeek V4-Flash pricing. Override for other models.
     pricing_input_per_million: float = 0.14       # $/M input tokens (cache miss)

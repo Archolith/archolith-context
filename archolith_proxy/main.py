@@ -359,6 +359,28 @@ async def lifespan(app: FastAPI):
 
     configure_curation_mode()
 
+    # Curator state durability (Phase 3) — reload persisted briefing/snapshot
+    # caches, then register the write-through callback (AFTER restore so the
+    # reload itself is not re-persisted).
+    app.state.curator_state_persistence = None
+    if settings.curator_state_persist_enabled:
+        try:
+            from archolith_proxy.curator.persistence import get_state_persistence
+            from archolith_proxy.curator.state import restore_caches, set_persist_callback
+
+            sp = get_state_persistence(settings.curator_state_persist_path)
+            await sp.start()
+            briefings, snapshots = await sp.load_all()
+            restore_caches(briefings, snapshots)
+            set_persist_callback(sp.enqueue)
+            app.state.curator_state_persistence = sp
+            logger.info(
+                "curator_state_restored",
+                briefings=len(briefings), snapshots=len(snapshots),
+            )
+        except Exception:
+            logger.warning("curator_state_persistence_init_failed", exc_info=True)
+
     # Register built-in plugins before activation
     from archolith_proxy.plugins import get_plugin_registry
     from archolith_proxy.plugins.filter_plugin import FilterPlugin
@@ -394,6 +416,15 @@ async def lifespan(app: FastAPI):
         await shutdown_all_curator_workers()
     except Exception:
         logger.warning("curator_worker_shutdown_failed", exc_info=True)
+
+    # Flush and close curator state persistence (Phase 3).
+    if getattr(app.state, "curator_state_persistence", None) is not None:
+        try:
+            from archolith_proxy.curator.state import set_persist_callback
+            set_persist_callback(None)
+            await app.state.curator_state_persistence.stop()
+        except Exception:
+            logger.warning("curator_state_persistence_stop_failed", exc_info=True)
 
     await plugin_registry.deactivate_all()
 

@@ -375,6 +375,23 @@ tight iteration cap (`PREPPER_LIGHT_MAX_ITERATIONS`, default 5). The light pass 
 that finishes inside the block budget; the deterministic assembler serves it. (See `.agent/workflows/` and
 the event-driven-worker plan.)
 
+**Curator state durability** (when `CURATOR_STATE_PERSIST_ENABLED=true` — `curator/persistence.py`, Phase 3,
+default off):
+
+The in-memory briefing + snapshot caches (`curator/state.py` `_briefing_cache` / `_cache`) are lost on
+restart, so a warm restart starts cold. When enabled, a write-through mirror persists them to a stdlib
+`sqlite3` sidecar (`CURATOR_STATE_PERSIST_PATH`, default `data/curator_state.db`) and reloads them on
+startup. The in-memory dict write stays the **synchronous primary**; `state.py` fires a decoupled callback
+that a single async consumer drains in batches via `run_in_executor` (no fsync on the hot path). The queue
+is bounded and **drops on overflow** — durability is a recovery-time optimization, not a correctness
+dependency (upstream retains raw history; the worker/top-up rebuild on miss). `cache_*` upsert; `clear_*`
+delete the row. Lifespan (`main.py`): on startup `load_all() -> restore_caches()` runs BEFORE
+`set_persist_callback()` so the reload is not re-persisted; on shutdown the queue is flushed and the db
+closed. Snapshots are only written by the inline LLM passes (`_run_with_briefing` / full loop), so a
+deterministic-assembler-only session persists briefings but zero snapshots — expected. Live-validated
+2026-06-15: a briefing cached in one session reloaded after a full proxy restart
+(`curator_state_restored briefings=1`).
+
 **Operational tuning (learned 2026-06-15, live-validated):**
 - `PREPPER_LATENCY_BUDGET_MS` default is **60s** (was 30s): at 30s the gpt-4.1-mini prepper timed out on
   ~every pass, so no briefing was ever cached and the curator always fell back. 60s lets it complete.
