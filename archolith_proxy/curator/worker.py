@@ -26,8 +26,11 @@ a later phase. Safe under a single asyncio event loop.
 from __future__ import annotations
 
 import asyncio
+import os
+import socket
 import time
 from dataclasses import dataclass, field
+from uuid import uuid4
 
 import structlog
 
@@ -190,15 +193,65 @@ class CuratorWorker:
 
 
 class WorkerRegistry:
-    """Owns one CuratorWorker per active session and their lifecycle."""
+    """Owns one CuratorWorker per active session and their lifecycle.
 
-    def __init__(self, *, debounce_ms: int = 2000, max_queue: int = 100) -> None:
+    Optional single-leader leasing (archolith-maintenance ``SchedulerLeaseStore``):
+    when a ``lease_store`` is injected, the registry only runs workers while it
+    holds a process-wide lease, so two proxy processes sharing a session graph
+    don't both run the curator worker (de-risks multi-writer). When no lease store
+    is given, the registry is always the leader (behavior unchanged).
+    """
+
+    def __init__(
+        self,
+        *,
+        debounce_ms: int = 2000,
+        max_queue: int = 100,
+        lease_store=None,
+        lease_name: str = "curator-worker",
+        lease_duration_s: float = 90.0,
+    ) -> None:
         self._workers: dict[str, CuratorWorker] = {}
         self._debounce_ms = debounce_ms
         self._max_queue = max_queue
+        # Single-leader leasing (optional).
+        self._lease_store = lease_store
+        self._lease_name = lease_name
+        self._lease_duration_s = max(2.0, lease_duration_s)
+        self._owner_id = f"{socket.gethostname()}:{os.getpid()}:{uuid4()}"
+        self._owner_pid = os.getpid()
+        self._lease_held = False
+        self._last_lease_op = 0.0
+
+    def _is_leader(self) -> bool:
+        """True when this process may run workers. Cheap: re-checks the lease at
+        most once per ~third of the lease duration."""
+        if self._lease_store is None:
+            return True
+        now = time.monotonic()
+        if self._lease_held and (now - self._last_lease_op) < (self._lease_duration_s / 3.0):
+            return True
+        try:
+            held = self._lease_store.try_acquire(
+                lease_name=self._lease_name, owner_id=self._owner_id,
+                owner_pid=self._owner_pid, lease_duration_s=self._lease_duration_s,
+            )
+        except Exception:
+            logger.warning("curator_worker_lease_error", exc_info=True)
+            held = self._lease_held  # fail to last-known state; don't thrash
+        self._lease_held = held
+        self._last_lease_op = now
+        try:
+            from archolith_proxy.metrics import record_metric
+            record_metric("curator_worker_lease_held" if held else "curator_worker_lease_blocked", 1)
+        except Exception:
+            pass
+        return held
 
     def enqueue(self, event: SessionEvent) -> None:
         """Route an event to its session worker, spawning one on first use."""
+        if not self._is_leader():
+            return  # another process is the leader; do not run workers here
         worker = self._workers.get(event.session_id)
         if worker is None:
             worker = CuratorWorker(
@@ -215,7 +268,21 @@ class WorkerRegistry:
         return len(self._workers)
 
     async def shutdown_idle(self, ttl_s: float) -> int:
-        """Evict workers with no activity for longer than ``ttl_s``. Returns count."""
+        """Evict workers with no activity for longer than ``ttl_s``. Returns count.
+
+        Also renews the single-leader lease (if leasing is enabled) — this runs on
+        the proxy's periodic cleanup tick.
+        """
+        if self._lease_store is not None and self._lease_held:
+            try:
+                renewed = self._lease_store.renew(
+                    lease_name=self._lease_name, owner_id=self._owner_id,
+                    owner_pid=self._owner_pid, lease_duration_s=self._lease_duration_s,
+                )
+                self._lease_held = renewed
+                self._last_lease_op = time.monotonic()
+            except Exception:
+                logger.warning("curator_worker_lease_renew_error", exc_info=True)
         now = time.monotonic()
         stale = [sid for sid, w in self._workers.items() if now - w.last_active > ttl_s]
         for sid in stale:
@@ -238,6 +305,13 @@ class WorkerRegistry:
         self._workers.clear()
         for worker in workers:
             await worker.aclose()
+        # Release the single-leader lease so another process can take over promptly.
+        if self._lease_store is not None and self._lease_held:
+            try:
+                self._lease_store.release(lease_name=self._lease_name, owner_id=self._owner_id)
+            except Exception:
+                logger.debug("curator_worker_lease_release_error", exc_info=True)
+            self._lease_held = False
 
 
 # ── Module-level singleton + helpers ────────────────────────────────────────
@@ -252,9 +326,24 @@ def get_worker_registry() -> WorkerRegistry:
         from archolith_proxy.config import get_settings
 
         settings = get_settings()
+        lease_store = None
+        if getattr(settings, "curator_worker_lease_enabled", False):
+            try:
+                from pathlib import Path
+
+                from archolith_maintenance import SchedulerLeaseStore
+
+                _db = getattr(settings, "curator_worker_lease_db_path", "") \
+                    or str(Path(getattr(settings, "ladybug_db_path", "./data/context.lbug")).parent / "scheduler_leases.db")
+                lease_store = SchedulerLeaseStore(db_path=Path(_db))
+            except Exception:
+                logger.warning("curator_worker_lease_store_init_failed", exc_info=True)
+                lease_store = None
         _registry = WorkerRegistry(
             debounce_ms=getattr(settings, "curator_worker_debounce_ms", 2000),
             max_queue=getattr(settings, "curator_worker_max_queue", 100),
+            lease_store=lease_store,
+            lease_duration_s=getattr(settings, "curator_worker_lease_duration_s", 90.0),
         )
     return _registry
 

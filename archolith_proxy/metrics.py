@@ -71,6 +71,10 @@ _metrics: dict = {
     # then served from the fresh briefing (topups) vs. blocked but timed out.
     "prepper_block_topups": 0,
     "prepper_block_timeouts": 0,
+    # Single-leader worker leasing: this process held the curator-worker lease
+    # (held) vs. another process is leader so workers are skipped here (blocked).
+    "curator_worker_lease_held": 0,
+    "curator_worker_lease_blocked": 0,
     # Helper-LLM token usage counters (cumulative, for cost telemetry)
     "extractor_prompt_tokens_total": 0,
     "extractor_completion_tokens_total": 0,

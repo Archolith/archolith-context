@@ -345,6 +345,12 @@ class Settings(BaseSettings):
     curator_worker_debounce_ms: int = 2000   # coalesce a burst of turn events
     curator_worker_max_queue: int = 100       # per-session bounded event queue
     curator_worker_idle_ttl_s: int = 1800     # evict a worker after this idle gap
+    # Single-leader leasing (archolith-maintenance SchedulerLeaseStore) — when on,
+    # only the process holding the "curator-worker" lease runs workers, so two
+    # proxy processes don't both curate the same session graph. Off by default.
+    curator_worker_lease_enabled: bool = False
+    curator_worker_lease_db_path: str = ""    # default: alongside the ladybug DB
+    curator_worker_lease_duration_s: int = 90
 
     # Pricing — per-million-token rates for cost estimation on dashboard.
     # Defaults to DeepSeek V4-Flash pricing. Override for other models.

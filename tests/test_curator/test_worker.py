@@ -512,6 +512,64 @@ async def test_multiple_sequential_passes():
         await worker.aclose()
 
 
+# ============================================================================
+# Single-leader leasing (archolith-maintenance SchedulerLeaseStore)
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_no_lease_store_is_always_leader():
+    """Without a lease store the registry is always leader (behavior unchanged)."""
+    with patch("archolith_proxy.curator.pipeline.run_background_pass", new_callable=AsyncMock):
+        reg = WorkerRegistry(debounce_ms=5, lease_store=None)
+        try:
+            reg.enqueue(SessionEvent(session_id="s1", turn_number=1, user_message="m"))
+            assert reg.active_count == 1
+        finally:
+            await reg.shutdown_all()
+
+
+@pytest.mark.asyncio
+async def test_lease_blocks_non_leader_registry(tmp_path):
+    """A second registry sharing the lease DB is blocked while the first holds it."""
+    from archolith_maintenance import SchedulerLeaseStore
+
+    store_a = SchedulerLeaseStore(db_path=tmp_path / "leases.db")
+    store_b = SchedulerLeaseStore(db_path=tmp_path / "leases.db")
+    with patch("archolith_proxy.curator.pipeline.run_background_pass", new_callable=AsyncMock):
+        leader = WorkerRegistry(debounce_ms=5, lease_store=store_a, lease_duration_s=60)
+        follower = WorkerRegistry(debounce_ms=5, lease_store=store_b, lease_duration_s=60)
+        try:
+            leader.enqueue(SessionEvent(session_id="s1", turn_number=1, user_message="m"))
+            assert leader.active_count == 1  # leader runs workers
+
+            follower.enqueue(SessionEvent(session_id="s1", turn_number=1, user_message="m"))
+            assert follower.active_count == 0  # blocked — not the leader
+        finally:
+            await leader.shutdown_all()
+            await follower.shutdown_all()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_releases_lease_for_takeover(tmp_path):
+    """After the leader releases on shutdown, a second registry can take the lease."""
+    from archolith_maintenance import SchedulerLeaseStore
+
+    store_a = SchedulerLeaseStore(db_path=tmp_path / "leases.db")
+    store_b = SchedulerLeaseStore(db_path=tmp_path / "leases.db")
+    with patch("archolith_proxy.curator.pipeline.run_background_pass", new_callable=AsyncMock):
+        leader = WorkerRegistry(debounce_ms=5, lease_store=store_a, lease_duration_s=60)
+        leader.enqueue(SessionEvent(session_id="s1", turn_number=1, user_message="m"))
+        assert leader.active_count == 1
+        await leader.shutdown_all()  # releases the lease
+
+        follower = WorkerRegistry(debounce_ms=5, lease_store=store_b, lease_duration_s=60)
+        try:
+            follower.enqueue(SessionEvent(session_id="s1", turn_number=1, user_message="m"))
+            assert follower.active_count == 1  # took over leadership
+        finally:
+            await follower.shutdown_all()
+
+
 __all__ = [
     "test_debounce_coalesces_burst_to_latest",
     "test_in_flight_pass_not_cancelled",

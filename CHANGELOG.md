@@ -1,5 +1,25 @@
 # Changelog
 
+## [unreleased] — 2026-06-15 — Phase 0.5: single-leader worker leasing via archolith-maintenance
+
+Extracts the proven cross-process lease from cth.memory into a new shared package
+`archolith-maintenance` (cth.memory left untouched as the reference) and wires the curator
+worker to it. When `curator_worker_lease_enabled`, only the process holding the
+`curator-worker` lease runs workers, so two proxy processes sharing a session graph don't
+both curate it (de-risks the multi-writer critique). Off by default; without the lease the
+registry is always leader (behavior unchanged).
+
+- **New dep**: `archolith-maintenance` (editable: `pip install -e ../archolith-maintenance`),
+  provides `SchedulerLeaseStore` (SQLite single-leader lease).
+- **curator/worker.py**: `WorkerRegistry` accepts a `lease_store`; `_is_leader()` (cheap,
+  re-checks at most once per third of the lease duration) gates `enqueue`; renews on the idle
+  tick; releases on `shutdown_all`. `get_worker_registry()` builds the lease store from settings.
+- **config.py**: `curator_worker_lease_enabled` (off), `curator_worker_lease_db_path`
+  (default alongside the ladybug DB), `curator_worker_lease_duration_s` (90).
+- **metrics**: `curator_worker_lease_held` / `curator_worker_lease_blocked`.
+- **tests**: 3 worker-lease integration tests (no-lease=leader, follower blocked, release->takeover).
+  Full suite 1065 passed.
+
 ## [unreleased] — 2026-06-15 — Fix stale TestSearchFactsSemantic mocks (suite fully green)
 
 The two long-failing `TestSearchFactsSemantic` tests had a stale collaborator mock:
