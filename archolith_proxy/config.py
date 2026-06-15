@@ -315,6 +315,15 @@ class Settings(BaseSettings):
     assembler_max_iterations: int = 2
     assembler_latency_budget_ms: int = 3000
 
+    # Event-driven curator worker (Phase 1) — replaces the request-coupled
+    # prepper scheduling with a long-lived per-session worker fed by an event
+    # queue. When enabled, the extraction tail enqueues a turn event instead of
+    # calling swap_background_task (no cancel-and-lose). Off by default.
+    curator_worker_enabled: bool = False
+    curator_worker_debounce_ms: int = 2000   # coalesce a burst of turn events
+    curator_worker_max_queue: int = 100       # per-session bounded event queue
+    curator_worker_idle_ttl_s: int = 1800     # evict a worker after this idle gap
+
     # Pricing — per-million-token rates for cost estimation on dashboard.
     # Defaults to DeepSeek V4-Flash pricing. Override for other models.
     pricing_input_per_million: float = 0.14       # $/M input tokens (cache miss)

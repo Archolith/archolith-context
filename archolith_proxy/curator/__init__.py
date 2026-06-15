@@ -5,6 +5,7 @@ import structlog
 from archolith_proxy.config import get_settings
 from archolith_proxy.curator.briefing import SessionBriefing
 from archolith_proxy.curator.pipeline import curate_context, get_last_attempt, run_background_pass
+from archolith_proxy.curator.worker import enqueue_curator_event
 from archolith_proxy.models.dtos import AssembledContext
 logger = structlog.get_logger()
 BackgroundPassFn = Callable[..., Awaitable[SessionBriefing | None]]
@@ -41,4 +42,4 @@ def configure_curation_mode() -> None:
     unregister_curation_mode()
     logger.info("curation_mode_configured", mode=settings.curation_mode)
 __all__ = ["curate_context", "run_background_pass", "get_last_attempt", "register_curation_mode",
-           "unregister_curation_mode", "configure_curation_mode"]
+           "unregister_curation_mode", "configure_curation_mode", "enqueue_curator_event"]

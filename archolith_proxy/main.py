@@ -127,12 +127,26 @@ async def _background_cleanup_loop() -> None:
                     pruned_agent_solo = prune_agent_solo_state(active_ids)
                     pruned_curator = prune_curator_state(active_ids)
                     pruned_attempts = prune_last_attempts(active_ids)
-                    if pruned_agent_solo or pruned_curator or pruned_attempts:
+
+                    # Evict idle event-driven curator workers (Phase 1).
+                    pruned_workers = 0
+                    try:
+                        _cw_settings = get_settings()
+                        if _cw_settings.curator_worker_enabled:
+                            from archolith_proxy.curator.worker import shutdown_idle_curator_workers
+                            pruned_workers = await shutdown_idle_curator_workers(
+                                _cw_settings.curator_worker_idle_ttl_s
+                            )
+                    except Exception:
+                        pass
+
+                    if pruned_agent_solo or pruned_curator or pruned_attempts or pruned_workers:
                         logger.info(
                             "background_cache_pruned",
                             agent_solo_sessions=pruned_agent_solo,
                             curator_sessions=pruned_curator,
                             last_attempts=pruned_attempts,
+                            curator_workers=pruned_workers,
                         )
                 except Exception:
                     pass
@@ -373,6 +387,13 @@ async def lifespan(app: FastAPI):
         await _cleanup_task
     except asyncio.CancelledError:
         pass
+
+    # Stop all event-driven curator workers (Phase 1).
+    try:
+        from archolith_proxy.curator.worker import shutdown_all_curator_workers
+        await shutdown_all_curator_workers()
+    except Exception:
+        logger.warning("curator_worker_shutdown_failed", exc_info=True)
 
     await plugin_registry.deactivate_all()
 

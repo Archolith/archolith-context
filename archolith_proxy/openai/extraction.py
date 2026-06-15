@@ -455,20 +455,35 @@ async def _run_extraction(
                     _bg_user_msg = _normalize_message_content(msg.get("content"))
                     break
             if _bg_user_msg:
-                from archolith_proxy.curator import run_background_pass
-                from archolith_proxy.curator.state import swap_background_task
-                _bg_task = asyncio.create_task(
-                    run_background_pass(
+                if _bg_settings.curator_worker_enabled:
+                    # Event-driven worker (Phase 1): enqueue a turn event. The
+                    # long-lived per-session worker debounces and runs the pass
+                    # without cancel-on-next-turn. Non-blocking.
+                    from archolith_proxy.curator.worker import enqueue_curator_event
+                    enqueue_curator_event(
                         session_id=session_id,
                         turn_number=turn_number,
                         user_message=_bg_user_msg[:4000],
                         session_goal=session_goal,
                         messages=messages,
                     )
-                )
-                swap_background_task(session_id, _bg_task)
-                record_metric("prepper_fires", 1)
-                logger.debug("background_pass_triggered", session_id=session_id, turn=turn_number)
+                    record_metric("prepper_fires", 1)
+                    logger.debug("curator_worker_event_enqueued", session_id=session_id, turn=turn_number)
+                else:
+                    from archolith_proxy.curator import run_background_pass
+                    from archolith_proxy.curator.state import swap_background_task
+                    _bg_task = asyncio.create_task(
+                        run_background_pass(
+                            session_id=session_id,
+                            turn_number=turn_number,
+                            user_message=_bg_user_msg[:4000],
+                            session_goal=session_goal,
+                            messages=messages,
+                        )
+                    )
+                    swap_background_task(session_id, _bg_task)
+                    record_metric("prepper_fires", 1)
+                    logger.debug("background_pass_triggered", session_id=session_id, turn=turn_number)
     except Exception:
         logger.debug("background_pass_trigger_failed", session_id=session_id, exc_info=True)
 
