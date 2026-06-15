@@ -153,6 +153,27 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
         else 0.0
     )
 
+    # Phase 0 — event-driven curator-worker diagnosis: quantify prepper
+    # starvation (skipped on tool-call turns), cancellation (killed by the next
+    # turn), the hot-path LLM-call rate, and briefing staleness (ledger_lag proxy).
+    prepper_fires = get_metrics()["prepper_fires"]
+    prepper_starved = get_metrics()["prepper_starved"]
+    prepper_cancels = get_metrics()["prepper_cancels"]
+    _prepper_boundaries = prepper_fires + prepper_starved
+    prepper_starved_rate = (
+        round(prepper_starved / _prepper_boundaries, 4) if _prepper_boundaries > 0 else 0.0
+    )
+    hot_path_llm_calls = get_metrics()["hot_path_llm_calls"]
+    total_requests = get_metrics()["total_requests"]
+    hot_path_llm_call_rate = (
+        round(hot_path_llm_calls / total_requests, 4) if total_requests > 0 else 0.0
+    )
+    _lag_count = get_metrics()["hot_path_briefing_lag_count"]
+    avg_briefing_lag_turns = (
+        round(get_metrics()["hot_path_briefing_lag_sum"] / _lag_count, 2)
+        if _lag_count > 0 else 0.0
+    )
+
     return {
         "proxy": "archolith-proxy",
         "version": __version__,
@@ -178,6 +199,16 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
         "curator_success_rate": curator_success_rate,
         "avg_curator_latency_ms": avg_curator_latency_ms,
         "avg_curator_tool_calls": avg_curator_tool_calls,
+        "curator_worker_diag": {
+            "prepper_fires": prepper_fires,
+            "prepper_starved": prepper_starved,
+            "prepper_starved_rate": prepper_starved_rate,
+            "prepper_cancels": prepper_cancels,
+            "hot_path_llm_calls": hot_path_llm_calls,
+            "hot_path_llm_call_rate": hot_path_llm_call_rate,
+            "briefing_reads": _lag_count,
+            "avg_briefing_lag_turns": avg_briefing_lag_turns,
+        },
         "synthetic_tool_successes": get_metrics()["synthetic_tool_successes"],
         "synthetic_tool_failures": get_metrics()["synthetic_tool_failures"],
         "synthetic_circuit_opens": get_metrics()["synthetic_circuit_opens"],

@@ -438,6 +438,12 @@ async def _run_extraction(
             lock.release()
 
     if not is_user_turn or response_finish_reason == "tool_calls":
+        # Phase 0: count turn boundaries where the prepper is skipped purely
+        # because the turn ended in tool_calls / was not a user turn — the
+        # starvation signal the event-driven-worker plan diagnoses.
+        _starve_settings = get_settings()
+        if _starve_settings.background_pass_enabled and _starve_settings.curator_enabled and session_id:
+            record_metric("prepper_starved", 1)
         return
 
     try:
@@ -461,6 +467,7 @@ async def _run_extraction(
                     )
                 )
                 swap_background_task(session_id, _bg_task)
+                record_metric("prepper_fires", 1)
                 logger.debug("background_pass_triggered", session_id=session_id, turn=turn_number)
     except Exception:
         logger.debug("background_pass_trigger_failed", session_id=session_id, exc_info=True)

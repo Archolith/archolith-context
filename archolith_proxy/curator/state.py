@@ -107,6 +107,12 @@ def swap_background_task(session_id: str, task: asyncio.Task) -> None:
     old = _bg_tasks.pop(session_id, None)
     if old is not None and not old.done():
         old.cancel()
+        # Phase 0: count prepper passes cancelled by the next turn (cancel-and-lose).
+        try:
+            from archolith_proxy.metrics import record_metric
+            record_metric("prepper_cancels", 1)
+        except Exception:
+            pass
 
     _bg_tasks[session_id] = task
     # Done callback only pops if the stored task IS the same object that completed.

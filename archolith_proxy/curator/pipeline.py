@@ -332,9 +332,17 @@ async def curate_context(
     briefing = get_briefing(session_id)
     fresh = is_briefing_fresh(session_id, turn_number)
 
+    # Phase 0: record briefing staleness at hot-path read (ledger_lag proxy).
+    if briefing is not None:
+        from archolith_proxy.metrics import record_metric
+        record_metric("hot_path_briefing_lag_sum", max(0, turn_number - briefing.source_turn))
+        record_metric("hot_path_briefing_lag_count", 1)
+
     if briefing and (fresh or briefing.source_turn >= turn_number - settings.briefing_max_staleness):
         from archolith_proxy.curator import _inline_pass_fn
+        from archolith_proxy.metrics import record_metric
 
+        record_metric("hot_path_llm_calls", 1)
         if _inline_pass_fn is not None:
             result = await _inline_pass_fn(
                 session_id, turn_number, user_message, session_goal,
@@ -372,7 +380,9 @@ async def curate_context(
     attempt_failure: str = ""
 
     from archolith_proxy.curator.loop import _run_curator_native
+    from archolith_proxy.metrics import record_metric
 
+    record_metric("hot_path_llm_calls", 1)
     try:
         result_tuple = await asyncio.wait_for(
             _run_curator_native(

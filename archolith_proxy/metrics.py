@@ -50,6 +50,20 @@ _metrics: dict = {
     "curator_calls": 0,
     "curator_timeouts": 0,
     "curator_fallbacks": 0,
+    # Phase 0 — event-driven curator-worker diagnosis (prepper starvation/cancellation).
+    # prepper_fires:   a background pass was actually scheduled for a turn.
+    # prepper_starved: a turn boundary where the prepper was skipped because the
+    #                  turn was a tool-call continuation / non-user turn.
+    # prepper_cancels: an in-flight background pass was cancelled by the next turn.
+    # hot_path_llm_calls: inline curate_context made an LLM call on the request path.
+    # hot_path_briefing_lag_{sum,count}: staleness (turn - briefing.source_turn) at
+    #                  each hot-path briefing read; mean = sum / count.
+    "prepper_fires": 0,
+    "prepper_starved": 0,
+    "prepper_cancels": 0,
+    "hot_path_llm_calls": 0,
+    "hot_path_briefing_lag_sum": 0,
+    "hot_path_briefing_lag_count": 0,
     # Helper-LLM token usage counters (cumulative, for cost telemetry)
     "extractor_prompt_tokens_total": 0,
     "extractor_completion_tokens_total": 0,
