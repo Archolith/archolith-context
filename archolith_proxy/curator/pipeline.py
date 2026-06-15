@@ -194,6 +194,14 @@ async def run_background_pass(
                 bp_trace.context_chars = len(briefing.context_block)
                 bp_trace.completed_at = time.time()
                 bp_trace.latency_ms = (time.time() - bp_trace.started_at) * 1000
+                # Count the success in the registered-fn (two_curator / prepper)
+                # path too — previously only the default _run_background_pass_inner
+                # path incremented this, so two_curator showed 0 despite firing.
+                try:
+                    from archolith_proxy.metrics import record_metric
+                    record_metric("background_pass_successes", 1)
+                except Exception:
+                    pass
             else:
                 bp_trace.outcome = "no_result"
                 bp_trace.completed_at = time.time()
