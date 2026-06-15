@@ -347,8 +347,41 @@ onto a long-lived per-session `CuratorWorker` on **every turn boundary**:
      `run_background_pass()` per coalesced burst — **never cancelling an in-flight pass** (the fix vs
      `swap_background_task`). The pass reuses the registered prepper, so curation logic is unchanged.
    - Observability: the `/metrics` `curator_worker_diag` block (`prepper_fires`, `prepper_starved`,
-     `prepper_cancels`, `hot_path_llm_calls`, `avg_briefing_lag_turns`) quantifies firing vs starvation.
+     `prepper_cancels`, `hot_path_llm_calls`, `avg_briefing_lag_turns`, `deterministic_assemblies`,
+     `prepper_block_topups/timeouts`, `curator_worker_lease_held/blocked`) quantifies the pipeline.
    - Default off; when off, the legacy `swap_background_task` path is preserved unchanged.
+   - **Single-leader leasing** (`CURATOR_WORKER_LEASE_ENABLED`, default off): the `WorkerRegistry`
+     can take a cross-process lease (`archolith-maintenance` `SchedulerLeaseStore`, SQLite) so only
+     one proxy process runs workers for a shared session graph. `_is_leader()` gates enqueue, renews
+     on the idle tick, releases on shutdown. Without a lease the registry is always leader.
+
+**Deterministic assembler** (when `ASSEMBLER_DETERMINISTIC=true` — `curator/deterministic_assembler.py`, Phase 2):
+
+Removes the LLM call from the inline read. The prepper's `SessionBriefing` already carries the typed
+pools, so `build_deterministic_context()` composes the `=== SECTION ===` block in pure code and fits it
+to `ASSEMBLER_TOKEN_BUDGET` (small pools verbatim; `RELEVANT CODE` fills the remaining budget,
+fence-closed on truncation). No LLM, no 3s race, no fall-through. Registered in place of the LLM
+`run_assembler` when the flag is on (two_curator). Counted via `deterministic_assemblies`.
+
+**Synchronous prepper top-up** (when `PREPPER_BLOCK_ON_MISS=true` — `curator/pipeline.py`, default off):
+
+When no usable briefing exists on a curator-eligible user turn, block on ONE bounded prepper pass
+(`PREPPER_BLOCK_BUDGET_MS`) and retry the cheap deterministic read on the fresh briefing, instead of
+falling through to the full loop. Guarantees the curator delivers (worker becomes best-effort prefetch).
+Metrics `prepper_block_topups` / `prepper_block_timeouts`. NOTE: a full prepper pass (file-fetching) is
+often ~10-30s — too slow for an inline block; the in-progress fix is a lightweight pass that skips
+file-fetch. (See `.agent/workflows/` and the event-driven-worker plan.)
+
+**Operational tuning (learned 2026-06-15, live-validated):**
+- `PREPPER_LATENCY_BUDGET_MS` default is **60s** (was 30s): at 30s the gpt-4.1-mini prepper timed out on
+  ~every pass, so no briefing was ever cached and the curator always fell back. 60s lets it complete.
+- The prepper system prompt **converges** (`PREPPER_SYSTEM_PROMPT` rule 7: call AT MOST 5-7 tools then
+  emit). This took the live `no_result` rate from ~50% to ~0 — the model was over-fetching files and
+  hitting `max_iterations` without emitting. Iteration count is NOT the binding constraint.
+- The curator hot path only engages on `is_user_turn` requests past `COLD_START_TURNS` with
+  `gate_input_tokens >= ASSEMBLY_MIN_INPUT_TOKENS`; agentic tool-continuations take the agent_solo path
+  by design. So the chain that must hold: worker fires -> prepper completes -> briefing cached -> curator
+  engages on a user turn -> deterministic read serves it (no LLM on the hot path).
 
 **System prompt** (`curator/prompts.py`):
 - Pre-loaded checkpoint in user prompt — skip `get_checkpoint` unless a refresh is needed
