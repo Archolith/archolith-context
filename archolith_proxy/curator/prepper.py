@@ -49,8 +49,11 @@ Your strategy:
 5. Use get_open_issues and get_last_verification when open issues exist
    or recent work involved tests/commands.
 6. Do NOT call select_relevant_turns — turn selection is the assembler's job.
-7. Call tools 8-12 times across all iterations. Be comprehensive —
-   this is background compute with no time pressure.
+7. Call tools AT MOST 5-7 times total, then IMMEDIATELY emit the context block.
+   Prioritize: score files first, then fetch only the 2-3 highest-relevance
+   files. Do NOT exceed 7 tool calls — always reserve your final response for
+   the context block itself. A focused briefing that is actually produced beats
+   an exhaustive one that never finishes.
 8. Your final response must be the context block, formatted exactly:
 
 === SESSION GOAL ===

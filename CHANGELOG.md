@@ -1,5 +1,21 @@
 # Changelog
 
+## [unreleased] — 2026-06-15 — Prepper converge prompt (cap tool calls) + lever-sweep tool
+
+The prepper returned `no_result` ~half the time live (model kept fetching files and hit
+max_iterations without emitting). Changed the prepper system prompt to converge: call AT
+MOST 5-7 tools (score, then fetch only the 2-3 highest-relevance files), then emit — "a
+focused briefing that is actually produced beats an exhaustive one that never finishes."
+
+- **curator/prepper.py**: rule 7 of `PREPPER_SYSTEM_PROMPT` now caps tool calls and reserves
+  the final response for the context block.
+- **scripts/prepper_sweep.py** (new): offline lever sweep against a copy of the live graph DB,
+  loading a real coherence tail from the session trace. Sweeps `prepper_max_iterations` x
+  default/converge prompt and reports complete-rate / latency / tool calls / files. Finding:
+  iteration count is not the binding constraint (all configs complete offline); the converge
+  prompt is ~25-35% faster with fewer tool calls. (Caveat: the offline copy's file_cache yields
+  files=0, so it does not fully reproduce the live file-fetch workload.)
+
 ## [unreleased] — 2026-06-15 — Fix prepper timeout (default budget 30s -> 60s)
 
 Live validation of the worker + deterministic read showed the curator hot path never
