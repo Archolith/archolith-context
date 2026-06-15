@@ -1,5 +1,18 @@
 # Changelog
 
+## [unreleased] — 2026-06-15 — Fix prepper timeout (default budget 30s -> 60s)
+
+Live validation of the worker + deterministic read showed the curator hot path never
+consumed a briefing (`briefing_reads=0`): the background prepper **timed out** at the
+default 30s/12-iteration budget (≈all passes timed out), so no briefing was ever cached
+and `curate_context` always fell back to the full loop. Raising
+`prepper_latency_budget_ms` to 60s eliminated the timeouts; the prepper now completes and
+caches a briefing, which the deterministic read consumes. Confirmed live end-to-end:
+worker fires → prepper completes → briefing cached → curator engages on the user turn →
+`deterministic_assemblies` + `briefing_reads` increment with `hot_path_llm_calls` flat
+(LLM off the hot path). The prepper is background (no hot-path latency pressure) and the
+worker debounces + never cancels, so the longer budget is safe.
+
 ## [unreleased] — 2026-06-15 — Phase 2: deterministic LLM-free hot-path read
 
 Removes the synchronous LLM call from the two_curator inline read. The prepper's

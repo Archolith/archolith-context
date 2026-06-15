@@ -306,7 +306,12 @@ class Settings(BaseSettings):
     prepper_api_key: str = ""
     prepper_max_iterations: int = 12
     prepper_debounce_ms: int = 2000
-    prepper_latency_budget_ms: int = 30_000
+    # 30s was too short for a 12-iteration gpt-4.1-mini prepper: it timed out
+    # before emitting a briefing (~all passes timed out live), so no briefing was
+    # ever cached and the hot path always fell back. 60s lets the pass complete.
+    # The prepper is background (no hot-path latency pressure); the event-driven
+    # worker debounces and never cancels, so a longer budget is safe.
+    prepper_latency_budget_ms: int = 60_000
 
     # Assembler (fast inline formatter) — defaults to curator_model if empty
     assembler_model: str = ""
