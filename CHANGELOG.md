@@ -1,5 +1,18 @@
 # Changelog
 
+## [unreleased] — 2026-06-15 — Debugging tools: surface curator-worker telemetry + sweep diagnostics
+
+- **scripts/proxy_status.py** (`metrics`): now surfaces the `curator_worker_diag` block
+  (prepper fires/starved/cancels, hot-path LLM rate, briefing reads, avg lag,
+  deterministic assemblies, sync top-up served/timeouts), `helper_tokens`
+  (extractor/curator/embedding/cached), and `background_pass_successes` — previously
+  none of the new telemetry was visible. Shows every non-zero assembly mode (not just 4)
+  and trims the user-turns wall to the top 8 + a count.
+- **scripts/prepper_sweep.py**: pre-flight counts the session's cached files and warns
+  loudly when 0 (the prepper can't fetch -> the sweep under-represents the live
+  file-fetch workload; this explains the earlier `files=0`). Outcome breakdown now
+  distinguishes complete / no_result / timeout, and reports median + max latency.
+
 ## [unreleased] — 2026-06-15 — Synchronous prepper top-up (flexible, off by default)
 
 When no usable briefing exists on a curator-eligible user turn, optionally block on ONE

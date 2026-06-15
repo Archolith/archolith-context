@@ -66,8 +66,13 @@ def _load_real_messages(trace_path: Path) -> tuple[list[dict], str]:
     return best_msgs, user_msg[:4000]
 
 
-async def _run_one(session_id: str, user_message: str, turn_number: int, messages: list[dict]):
-    """Run a single prepper pass; return (complete, latency_ms, tool_calls, files)."""
+async def _run_one(session_id: str, user_message: str, turn_number: int,
+                   messages: list[dict], budget_ms: int):
+    """Run a single prepper pass; return (outcome, latency_ms, tool_calls, files).
+
+    outcome is one of: "complete" (briefing cached), "timeout" (None at ~budget),
+    "no_result" (None below budget — hit max_iterations without emitting).
+    """
     from archolith_proxy.curator.prepper import run_prepper
 
     t0 = time.monotonic()
@@ -79,9 +84,10 @@ async def _run_one(session_id: str, user_message: str, turn_number: int, message
         messages=messages,
     )
     latency_ms = (time.monotonic() - t0) * 1000
-    if briefing is None:
-        return (False, latency_ms, 0, 0)
-    return (True, latency_ms, briefing.tool_calls_used, len(briefing.files))
+    if briefing is not None:
+        return ("complete", latency_ms, briefing.tool_calls_used, len(briefing.files))
+    outcome = "timeout" if latency_ms >= budget_ms * 0.9 else "no_result"
+    return (outcome, latency_ms, 0, 0)
 
 
 async def _sweep(session_id: str, samples: int) -> None:
@@ -105,6 +111,23 @@ async def _sweep(session_id: str, samples: int) -> None:
     print(f"Copied DB -> {copy.name}")
 
     await init_backend(LadybugBackend(db_path=str(copy), max_concurrent_queries=settings.ladybug_max_concurrent))
+
+    # Pre-flight: count cached files for the session. If 0, the prepper has nothing
+    # to fetch -> files=0 and the sweep does NOT reproduce the live file-fetch
+    # workload (the dominant cost). Warn loudly so results aren't over-trusted.
+    from archolith_proxy.graph.backend import get_backend
+    try:
+        cached = await get_backend().list_cached_files(session_id)
+        n_cached = len(cached)
+    except Exception as e:
+        n_cached = -1
+        print(f"  (could not count cached files: {type(e).__name__}: {e})")
+    if n_cached == 0:
+        print("  !! WARNING: 0 cached files for this session in the DB copy — the prepper")
+        print("     cannot fetch file contents, so this sweep UNDER-REPRESENTS the live")
+        print("     file-fetch workload (expect files=0 and optimistic latencies).")
+    elif n_cached > 0:
+        print(f"  cached files for session: {n_cached} (prepper can fetch -> representative)")
 
     # Load a realistic coherence tail from the session's trace so the prepper
     # does its real file-fetching workload (the thing that causes live no_result).
@@ -130,9 +153,11 @@ async def _sweep(session_id: str, samples: int) -> None:
         ("iters=16 converge", 16, _converge_prompt(default_prompt)),
     ]
 
-    print(f"\nSession={session_id}  samples/config={samples}  budget_ms={settings.prepper_latency_budget_ms}")
-    print(f"{'config':<20} {'complete':>9} {'avg_ms':>8} {'avg_tools':>10} {'avg_files':>10}")
-    print("-" * 60)
+    budget_ms = settings.prepper_latency_budget_ms
+    print(f"\nSession={session_id}  samples/config={samples}  budget_ms={budget_ms}")
+    print(f"{'config':<20} {'complete':>9} {'noResult':>9} {'timeout':>8} "
+          f"{'med_ms':>8} {'max_ms':>8} {'tools':>6} {'files':>6}")
+    print("-" * 78)
 
     turn = 1000
     for label, iters, prompt in configs:
@@ -142,16 +167,22 @@ async def _sweep(session_id: str, samples: int) -> None:
         for _ in range(samples):
             turn += 1
             try:
-                results.append(await _run_one(session_id, probe, turn, real_messages))
+                results.append(await _run_one(session_id, probe, turn, real_messages, budget_ms))
             except Exception as e:
                 print(f"  run error ({label}): {type(e).__name__}: {e}")
-                results.append((False, 0.0, 0, 0))
-        completes = [r for r in results if r[0]]
-        complete_rate = len(completes) / len(results) if results else 0.0
-        avg_ms = statistics.mean(r[1] for r in results) if results else 0.0
+                results.append(("no_result", 0.0, 0, 0))
+        n = len(results) or 1
+        completes = [r for r in results if r[0] == "complete"]
+        n_complete = len(completes)
+        n_noresult = sum(1 for r in results if r[0] == "no_result")
+        n_timeout = sum(1 for r in results if r[0] == "timeout")
+        lats = [r[1] for r in results]
+        med_ms = statistics.median(lats) if lats else 0.0
+        max_ms = max(lats) if lats else 0.0
         avg_tools = statistics.mean(r[2] for r in completes) if completes else 0.0
         avg_files = statistics.mean(r[3] for r in completes) if completes else 0.0
-        print(f"{label:<20} {complete_rate*100:>7.0f}% {avg_ms:>8.0f} {avg_tools:>10.1f} {avg_files:>10.1f}")
+        print(f"{label:<20} {n_complete/n*100:>7.0f}% {n_noresult:>9} {n_timeout:>8} "
+              f"{med_ms:>8.0f} {max_ms:>8.0f} {avg_tools:>6.1f} {avg_files:>6.1f}")
 
     prepper_mod.PREPPER_SYSTEM_PROMPT = default_prompt
     await close_backend()

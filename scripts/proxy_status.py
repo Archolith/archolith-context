@@ -99,11 +99,17 @@ def cmd_metrics() -> None:
     print(_c(CYAN, f"  total_requests ") + str(d.get("total_requests")))
 
     modes = d.get("assembly_modes", {})
-    cold = modes.get("cold_start", 0)
-    graph = modes.get("graph", 0)
-    curator = modes.get("curator", 0)
-    fallback = modes.get("fallback", 0)
-    mode_str = f"cold_start={cold}  graph={graph}  curator={_c(MAGENTA, str(curator)) if curator else str(curator)}  fallback={fallback}"
+    # Show every non-zero mode (not just the first 4) so passthrough / agent_solo /
+    # briefing / deterministic traffic is visible.
+    nonzero = {k: v for k, v in modes.items() if v}
+    if nonzero:
+        parts = []
+        for k, v in nonzero.items():
+            vs = _c(MAGENTA, str(v)) if k in ("curator", "briefing") else str(v)
+            parts.append(f"{k}={vs}")
+        mode_str = "  ".join(parts)
+    else:
+        mode_str = "(all zero)"
     print(_c(CYAN, f"  assembly_modes ") + mode_str)
 
     curator_calls = d.get("curator_calls", 0)
@@ -113,11 +119,49 @@ def cmd_metrics() -> None:
         cur_str = f"calls={curator_calls}  timeouts={_c(RED, str(curator_timeouts)) if curator_timeouts else str(curator_timeouts)}  fallbacks={curator_fallbacks}"
         print(_c(CYAN, f"  curator        ") + cur_str)
 
+    # Curator-worker diagnosis (event-driven worker + deterministic read + top-up).
+    diag = d.get("curator_worker_diag")
+    if diag:
+        starved = diag.get("prepper_starved", 0)
+        cancels = diag.get("prepper_cancels", 0)
+        print(_c(CYAN, "  prepper        ")
+              + f"fires={diag.get('prepper_fires', 0)}  "
+              + f"starved={_c(RED, str(starved)) if starved else '0'}  "
+              + f"cancels={_c(RED, str(cancels)) if cancels else '0'}  "
+              + f"bg_ok={d.get('background_pass_successes', 0)}")
+        det = diag.get("deterministic_assemblies", 0)
+        print(_c(CYAN, "  hot_path       ")
+              + f"llm_calls={diag.get('hot_path_llm_calls', 0)}  "
+              + f"llm_rate={diag.get('hot_path_llm_call_rate', 0)}  "
+              + f"briefing_reads={diag.get('briefing_reads', 0)}  "
+              + f"avg_lag={diag.get('avg_briefing_lag_turns', 0)}  "
+              + f"determin={_c(MAGENTA, str(det)) if det else '0'}")
+        topups = diag.get("prepper_block_topups", 0)
+        block_to = diag.get("prepper_block_timeouts", 0)
+        if topups or block_to:
+            print(_c(CYAN, "  sync_topup     ")
+                  + f"served={topups}  timeouts={_c(RED, str(block_to)) if block_to else '0'}")
+
+    # Helper-LLM token cost (extractor + curator + embeddings).
+    helper = d.get("helper_tokens")
+    if helper:
+        ext = helper.get("extractor_prompt_tokens", 0) + helper.get("extractor_completion_tokens", 0)
+        cur = helper.get("curator_prompt_tokens", 0) + helper.get("curator_completion_tokens", 0)
+        emb = helper.get("embedding_tokens", 0)
+        cached = helper.get("extractor_cached_tokens", 0) + helper.get("curator_cached_tokens", 0)
+        print(_c(CYAN, "  helper_tokens  ")
+              + f"extractor={ext:,}  curator={cur:,}  embed={emb:,}  cached={cached:,}")
+
     user_turns = d.get("user_turns_by_session", {})
     if user_turns:
-        print(_c(CYAN, f"  user_turns     ") + "  ".join(
-            f"{sid[:8]}={v}" for sid, v in user_turns.items()
-        ))
+        # Top 8 sessions by user-turn count; summarize the rest (avoids a wall of text).
+        ranked = sorted(user_turns.items(), key=lambda kv: kv[1], reverse=True)
+        shown = ranked[:8]
+        rest = ranked[8:]
+        line = "  ".join(f"{sid[:8]}={v}" for sid, v in shown)
+        if rest:
+            line += f"  (+{len(rest)} more)"
+        print(_c(CYAN, f"  user_turns     ") + line)
     else:
         print(_c(CYAN, f"  user_turns     ") + "(no sessions)")
 
