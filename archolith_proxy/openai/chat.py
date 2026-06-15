@@ -26,7 +26,7 @@ from archolith_proxy.config import (
 )
 from archolith_proxy.curator.pipeline import curate_context
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
-from archolith_proxy.metrics import record_metric
+from archolith_proxy.metrics import record_assembly_mode, record_metric
 from archolith_proxy.openai.schemas import ChatCompletionRequest
 from archolith_proxy.openai.helpers import (
     _build_call_map,  # noqa: F401 — re-exported for test compatibility
@@ -310,6 +310,13 @@ async def chat_completions(
             facts_selected=[], files_selected=[], decisions_selected=[],
             rewritten_tokens=0, savings_tokens=0, savings_ratio=0.0, compression_ratio=1.0,
         )
+        # Count passthrough in the process-level assembly_modes block, exactly
+        # like a non-passthrough request — so the A/B passthrough arm is recorded
+        # symmetrically and /metrics reflects passthrough traffic. (total_requests
+        # is already counted by the HTTP middleware; input tokens are counted
+        # post-branch for non-passthrough, so mirror that here.)
+        record_assembly_mode("passthrough")
+        record_metric("total_input_tokens_seen", input_tokens)
         if req.stream:
             return await _handle_passthrough_stream(
                 request, body, req, trace_builder, background_tasks, settings, request_start,
@@ -557,6 +564,9 @@ async def chat_completions(
         savings_ratio=savings_ratio,
         compression_ratio=_comp_ratio,
     )
+    # Count the resolved mode in the process-level assembly_modes block so
+    # /metrics reflects real traffic (previously never incremented -> always 0).
+    record_assembly_mode(assembly_mode)
 
     # ── Inject assembled context and proxy tools ──
     if assembled and assembly_mode == "curator":

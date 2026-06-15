@@ -209,6 +209,19 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
             "briefing_reads": _lag_count,
             "avg_briefing_lag_turns": avg_briefing_lag_turns,
         },
+        "background_pass_successes": get_metrics()["background_pass_successes"],
+        # Helper-LLM token totals (cumulative) — recorded into _metrics but
+        # previously not surfaced here, so cost/activity was invisible. The
+        # metered helper spend (extractor + curator + embeddings) lands here.
+        "helper_tokens": {
+            "extractor_prompt_tokens": get_metrics()["extractor_prompt_tokens_total"],
+            "extractor_completion_tokens": get_metrics()["extractor_completion_tokens_total"],
+            "extractor_cached_tokens": get_metrics()["extractor_cached_tokens_total"],
+            "curator_prompt_tokens": get_metrics()["curator_prompt_tokens_total"],
+            "curator_completion_tokens": get_metrics()["curator_completion_tokens_total"],
+            "curator_cached_tokens": get_metrics()["curator_cached_tokens_total"],
+            "embedding_tokens": get_metrics()["embedding_tokens_total"],
+        },
         "synthetic_tool_successes": get_metrics()["synthetic_tool_successes"],
         "synthetic_tool_failures": get_metrics()["synthetic_tool_failures"],
         "synthetic_circuit_opens": get_metrics()["synthetic_circuit_opens"],
