@@ -9,6 +9,11 @@ tool's `results, _usage = await compute_embeddings_batch(...)` unpack failed. Up
 three mocks to return the `(embeddings, 0)` tuple (assertions unchanged). Full suite now
 1062 passed, 0 failed.
 
+Also fixed the `PydanticDeprecatedSince211` warning (accessing `model_fields` on a model
+*instance*) in `config.py` — use `type(settings).model_fields` (the class) at both sites.
+This was nearly all the test-run warning noise: 216 warnings -> 1. (The remaining one is a
+benign cross-test "coroutine never awaited" collected during a worker test.)
+
 ## [unreleased] — 2026-06-15 — Debugging tools: surface curator-worker telemetry + sweep diagnostics
 
 - **scripts/proxy_status.py** (`metrics`): now surfaces the `curator_worker_diag` block

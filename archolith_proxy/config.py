@@ -455,7 +455,7 @@ def _get_global_settings() -> Settings:
                 # env vars still win (precedence: session > overrides > env > profile > default)
                 _apply_profile(_settings)
                 # Snapshot base values before applying overrides
-                _base_values = {k: getattr(_settings, k) for k in _settings.model_fields}
+                _base_values = {k: getattr(_settings, k) for k in type(_settings).model_fields}
                 # Apply persisted overrides from config_overrides.json
                 _apply_overrides(_settings)
     return _settings
@@ -571,7 +571,7 @@ def get_settings_delta() -> dict[str, dict[str, object]]:
     global _base_values
     settings = get_settings()
     base = _base_values
-    current = {k: getattr(settings, k) for k in settings.model_fields}
+    current = {k: getattr(settings, k) for k in type(settings).model_fields}
     overridden = [k for k in current if base.get(k) != current.get(k)]
     return {"base": base, "current": current, "overridden": overridden}
 
