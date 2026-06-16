@@ -235,3 +235,30 @@ def test_topological_false_is_identical_to_default():
     b = _briefing(files=files)
     assert build_deterministic_context(b, 6000) == \
            build_deterministic_context(b, 6000, topological=False)
+
+
+# ── Phase D: combo fill ─────────────────────────────────────────────────────
+
+
+def test_combo_fill_puts_exemplar_first_under_pressure():
+    big = "Z" * 4000
+    files = [
+        _file("data/apiClient.ts", "export const api=1;\n" + big),     # foundation, first
+        _file("features/sealed/SealedPage.tsx",
+              "import {api} from '@/data/apiClient'; export default function P(){}\n" + big),
+        _file("features/cards/CardsPage.tsx",
+              "import {api} from '@/data/apiClient';\n" + big),
+    ]
+    b = _briefing(files=files)
+    _t, sel = build_deterministic_context(
+        b, 1200, combo=True, exemplar_suffixes=("Page.tsx",), query="sealed browse page",
+    )
+    # The guaranteed exemplar survives first even under tight budget.
+    assert sel and sel[0]["path"] == "features/sealed/SealedPage.tsx"
+
+
+def test_combo_false_is_identical_to_default():
+    files = [_file("a.py", "aaa"), _file("b.py", "bbb")]
+    b = _briefing(files=files)
+    assert build_deterministic_context(b, 6000) == \
+           build_deterministic_context(b, 6000, combo=False)

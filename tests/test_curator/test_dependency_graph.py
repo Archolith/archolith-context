@@ -11,6 +11,7 @@ from archolith_proxy.curator.briefing import PreFetchedFile  # noqa: E402
 from archolith_proxy.curator.dependency_graph import (  # noqa: E402
     compute_indegree,
     extract_dependencies,
+    order_by_combo,
     order_by_topology,
 )
 
@@ -165,3 +166,40 @@ def test_extensionless_relative_import_matches_ts():
         _f("features/x/Page.tsx", "import { useData } from './useData';"),
     ]
     assert extract_dependencies(files)["features/x/Page.tsx"] == {"features/x/useData.ts"}
+
+
+# ── Phase D: exemplar-aware combo fill ───────────────────────────────────────
+
+
+def test_combo_guarantees_exemplar_first():
+    # The exemplar (a *Page.tsx) must lead even if a foundation has higher in-degree
+    # and the page is not the top scored file.
+    files = [
+        _f("data/apiClient.ts", "export const api = 1;"),               # foundation
+        _f("features/sealed/SealedPage.tsx",
+           "import { api } from '@/data/apiClient'; export default function P(){}"),  # exemplar
+        _f("features/x/Other.tsx", "import { api } from '@/data/apiClient';"),
+    ]
+    order = order_by_combo(files, query="sealed browse page", exemplar_suffixes=("Page.tsx",))
+    assert order[0].path == "features/sealed/SealedPage.tsx"
+
+
+def test_combo_interleaves_scored_and_topological():
+    files = [
+        _f("data/apiClient.ts", "export const api = 1;"),
+        _f("features/a/APage.tsx", "import { api } from '@/data/apiClient';"),
+        _f("features/b/BPage.tsx", "import { api } from '@/data/apiClient';"),
+    ]
+    order = [f.path for f in order_by_combo(files, query="a page", exemplar_suffixes=("Page.tsx",))]
+    # apiClient (the foundation, in-degree 2) must appear via the topological half.
+    assert "data/apiClient.ts" in order
+    assert len(order) == len(files)  # all files present, deduped
+
+
+def test_combo_without_exemplar_suffix_is_naive_interleave():
+    files = [
+        _f("data/apiClient.ts", "export const api = 1;"),
+        _f("features/a/APage.tsx", "import { api } from '@/data/apiClient';"),
+    ]
+    order = order_by_combo(files, query="a", exemplar_suffixes=())
+    assert {f.path for f in order} == {"data/apiClient.ts", "features/a/APage.tsx"}

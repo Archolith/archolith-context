@@ -1,5 +1,25 @@
 # Changelog
 
+## [unreleased] — 2026-06-16 — Combo fill (exemplar-aware) for the deterministic assembler
+
+Ports the rung-3 Phase-D winner into a real flag-gated assembler fill mode. The frozen-briefing recall
+experiments (`archolith-bench/.../rung3/RESULT-phaseD-combo.md`) showed no PURE fill reliably recalls
+conventions from a budget-truncated briefing — but an exemplar-aware COMBO does (mean 4.67/6 vs scored
+3.67, no catastrophic cell). The LLM curator/prepper is UNCHANGED.
+
+- **`curator/dependency_graph.py`**: `order_by_combo(files, query, exemplar_suffixes)` — guarantees a
+  structural exemplar (top relevance-scored file ending in an `exemplar_suffixes` marker) survives
+  first, then round-robin interleaves the scored ranking x the topological ranking (dedup). With no
+  suffixes it degenerates to a naive interleave (which does NOT beat scored — the exemplar guarantee
+  is the win).
+- **`deterministic_assembler.py`**: `build_deterministic_context(..., combo=False, exemplar_suffixes=())`;
+  precedence combo > topological > scored > FIFO; `run_deterministic_assembler` reads
+  `assembler_combo_fill` + parses `assembler_exemplar_suffixes` (comma-separated).
+- **`config.py`**: `assembler_combo_fill` (off), `assembler_exemplar_suffixes` (e.g. "Page.tsx").
+- **tests**: +5 (combo ordering: exemplar-first, interleave, naive-without-suffix; assembler:
+  exemplar-first under pressure, off==default). Full suite 1126 passed. Caveat: exemplar suffixes are
+  corpus-specific, same as topological's dependency extraction.
+
 ## [unreleased] — 2026-06-16 — R3a: dependency extractor path resolution (coverage + precision)
 
 Upgrades `curator/dependency_graph.py` reference resolution so topological in-degree reflects more of

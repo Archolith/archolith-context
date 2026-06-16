@@ -65,6 +65,8 @@ def build_deterministic_context(
     *,
     scored: bool = False,
     topological: bool = False,
+    combo: bool = False,
+    exemplar_suffixes: tuple[str, ...] = (),
     query: str = "",
     weights: tuple[float, float, float] = (1.0, 1.0, 1.0),
 ) -> tuple[str, list[dict]]:
@@ -72,13 +74,15 @@ def build_deterministic_context(
 
     Returns ``(context_block, files_selected)``. Pure function — no I/O, no LLM.
 
-    Elastic RELEVANT CODE fill order:
-    - ``topological`` True (Layer 2): order files by dependency in-degree
-      (most-depended-upon FOUNDATIONS first) so the structurally load-bearing
-      files survive budget truncation. Takes precedence over ``scored``.
+    Elastic RELEVANT CODE fill order (precedence: combo > topological > scored > FIFO):
+    - ``combo`` True (rung-3 Phase D winner): exemplar-aware blend — guarantee a
+      structural exemplar (top-scored file ending in an ``exemplar_suffixes`` marker)
+      then interleave scored x topological. Best briefing-only recall.
+    - ``topological`` True (Layer 2): dependency in-degree, FOUNDATIONS first, so
+      load-bearing files survive truncation.
     - ``scored`` True: generative-agents score order (recency x importance x
-      relevance vs ``query``), so the highest-value files win the budget.
-    - both False: briefing insertion order (byte-identical to the original fill).
+      relevance vs ``query``).
+    - all False: briefing insertion order (byte-identical to the original fill).
     """
     budget_chars = max(0, token_budget) * _CHARS_PER_TOKEN
 
@@ -104,7 +108,10 @@ def build_deterministic_context(
     code_blocks: list[str] = []
     remaining = budget_chars - len(head) - len("\n\n=== RELEVANT CODE ===\n")
 
-    if topological:
+    if combo:
+        from archolith_proxy.curator.dependency_graph import order_by_combo
+        ordered_files = order_by_combo(briefing.files, query, exemplar_suffixes)
+    elif topological:
         from archolith_proxy.curator.dependency_graph import order_by_topology
         ordered_files = order_by_topology(briefing.files)
     elif scored:
@@ -158,8 +165,14 @@ async def run_deterministic_assembler(
         token_budget = getattr(settings, "assembler_token_budget", 6000)
         scored = bool(getattr(settings, "assembler_scored_selection", False))
         topological = bool(getattr(settings, "assembler_topological_fill", False))
+        combo = bool(getattr(settings, "assembler_combo_fill", False))
+        raw_suffixes = getattr(settings, "assembler_exemplar_suffixes", "") or ""
+        exemplar_suffixes = tuple(
+            s.strip() for s in raw_suffixes.split(",") if s.strip()
+        )
         context_block, files_selected = build_deterministic_context(
             briefing, token_budget, scored=scored, topological=topological,
+            combo=combo, exemplar_suffixes=exemplar_suffixes,
             query=user_message or "",
         )
 

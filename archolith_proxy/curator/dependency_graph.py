@@ -208,6 +208,49 @@ def compute_indegree(files) -> dict[str, int]:
     return indeg
 
 
+def order_by_combo(files, query: str = "", exemplar_suffixes: tuple[str, ...] = ()) -> list:
+    """Exemplar-aware combo fill order (rung-3 Phase D winner).
+
+    Each pure fill optimizes one objective; the combo blends them so a budget-
+    truncated briefing keeps all three: a structural EXEMPLAR (the template to
+    imitate), task RELEVANCE (scored), and structural FOUNDATIONS (topological).
+
+    Order: if ``exemplar_suffixes`` is given, GUARANTEE the top relevance-scored
+    file whose path ends with one of those suffixes (the template) goes first; then
+    round-robin interleave the scored ranking and the topological ranking (dedup).
+    With no exemplar_suffixes this degenerates to a naive scored/topological
+    interleave (which, per Phase D, does NOT beat scored alone — the exemplar
+    guarantee is what wins). ``exemplar_suffixes`` is corpus-specific (e.g.
+    ``("Page.tsx",)``), the same caveat topological's edge extraction carries.
+    """
+    from itertools import zip_longest
+
+    from archolith_proxy.curator.scoring import score_files
+
+    scored = [f for _s, f in score_files(files, query)]
+    topo = order_by_topology(files)
+    out: list = []
+    seen: set[str] = set()
+    if exemplar_suffixes:
+        exemplar = next(
+            (f for f in scored
+             if _norm(getattr(f, "path", "")).endswith(tuple(exemplar_suffixes))),
+            None,
+        )
+        if exemplar is not None:
+            out.append(exemplar)
+            seen.add(_norm(getattr(exemplar, "path", "")))
+    for a, b in zip_longest(scored, topo):
+        for f in (a, b):
+            if f is None:
+                continue
+            p = _norm(getattr(f, "path", ""))
+            if p not in seen:
+                seen.add(p)
+                out.append(f)
+    return out
+
+
 def order_by_topology(files) -> list:
     """Return ``files`` ordered most-depended-upon first (foundations survive truncation).
 
@@ -227,4 +270,5 @@ __all__ = [
     "extract_dependencies",
     "compute_indegree",
     "order_by_topology",
+    "order_by_combo",
 ]

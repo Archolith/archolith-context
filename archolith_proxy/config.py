@@ -382,6 +382,16 @@ class Settings(BaseSettings):
     # pure topological sort beats the Phase-4 scorer for anchor survival with no
     # LLM. Takes precedence over assembler_scored_selection. Off by default.
     assembler_topological_fill: bool = False
+    # Combo fill (rung-3 Phase D winner): exemplar-aware blend that guarantees a
+    # structural exemplar (top relevance-scored file ending in an
+    # assembler_exemplar_suffixes marker) survives, then interleaves the scored and
+    # topological rankings — keeping a template + relevance + foundations together.
+    # Best briefing-only recall in the rung-3 frozen-briefing experiments. Takes
+    # precedence over topological/scored. Off by default. The exemplar suffixes are
+    # corpus-specific (e.g. "Page.tsx"); empty -> degenerates to a naive
+    # scored/topological interleave (which does NOT beat scored alone).
+    assembler_combo_fill: bool = False
+    assembler_exemplar_suffixes: str = ""   # comma-separated path suffixes, e.g. "Page.tsx,Page.jsx"
     # ARC working set: bound the in-memory briefing + snapshot caches to N
     # sessions with adaptive recency+frequency eviction. Off = unbounded (current,
     # pruned only when a session leaves the graph).
