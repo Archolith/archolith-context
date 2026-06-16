@@ -395,9 +395,20 @@ class Settings(BaseSettings):
     # Code map (the MAP job): surface a compact structural overview (foundations +
     # dependency edges, from the already-computed graph) at the head of the context,
     # so the agent knows what exists and how files connect. Its char cost is
-    # subtracted from the budget RELEVANT CODE competes for. Off by default;
-    # experiment prep for the B1 selection-criterion rung, not a production feature.
+    # subtracted from the budget RELEVANT CODE competes for. Off by default.
     assembler_code_map: bool = False
+    # Which map render to emit when assembler_code_map is on:
+    #   "task"     -> render_task_map: ranks files by relevance to the turn and tags
+    #                 the exemplar (the B2b/B2c navigation winner — steers to the
+    #                 template, not foundations). Default.
+    #   "indegree" -> render_code_map: in-degree foundations + edges. B2 found this
+    #                 MISDIRECTS navigation; kept for experiments/comparison only.
+    assembler_code_map_mode: str = "task"
+    # Flag-gated discovery tool: expose list_dir in the background prepper's tool set
+    # so the agent can enumerate a directory to find sibling files (the exemplar next
+    # to a known page) without reading them. B2c: task-ranked map + list_dir is the
+    # best navigation design. Off by default; identical tool set when off.
+    curator_list_dir_tool: bool = False
     # ARC working set: bound the in-memory briefing + snapshot caches to N
     # sessions with adaptive recency+frequency eviction. Off = unbounded (current,
     # pruned only when a session leaves the graph).

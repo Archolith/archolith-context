@@ -1,5 +1,24 @@
 # Changelog
 
+## [unreleased] — 2026-06-16 — Port the MAP win: task-ranked emit mode + list_dir tool
+
+Productionizes the B2b/B2c navigation findings (research done; this is engineering). Both flag-gated,
+off by default, byte-identical / identical tool set when off. Curator/prepper logic otherwise unchanged.
+
+- **`deterministic_assembler.py`**: `build_deterministic_context(..., map_mode="task")`. When
+  `emit_map` is on, the default emit is now `render_task_map` (the B2b/B2c navigation winner — steers to
+  the exemplar, not foundations). `map_mode="indegree"` keeps the legacy `render_code_map` for
+  experiments/comparison. Wired from the new `assembler_code_map_mode` setting (default `"task"`).
+- **`curator/tools.py`**: new `list_dir(session_id, path)` discovery tool — lists files/subdirs directly
+  under a directory (subdirs suffixed `/`), restricted to the same workspace allowlist as
+  `prefetch_file` via the extracted `_resolve_effective_roots` helper (prefetch_file now shares it). No
+  caching, no reads. Registered in `TOOL_HANDLERS`.
+- **`curator/schemas.py`**: `LIST_DIR_SCHEMA` (exported). **`curator/prepper.py`**: appends it to the
+  prepper tool set only when `curator_list_dir_tool` is enabled.
+- **`config.py`**: `assembler_code_map_mode: str = "task"`, `curator_list_dir_tool: bool = False`.
+- **tests**: +5 (`test_list_dir.py` ×4, `test_code_map_indegree_mode_emits_legacy_map`); the two
+  existing code-map tests updated for the new task-ranked default. Full suite **1139 passed**.
+
 ## [unreleased] — 2026-06-16 — Task-ranked code map (render_task_map)
 
 Follow-on to the code map: the in-degree map (`render_code_map`) was found to steer agents to

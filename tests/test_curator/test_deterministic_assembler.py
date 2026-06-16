@@ -280,8 +280,15 @@ def test_code_map_emitted_when_on_absent_when_off():
     b = _map_briefing()
     on, _ = build_deterministic_context(b, 6000, emit_map=True)
     off, _ = build_deterministic_context(b, 6000, emit_map=False)
+    # default emit mode is the task-ranked map (the B2b/B2c navigation winner)
+    assert "=== CODE MAP (task-ranked) ===" in on
+    assert "=== CODE MAP" not in off
+
+
+def test_code_map_indegree_mode_emits_legacy_map():
+    b = _map_briefing()
+    on, _ = build_deterministic_context(b, 6000, emit_map=True, map_mode="indegree")
     assert "=== CODE MAP ===" in on
-    assert "=== CODE MAP ===" not in off
     # the foundation (api.ts, in-degree 2) leads the Load-bearing line
     assert "data/api.ts (<-2)" in on
 
@@ -304,7 +311,7 @@ def test_code_map_cost_is_deducted_from_budget():
     b = _briefing(files=files)
     no_map, _ = build_deterministic_context(b, 1500, emit_map=False)
     with_map, _ = build_deterministic_context(b, 1500, emit_map=True)
-    assert "=== CODE MAP ===" in with_map
+    assert "=== CODE MAP" in with_map
     # RELEVANT CODE gets squeezed: the with-map output's code region is no larger.
     code_no = no_map.split("=== RELEVANT CODE ===", 1)[-1]
     code_with = with_map.split("=== RELEVANT CODE ===", 1)[-1]

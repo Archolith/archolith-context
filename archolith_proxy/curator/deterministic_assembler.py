@@ -67,6 +67,7 @@ def build_deterministic_context(
     topological: bool = False,
     combo: bool = False,
     emit_map: bool = False,
+    map_mode: str = "task",
     exemplar_suffixes: tuple[str, ...] = (),
     query: str = "",
     weights: tuple[float, float, float] = (1.0, 1.0, 1.0),
@@ -85,18 +86,29 @@ def build_deterministic_context(
       relevance vs ``query``).
     - all False: briefing insertion order (byte-identical to the original fill).
 
-    When ``emit_map`` is True a compact ``=== CODE MAP ===`` (the MAP job — a
-    structural overview from the dependency graph) is placed FIRST in the head, so
-    its char cost is subtracted from the budget that RELEVANT CODE competes for (the
-    map does not get a free pass). Off by default; byte-identical when off.
+    When ``emit_map`` is True a compact CODE MAP (the MAP job — a structural
+    overview) is placed FIRST in the head, so its char cost is subtracted from the
+    budget that RELEVANT CODE competes for (the map does not get a free pass). Off
+    by default; byte-identical when off. ``map_mode`` selects the map:
+    - ``"task"`` (default, the B2b/B2c navigation winner): ``render_task_map`` —
+      ranks files by relevance to ``query`` and tags the exemplar, so the agent is
+      steered to the template, not to foundations.
+    - ``"indegree"`` (legacy): ``render_code_map`` — in-degree foundations + edges.
+      B2 found this MISDIRECTS navigation; kept for experiments/comparison only.
     """
     budget_chars = max(0, token_budget) * _CHARS_PER_TOKEN
 
     # Small, high-value pools — kept verbatim, in canonical section order.
     head_parts: list[str] = []
     if emit_map:
-        from archolith_proxy.curator.dependency_graph import render_code_map
-        _map = render_code_map(briefing.files)
+        if map_mode == "indegree":
+            from archolith_proxy.curator.dependency_graph import render_code_map
+            _map = render_code_map(briefing.files)
+        else:
+            from archolith_proxy.curator.dependency_graph import render_task_map
+            _map = render_task_map(
+                briefing.files, query, exemplar_suffixes=exemplar_suffixes,
+            )
         if _map:
             head_parts.append(_map)
     if briefing.session_goal:
@@ -178,13 +190,15 @@ async def run_deterministic_assembler(
         topological = bool(getattr(settings, "assembler_topological_fill", False))
         combo = bool(getattr(settings, "assembler_combo_fill", False))
         emit_map = bool(getattr(settings, "assembler_code_map", False))
+        map_mode = getattr(settings, "assembler_code_map_mode", "task") or "task"
         raw_suffixes = getattr(settings, "assembler_exemplar_suffixes", "") or ""
         exemplar_suffixes = tuple(
             s.strip() for s in raw_suffixes.split(",") if s.strip()
         )
         context_block, files_selected = build_deterministic_context(
             briefing, token_budget, scored=scored, topological=topological,
-            combo=combo, emit_map=emit_map, exemplar_suffixes=exemplar_suffixes,
+            combo=combo, emit_map=emit_map, map_mode=map_mode,
+            exemplar_suffixes=exemplar_suffixes,
             query=user_message or "",
         )
 

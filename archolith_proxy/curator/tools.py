@@ -423,6 +423,112 @@ async def get_file_outline(session_id: str, path: str = "", **kwargs) -> str:
     return outline
 
 
+async def _resolve_effective_roots(session_id: str, settings) -> tuple[list[str], str | None]:
+    """Compute the workspace-allowlist roots for filesystem-touching tools.
+
+    Precedence: explicit ``prefetch_allowed_roots`` > session workspace
+    (``harness_env`` ``working_directory`` / ``workspace_root``) > unrestricted
+    (empty list). Returns ``(roots, blocked_message)``; when ``blocked_message`` is
+    not None the caller must return it (restriction is on but no workspace is on
+    record). Shared by ``prefetch_file`` and ``list_dir`` so both enforce the
+    identical sandbox.
+    """
+    from archolith_proxy.trace.store import get_trace_store
+
+    if settings.prefetch_allowed_roots:
+        return list(settings.prefetch_allowed_roots), None
+
+    if settings.prefetch_restrict_to_workspace:
+        harness_env = await get_trace_store().get_session_metadata(session_id, "harness_env")
+        if harness_env and isinstance(harness_env, dict):
+            workspace_roots = []
+            if harness_env.get("working_directory"):
+                workspace_roots.append(harness_env["working_directory"])
+            if harness_env.get("workspace_root"):
+                workspace_roots.append(harness_env["workspace_root"])
+            if workspace_roots:
+                return workspace_roots, None
+        return [], (
+            "(blocked: no session workspace on record; restricted to the session "
+            "workspace. Set prefetch_allowed_roots or prefetch_restrict_to_workspace="
+            "false to override.)"
+        )
+
+    # Unrestricted (legacy behavior)
+    return [], None
+
+
+async def list_dir(session_id: str, path: str = "", **kwargs) -> str:
+    """List the files and subdirectories directly under a directory.
+
+    Discovery companion to ``prefetch_file``: enumerate a directory so the agent can
+    find sibling files — e.g. the template/exemplar next to a page it already knows —
+    WITHOUT reading them. Subdirectories are suffixed with ``/``. Restricted to the
+    same workspace allowlist as ``prefetch_file`` (explicit roots > session workspace
+    > unrestricted). Pure listing: no caching, no file reads. (B2c: the task-ranked
+    map + ``list_dir`` is the best navigation design.)
+    """
+    from pathlib import Path
+
+    from archolith_proxy.config import get_settings
+
+    settings = get_settings()
+    effective_roots, blocked = await _resolve_effective_roots(session_id, settings)
+    if blocked:
+        return blocked
+
+    raw = (path or "").strip()
+    target: Path | None = None
+    candidate = Path(raw) if raw else None
+
+    if candidate is not None and candidate.is_absolute():
+        target = candidate
+    elif effective_roots:
+        # Relative path: resolve against the allowed roots (first existing wins).
+        for root in effective_roots:
+            attempt = (Path(root) / raw) if raw else Path(root)
+            if attempt.exists():
+                target = attempt
+                break
+        if target is None:
+            target = (Path(effective_roots[0]) / raw) if raw else Path(effective_roots[0])
+    elif raw:
+        target = Path(raw)
+    else:
+        return "(no path specified and no workspace root configured)"
+
+    # Enforce the allowlist on the resolved directory.
+    if effective_roots:
+        resolved = target.resolve()
+        if not any(
+            resolved == Path(root).resolve() or resolved.is_relative_to(Path(root).resolve())
+            for root in effective_roots
+        ):
+            return f"(blocked: {target} is outside allowed workspace roots)"
+
+    if not target.exists():
+        return f"(directory not found: {target})"
+    if not target.is_dir():
+        return f"(not a directory: {target})"
+
+    try:
+        entries = sorted(
+            child.name + ("/" if child.is_dir() else "")
+            for child in target.iterdir()
+        )
+    except Exception as exc:
+        return f"(list error: {exc})"
+
+    if not entries:
+        return f"(empty directory: {target})"
+
+    _MAX = 200
+    if len(entries) > _MAX:
+        more = len(entries) - _MAX
+        entries = entries[:_MAX] + [f"... [+{more} more]"]
+    return "\n".join(entries)
+
+
 async def prefetch_file(
     session_id: str, path: str = "", focus: str = "", **kwargs,
 ) -> str:
@@ -446,37 +552,15 @@ async def prefetch_file(
     from pathlib import Path
 
     from archolith_proxy.config import get_settings
-    from archolith_proxy.trace.store import get_trace_store
 
     settings = get_settings()
     file_path = Path(path)
 
-    # Compute effective allowed roots: precedence is explicit roots > workspace restriction > unrestricted
-    effective_roots: list[str] = []
-
-    if settings.prefetch_allowed_roots:
-        # Explicit roots take precedence
-        effective_roots = settings.prefetch_allowed_roots
-    elif settings.prefetch_restrict_to_workspace:
-        # Restrict to session workspace from harness_env metadata
-        harness_env = await get_trace_store().get_session_metadata(session_id, "harness_env")
-        if harness_env and isinstance(harness_env, dict):
-            # Collect roots from harness_env: working_directory (required) and workspace_root (optional)
-            workspace_roots = []
-            if harness_env.get("working_directory"):
-                workspace_roots.append(harness_env["working_directory"])
-            if harness_env.get("workspace_root"):
-                workspace_roots.append(harness_env["workspace_root"])
-
-            if workspace_roots:
-                effective_roots = workspace_roots
-            else:
-                # harness_env present but no usable roots
-                return "(blocked: no session workspace on record; prefetch_file is restricted to the session workspace. Set prefetch_allowed_roots or prefetch_restrict_to_workspace=false to override.)"
-        else:
-            # No harness_env metadata available
-            return "(blocked: no session workspace on record; prefetch_file is restricted to the session workspace. Set prefetch_allowed_roots or prefetch_restrict_to_workspace=false to override.)"
-    # else: effective_roots remains empty, meaning unrestricted (legacy behavior)
+    # Compute effective allowed roots (shared with list_dir): explicit roots >
+    # workspace restriction > unrestricted.
+    effective_roots, blocked = await _resolve_effective_roots(session_id, settings)
+    if blocked:
+        return blocked
 
     # Workspace allowlist — reject paths outside permitted roots
     if effective_roots:
@@ -672,6 +756,7 @@ TOOL_HANDLERS: dict[str, callable] = {
     "get_last_verification": get_last_verification,
     "select_relevant_turns": select_relevant_turns,
     "prefetch_file": prefetch_file,
+    "list_dir": list_dir,
     "score_file_relevance": score_file_relevance,
 }
 

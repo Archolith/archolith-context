@@ -287,6 +287,37 @@ ALL_CURATOR_TOOLS: list[dict] = [
     },
 ]
 
+# Discovery tool (flag-gated): list a directory so the agent can find sibling files
+# (e.g. the template/exemplar next to a known page) without reading them. B2c found
+# the task-ranked map + list_dir is the best navigation design. Off by default;
+# added to the prepper tool set only when curator_list_dir_tool is enabled.
+LIST_DIR_SCHEMA: dict = {
+    "type": "function",
+    "function": {
+        "name": "list_dir",
+        "description": (
+            "List the files and subdirectories directly under a directory "
+            "(subdirectories are suffixed with '/'). Use this to discover sibling "
+            "files — e.g. the template/exemplar next to a file you already know — "
+            "without reading them. Pairs with prefetch_file (read). Restricted to "
+            "the session workspace."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Directory to list. Absolute path, or relative to the session "
+                        "workspace root (empty string lists the workspace root)."
+                    ),
+                },
+            },
+            "required": ["path"],
+        },
+    },
+}
+
 # Prepper tool set — all curator tools plus score_file_relevance
 SCORE_FILE_RELEVANCE_SCHEMA: dict = {
     "type": "function",
@@ -346,4 +377,10 @@ LIGHT_PREPPER_TOOLS: list[dict] = [
     if t.get("function", {}).get("name") in _LIGHT_PREPPER_TOOL_NAMES
 ]
 
-__all__ = ["ALL_CURATOR_TOOLS", "PREPPER_TOOLS", "ASSEMBLER_TOOLS", "LIGHT_PREPPER_TOOLS"]
+__all__ = [
+    "ALL_CURATOR_TOOLS",
+    "PREPPER_TOOLS",
+    "ASSEMBLER_TOOLS",
+    "LIGHT_PREPPER_TOOLS",
+    "LIST_DIR_SCHEMA",
+]

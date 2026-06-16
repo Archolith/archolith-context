@@ -21,7 +21,7 @@ from archolith_proxy.curator.briefing import (
     SessionBriefing, build_briefing_from_result,
 )
 from archolith_proxy.curator.loop import _run_curator_native
-from archolith_proxy.curator.schemas import PREPPER_TOOLS, LIGHT_PREPPER_TOOLS
+from archolith_proxy.curator.schemas import PREPPER_TOOLS, LIGHT_PREPPER_TOOLS, LIST_DIR_SCHEMA
 from archolith_proxy.curator.state import get_snapshot
 from archolith_proxy.curator.prompts import build_curator_user_prompt
 
@@ -144,6 +144,14 @@ async def run_prepper(
     t0 = time.monotonic()
     budget_s = settings.prepper_latency_budget_ms / 1000
 
+    # Flag-gated discovery tool: add list_dir to the prepper's set when enabled
+    # (off by default; identical tool set when off). B2c navigation winner.
+    prepper_tools = (
+        [*PREPPER_TOOLS, LIST_DIR_SCHEMA]
+        if getattr(settings, "curator_list_dir_tool", False)
+        else PREPPER_TOOLS
+    )
+
     try:
         result_tuple = await asyncio.wait_for(
             _run_curator_native(
@@ -153,7 +161,7 @@ async def run_prepper(
                 max_iterations=settings.prepper_max_iterations,
                 system_prompt=PREPPER_SYSTEM_PROMPT,
                 model=model,
-                tool_set=PREPPER_TOOLS,
+                tool_set=prepper_tools,
             ),
             timeout=budget_s,
         )
