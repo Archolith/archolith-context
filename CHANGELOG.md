@@ -1,5 +1,22 @@
 # Changelog
 
+## [unreleased] — 2026-06-16 — Corpus profiler: derive combo role markers (no hardcoding)
+
+Phase 2 of the corpus-profile design note: derive the combo fill's exemplar markers from the corpus's
+OWN repetition instead of hardcoding `assembler_exemplar_suffixes`. Deterministic, no LLM, off-hot-path.
+
+- **New `curator/corpus_profile.py`**: `derive_corpus_profile(files) -> CorpusProfile`. A convention is
+  a filename pattern repeated across many sibling directories; the exemplar marker is the top recurring
+  COMPONENT (`.tsx`/`.jsx`/…) trailing-word+ext pattern. `compute_indegree` gives the foundation set.
+- **Validated on the real corpus** (`forked/yawn.frontend`): derives `Page.tsx` as the exemplar marker
+  (recurs in 15 sibling dirs) — exactly the previously-hardcoded value — and correctly EXCLUDES `Data.ts`
+  (the hook pattern, also 15x but a `.ts`, not a component template). Foundations: `models/index`,
+  `ui/index`, `apiClient`, `slug`, `repository`, `Layout`.
+- **tests**: +4 in `test_corpus_profile.py` (pattern extraction, recurrence-across-siblings derivation,
+  foundations=top-in-degree, below-threshold yields no marker). Full suite 1130 passed.
+- Not yet wired to write/read a cached profile on the hot path (next sub-step); the derivation replaces
+  hand-authoring of `assembler_exemplar_suffixes`.
+
 ## [unreleased] — 2026-06-16 — Combo fill (exemplar-aware) for the deterministic assembler
 
 Ports the rung-3 Phase-D winner into a real flag-gated assembler fill mode. The frozen-briefing recall
