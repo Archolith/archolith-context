@@ -9,18 +9,27 @@ better than the Phase-4 scorer, with no LLM and no importance signal. That sweep
 used a hand-written dependency map; this module derives the same edges
 MECHANICALLY from file contents so it works on an arbitrary corpus.
 
-HONEST CAVEAT (carried from the direction doc): topological quality rests entirely
-on this extraction. It is deliberately cheap and corpus-agnostic — it scans for
-common reference styles (ES ``import``/``from``, CommonJS ``require``, HTML
-``href``/``src``, CSS ``@import``/``url()``, Python ``import``) and matches each
-reference against the briefing's OWN file set by basename. It does not resolve
-module paths, build an AST, or follow transitive chains beyond direct in-degree.
-An unrecognized reference style simply yields no edge (the file keeps its FIFO
-position) — it never invents a wrong edge.
+Reference resolution (R3a — improved coverage + precision):
+- **relative** (``./x``, ``../x``): resolved against the importing file's directory,
+  so collisions (several ``types.ts``) edge to the importer's OWN target, not a
+  random same-named file.
+- **alias / absolute-ish** (``@/x/y``, ``~/x``, ``a/b``): matched as a path SUFFIX
+  against the file set (no corpus-specific alias root is hardcoded).
+- **bare word / dotted** (``react``, ``a.b.c``): basename / last-segment fallback
+  (catches HTML ``href="mobile.css"``, Python ``import a.b.c``).
+All forms also try file extensions and ``<dir>/index.*`` so barrel imports
+(``from '@/ui'`` -> ``ui/index.ts``) resolve.
+
+HONEST CAVEAT (carried from the direction doc): topological quality still rests on
+this extraction. It does not run a real module resolver or read tsconfig path maps;
+suffix matching can in principle pick a wrong file when two paths share a tail.
+Unknown reference styles yield no edge (the file keeps its FIFO position) — never a
+knowingly wrong edge.
 """
 
 from __future__ import annotations
 
+import posixpath
 import re
 
 # Quoted-spec references: JS `from '...'` / `import '...'`, CommonJS `require('...')`,
@@ -38,6 +47,11 @@ _PY_IMPORT_PATTERN = re.compile(
     r"""^\s*(?:from|import)\s+([a-zA-Z_][\w.]*)""", re.MULTILINE
 )
 
+# Extensions tried when a reference omits one (and "" for refs that include it).
+_EXT_CANDIDATES = ("", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".css",
+                   ".astro", ".vue", ".svelte", ".json")
+_INDEX_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs")
+
 
 def _file_text(f) -> str:
     """Concatenate a PreFetchedFile's scannable text (outline + section contents).
@@ -52,11 +66,16 @@ def _file_text(f) -> str:
     return "\n".join(parts)
 
 
+def _norm(path: str) -> str:
+    return path.replace("\\", "/").strip()
+
+
+def _strip_qf(spec: str) -> str:
+    return spec.split("?", 1)[0].split("#", 1)[0].replace("\\", "/").strip()
+
+
 def _basename(spec: str) -> str:
-    """Reduce a reference spec to a bare filename (strip dirs, query, fragment)."""
-    spec = spec.split("?", 1)[0].split("#", 1)[0]
-    spec = spec.replace("\\", "/").rstrip("/")
-    return spec.rsplit("/", 1)[-1]
+    return spec.rstrip("/").rsplit("/", 1)[-1]
 
 
 def _strip_ext(name: str) -> str:
@@ -64,17 +83,15 @@ def _strip_ext(name: str) -> str:
 
 
 def _candidate_keys(spec: str) -> set[str]:
-    """Lookup keys a reference spec could match a target file by."""
+    """Bare/dotted lookup keys (fallback for package + python + bare-filename refs)."""
     base = _basename(spec)
     keys = {base, _strip_ext(base)}
-    # Python dotted module: last segment is the module name.
-    if "/" not in spec and "." in spec:
+    if "/" not in spec and "." in spec:  # python dotted module: last segment
         keys.add(spec.rsplit(".", 1)[-1])
     return {k for k in keys if k}
 
 
 def _file_keys(path: str) -> set[str]:
-    """Keys a target file can be referenced by."""
     base = _basename(path)
     return {k for k in {path, base, _strip_ext(base)} if k}
 
@@ -87,34 +104,94 @@ def _references(text: str) -> set[str]:
     return refs
 
 
+def _match_base(base: str, path_set: set[str], sorted_paths: list[str]) -> str | None:
+    """Match a resolved path stem (already directory-correct) to a file in the set.
+
+    Tries the stem with each extension, then ``<stem>/index.*``. Exact-path first,
+    then a deterministic suffix scan for the alias/absolute case.
+    """
+    # 1. exact path with an extension
+    for ext in _EXT_CANDIDATES:
+        cand = base + ext
+        if cand in path_set:
+            return cand
+    # 2. directory-index (barrel import)
+    for ext in _INDEX_EXTS:
+        cand = base + "/index" + ext
+        if cand in path_set:
+            return cand
+    # 3. suffix match (alias/absolute spec whose root differs from our paths)
+    for ext in _EXT_CANDIDATES:
+        tail = "/" + base + ext
+        for p in sorted_paths:
+            if p.endswith(tail):
+                return p
+    for ext in _INDEX_EXTS:
+        tail = "/" + base + "/index" + ext
+        for p in sorted_paths:
+            if p.endswith(tail):
+                return p
+    return None
+
+
+def _resolve(spec: str, from_path: str, path_set: set[str],
+             sorted_paths: list[str], key_to_path: dict[str, str]) -> str | None:
+    spec = _strip_qf(spec)
+    if not spec:
+        return None
+
+    # relative: resolve against the importing file's directory (precise).
+    if spec.startswith("./") or spec.startswith("../"):
+        base_dir = posixpath.dirname(from_path)
+        resolved = posixpath.normpath(posixpath.join(base_dir, spec))
+        return _match_base(resolved, path_set, sorted_paths)
+
+    # alias / home-style: strip the alias token, match the remainder as a suffix.
+    if spec.startswith("@/") or spec.startswith("~/"):
+        return _match_base(spec[2:], path_set, sorted_paths)
+
+    # other path-ish spec with a separator: try as a path/suffix first.
+    if "/" in spec:
+        hit = _match_base(spec, path_set, sorted_paths)
+        if hit:
+            return hit
+        # fall through to basename for odd cases
+
+    # bare word / dotted module: basename / last-segment fallback.
+    for key in _candidate_keys(spec):
+        target = key_to_path.get(key)
+        if target:
+            return target
+    return None
+
+
 def extract_dependencies(files) -> dict[str, set[str]]:
     """Map each file path -> set of file paths (in the set) it depends on.
 
-    An edge ``a -> b`` means file ``a``'s contents reference file ``b`` (by
-    basename / module name) and both files are in ``files``. Self-edges are
-    excluded. References to files outside the set are ignored.
+    An edge ``a -> b`` means file ``a``'s contents reference file ``b`` and both
+    files are in ``files``. Self-edges are excluded; references to files outside
+    the set are ignored.
     """
-    # Build a lookup from every candidate key to the owning file path. Earlier
-    # files win key collisions (stable, deterministic).
-    key_to_path: dict[str, str] = {}
-    for f in files:
-        path = getattr(f, "path", "")
-        if not path:
-            continue
-        for key in _file_keys(path):
-            key_to_path.setdefault(key, path)
+    paths = [_norm(getattr(f, "path", "")) for f in files]
+    path_set = {p for p in paths if p}
+    sorted_paths = sorted(path_set)
 
-    deps: dict[str, set[str]] = {getattr(f, "path", ""): set() for f in files}
-    for f in files:
-        path = getattr(f, "path", "")
-        if not path:
+    # Bare/dotted fallback index. Earlier files win key collisions (deterministic).
+    key_to_path: dict[str, str] = {}
+    for p in paths:
+        if not p:
+            continue
+        for key in _file_keys(p):
+            key_to_path.setdefault(key, p)
+
+    deps: dict[str, set[str]] = {p: set() for p in paths}
+    for f, fp in zip(files, paths):
+        if not fp:
             continue
         for spec in _references(_file_text(f)):
-            for key in _candidate_keys(spec):
-                target = key_to_path.get(key)
-                if target and target != path:
-                    deps[path].add(target)
-                    break  # one edge per reference spec
+            target = _resolve(spec, fp, path_set, sorted_paths, key_to_path)
+            if target and target != fp:
+                deps[fp].add(target)
     return deps
 
 
@@ -123,7 +200,7 @@ def compute_indegree(files) -> dict[str, int]:
 
     Foundations (shared stylesheets, API clients) score highest; leaf pages score 0.
     """
-    indeg: dict[str, int] = {getattr(f, "path", ""): 0 for f in files}
+    indeg: dict[str, int] = {_norm(getattr(f, "path", "")): 0 for f in files}
     for _src, targets in extract_dependencies(files).items():
         for t in targets:
             if t in indeg:
@@ -141,7 +218,8 @@ def order_by_topology(files) -> list:
     indeg = compute_indegree(files)
     return sorted(
         files,
-        key=lambda f: (-indeg.get(getattr(f, "path", ""), 0), getattr(f, "path", "")),
+        key=lambda f: (-indeg.get(_norm(getattr(f, "path", "")), 0),
+                       _norm(getattr(f, "path", ""))),
     )
 
 

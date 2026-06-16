@@ -115,3 +115,53 @@ def test_order_is_stable_and_deterministic():
     ]
     assert [f.path for f in order_by_topology(files)] == \
            [f.path for f in order_by_topology(files)]
+
+
+# ── R3a: alias / barrel-index / relative-precision resolution ────────────────
+
+
+def test_alias_import_resolves_by_path_suffix():
+    files = [
+        _f("src/domain/color-styles.ts", "export const accent = 1;"),
+        _f("src/features/set/Page.tsx", "import { accent } from '@/domain/color-styles';"),
+    ]
+    deps = extract_dependencies(files)
+    assert deps["src/features/set/Page.tsx"] == {"src/domain/color-styles.ts"}
+
+
+def test_barrel_directory_index_import():
+    files = [
+        _f("src/ui/index.ts", "export * from './Button';"),
+        _f("src/features/set/Page.tsx", "import { Button } from '@/ui';"),
+    ]
+    deps = extract_dependencies(files)
+    assert deps["src/features/set/Page.tsx"] == {"src/ui/index.ts"}
+
+
+def test_relative_dir_index_import():
+    files = [
+        _f("domain/models/index.ts", "export * from './Card';"),
+        _f("features/x/hook.ts", "import { Card } from '../../domain/models';"),
+    ]
+    deps = extract_dependencies(files)
+    assert deps["features/x/hook.ts"] == {"domain/models/index.ts"}
+
+
+def test_relative_resolution_disambiguates_colliding_basenames():
+    # Two files named types.ts; a relative import must hit the importer's OWN dir.
+    files = [
+        _f("features/a/types.ts", "export type A = 1;"),
+        _f("features/b/types.ts", "export type B = 2;"),
+        _f("features/a/Page.tsx", "import type { A } from './types';"),
+    ]
+    deps = extract_dependencies(files)
+    assert deps["features/a/Page.tsx"] == {"features/a/types.ts"}
+    assert "features/b/types.ts" not in deps["features/a/Page.tsx"]
+
+
+def test_extensionless_relative_import_matches_ts():
+    files = [
+        _f("features/x/useData.ts", "export const useData = () => {};"),
+        _f("features/x/Page.tsx", "import { useData } from './useData';"),
+    ]
+    assert extract_dependencies(files)["features/x/Page.tsx"] == {"features/x/useData.ts"}

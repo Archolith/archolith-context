@@ -1,5 +1,22 @@
 # Changelog
 
+## [unreleased] — 2026-06-16 — R3a: dependency extractor path resolution (coverage + precision)
+
+Upgrades `curator/dependency_graph.py` reference resolution so topological in-degree reflects more of
+a real corpus (rung-3 follow-up). Public API unchanged; the deterministic assembler is untouched.
+
+- **Relative imports** (`./x`, `../x`) resolve against the importing file's directory, so colliding
+  basenames (several `types.ts`) edge to the importer's OWN target, not a random same-named file.
+- **Alias / absolute-ish** specs (`@/x/y`, `~/x`, `a/b`) match as a path SUFFIX (no corpus-specific
+  alias root hardcoded).
+- **Barrel imports** resolve `<dir>/index.*` (`from '@/ui'` -> `ui/index.ts`).
+- Bare-word / dotted (HTML `href="mobile.css"`, Python `import a.b.c`) keep the basename fallback.
+- **Measured on the real forked/yawn.frontend corpus:** edges 471 -> 562 (+91); files with an outgoing
+  edge 58% -> 61%; surfaced barrel foundations `domain/models/index.ts` (in-degree 47) and
+  `ui/index.ts` (36) that were previously invisible.
+- **tests**: +5 in `test_dependency_graph.py` (alias suffix, barrel index, relative dir-index,
+  collision disambiguation, extensionless relative). Full suite 1121 passed.
+
 ## [unreleased] — 2026-06-16 — Layer 2: topological fill for the deterministic assembler
 
 Ports the winning strategy from `scripts/assembly_strategy_sweep.py` into a real assembler
