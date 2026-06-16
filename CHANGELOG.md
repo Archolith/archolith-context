@@ -1,5 +1,22 @@
 # Changelog
 
+## [unreleased] — 2026-06-16 — Task-ranked code map (render_task_map)
+
+Follow-on to the code map: the in-degree map (`render_code_map`) was found to steer agents to
+FOUNDATIONS and away from the EXEMPLAR (B2 navigation experiment: it reached the template only 17% of
+the time). `render_task_map` ranks the map by RELEVANCE to the current task instead — a "START HERE
+(most relevant)" block (with `[exemplar]` tags) + a short foundations line for orientation. Ranks and
+annotates, does NOT filter (foundations still shown; nothing blinded).
+
+- **`curator/dependency_graph.py`**: `render_task_map(files, query, exemplar_suffixes=(), ...)`,
+  reusing the scored relevance signal.
+- **Validated (archolith-bench B2b):** task-ranked map reaches the exemplar 100% (vs in-degree 17%) in
+  ~1 read, with ZERO discovery round-trips — beating plain `ls` on exemplar-reach. (Residual: it gropes
+  for secondary files; the untested ideal is task-map + a `list_dir` tool.)
+- **tests**: +1 (`test_task_map_ranks_relevant_exemplar_first_and_tags_it`). Full suite 1134 passed.
+- Not yet wired as the assembler's `emit_map` mode — `render_code_map` (in-degree) is still what the
+  `assembler_code_map` flag emits; `render_task_map` is the port candidate per B2b.
+
 ## [unreleased] — 2026-06-16 — Code map: surface the structural overview (the MAP job)
 
 Surfaces a compact `=== CODE MAP ===` to the agent, built from the dependency graph archolith already

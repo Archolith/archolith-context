@@ -13,6 +13,7 @@ from archolith_proxy.curator.dependency_graph import (  # noqa: E402
     extract_dependencies,
     order_by_combo,
     order_by_topology,
+    render_task_map,
 )
 
 
@@ -203,3 +204,24 @@ def test_combo_without_exemplar_suffix_is_naive_interleave():
     ]
     order = order_by_combo(files, query="a", exemplar_suffixes=())
     assert {f.path for f in order} == {"data/apiClient.ts", "features/a/APage.tsx"}
+
+
+# ── B2 follow-on: task-ranked map (render_task_map) ──────────────────────────
+
+
+def test_task_map_ranks_relevant_exemplar_first_and_tags_it():
+    files = [
+        _f("data/apiClient.ts", "export const api=1;"),                       # foundation, off-topic
+        _f("features/sealed/SealedPage.tsx",
+           "import {api} from '@/data/apiClient'; // sealed products browse page"),
+        _f("domain/slug.ts", "export const slug=1;"),
+    ]
+    m = render_task_map(files, "add a sealed products browse page", exemplar_suffixes=("Page.tsx",))
+    assert "=== CODE MAP (task-ranked) ===" in m
+    assert "START HERE" in m
+    # the task-relevant exemplar is listed and tagged
+    assert "features/sealed/SealedPage.tsx [exemplar]" in m
+    # foundations still shown (orientation, not filtered out)
+    assert "Shared foundations:" in m
+    # the relevant page is ranked ABOVE the off-topic foundation in the START HERE block
+    assert m.index("SealedPage.tsx") < m.index("Shared foundations:")

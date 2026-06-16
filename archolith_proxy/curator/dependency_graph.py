@@ -318,10 +318,59 @@ def render_code_map(
     return block
 
 
+def render_task_map(
+    files,
+    query: str,
+    *,
+    exemplar_suffixes: tuple[str, ...] = (),
+    max_priority: int = 6,
+    max_foundations: int = 6,
+    max_chars: int = 1600,
+) -> str:
+    """Task-AWARE map: rank files by relevance to the current task, then orient.
+
+    B2 found the plain in-degree map (``render_code_map``) steers the agent to
+    FOUNDATIONS and away from the EXEMPLAR — it answers "what's most depended-upon",
+    not "what do I need for THIS task". This ranks by task relevance instead:
+      START HERE (task-relevant) : top files by relevance to ``query`` (this surfaces
+        the exemplar — a browse page shares vocabulary with "add a browse screen"),
+        with an [exemplar] tag on files matching ``exemplar_suffixes``.
+      Foundations : a short shared-infra list (orientation, so discovery isn't lost).
+    Ranks/annotates, does NOT filter — the agent still sees foundations and can read
+    anything. Pure function; reuses the scored relevance signal. "" if no files.
+    """
+    from archolith_proxy.curator.scoring import score_files
+
+    ranked = score_files(files, query)  # [(score, file)] desc
+    if not ranked:
+        return ""
+    lines = ["=== CODE MAP (task-ranked) ==="]
+    pri = []
+    for _s, f in ranked[:max_priority]:
+        p = _norm(getattr(f, "path", ""))
+        tag = " [exemplar]" if exemplar_suffixes and p.endswith(tuple(exemplar_suffixes)) else ""
+        pri.append(f"  {p}{tag}")
+    if pri:
+        lines.append("START HERE (most relevant to this task):")
+        lines.extend(pri)
+
+    indeg = compute_indegree(files)
+    foundations = [p for p, n in sorted(indeg.items(), key=lambda kv: (-kv[1], kv[0]))
+                   if n > 0][:max_foundations]
+    if foundations:
+        lines.append("Shared foundations: " + ", ".join(foundations))
+
+    block = "\n".join(lines)
+    if len(block) > max_chars:
+        block = block[:max_chars].rsplit("\n", 1)[0] + "\n... [map truncated]"
+    return block
+
+
 __all__ = [
     "extract_dependencies",
     "compute_indegree",
     "order_by_topology",
     "order_by_combo",
     "render_code_map",
+    "render_task_map",
 ]
