@@ -185,3 +185,53 @@ def test_scored_false_is_identical_to_default():
     files = [_file("a.py", "aaa"), _file("b.py", "bbb")]
     b = _briefing(files=files)
     assert build_deterministic_context(b, 6000) == build_deterministic_context(b, 6000, scored=False)
+
+
+# ── Layer 2: topological fill ───────────────────────────────────────────────
+
+
+def test_topological_fill_protects_foundation_under_pressure():
+    # A shared stylesheet (the FOUNDATION) is placed LAST and is depended on by
+    # several leaf pages placed first. Under a budget that only fits ~one big
+    # block, FIFO keeps a leaf and drops the foundation; topological keeps it.
+    big = "Z" * 4000
+    leaf = '<link rel="stylesheet" href="mobile.css">\n' + big
+    files = [
+        _file("cards.html", leaf),
+        _file("sealed.html", leaf),
+        _file("mobile.css", ".list-row{}\n" + big),  # foundation, placed LAST
+    ]
+    b = _briefing(files=files)
+    budget = 1200  # roughly one big block
+
+    _ft, fifo_files = build_deterministic_context(b, budget)
+    _tt, topo_files = build_deterministic_context(b, budget, topological=True)
+
+    fifo_paths = [f["path"] for f in fifo_files]
+    topo_paths = [f["path"] for f in topo_files]
+    # FIFO drops the foundation; topological keeps it first.
+    assert "mobile.css" not in fifo_paths
+    assert topo_paths and topo_paths[0] == "mobile.css"
+
+
+def test_topological_takes_precedence_over_scored():
+    big = "Q" * 4000
+    leaf = "import './api.js';\n" + big
+    files = [
+        _file("page.html", leaf),                       # query-relevant leaf
+        _file("api.js", "export const x = 1;\n" + big),  # foundation, placed last
+    ]
+    b = _briefing(files=files)
+    budget = 1200
+    # With both flags on, topological wins -> foundation (api.js) first.
+    _t, sel = build_deterministic_context(
+        b, budget, scored=True, topological=True, query="page html",
+    )
+    assert sel and sel[0]["path"] == "api.js"
+
+
+def test_topological_false_is_identical_to_default():
+    files = [_file("a.py", "aaa"), _file("b.py", "bbb")]
+    b = _briefing(files=files)
+    assert build_deterministic_context(b, 6000) == \
+           build_deterministic_context(b, 6000, topological=False)

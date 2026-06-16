@@ -1,5 +1,29 @@
 # Changelog
 
+## [unreleased] — 2026-06-16 — Layer 2: topological fill for the deterministic assembler
+
+Ports the winning strategy from `scripts/assembly_strategy_sweep.py` into a real assembler
+fill policy (deterministic-layers direction, rung 2). The sweep showed a pure topological
+sort — order files by dependency in-degree so structural FOUNDATIONS survive budget
+truncation — beats the Phase-4 scorer for anchor survival, with no LLM and no importance
+signal. The sweep used a hand-written dependency map; this derives the same edges
+mechanically from file contents so it works on any corpus. The LLM curator/prepper is
+UNCHANGED. Off by default; precedence is topological > scored > FIFO.
+
+- **New `curator/dependency_graph.py`**: cheap, corpus-agnostic edge extractor (ES
+  `import`/`from`, CommonJS `require`, HTML `href`/`src`, CSS `@import`/`url()`, Python
+  `import`), matched by basename against the briefing's own file set; self-edges and
+  out-of-set refs excluded. `extract_dependencies` / `compute_indegree` / `order_by_topology`.
+- **deterministic_assembler.py**: `build_deterministic_context(..., topological=False)` adds
+  the topological fill branch (takes precedence over `scored`); `run_deterministic_assembler`
+  reads `assembler_topological_fill`. FIFO and scored paths byte-identical when off.
+- **config.py**: `assembler_topological_fill` (off by default).
+- **Parity check**: on the real seeded corpus the extractor ranks `api.js` and `mobile.css`
+  as the top foundations (in-degree 8 each) — matching the sweep's hardcoded assumption.
+- **tests**: new `test_dependency_graph.py` (11) + 3 topological assembler tests. Full suite
+  1116 passed. HONEST CAVEAT: topological quality rests entirely on the mechanical extraction
+  (corpus-specific); unknown reference styles yield no edge (fall back to FIFO), never a wrong edge.
+
 ## [unreleased] — 2026-06-15 — Phase 0.5: single-leader worker leasing via archolith-maintenance
 
 Extracts the proven cross-process lease from cth.memory into a new shared package

@@ -373,6 +373,15 @@ class Settings(BaseSettings):
     # relevance vs the current turn) instead of briefing insertion order, so the
     # highest-value files win the token budget. Off = insertion order (current).
     assembler_scored_selection: bool = False
+    # Topological fill (Layer 2): order the elastic RELEVANT CODE pool by
+    # dependency in-degree (most-depended-upon FOUNDATIONS first) so the
+    # structurally load-bearing files survive budget truncation. Edges are
+    # extracted mechanically from file contents (ES import/from, require,
+    # HTML href/src, CSS @import/url, Python import) and matched by basename
+    # against the briefing's own file set. The assembly_strategy_sweep showed a
+    # pure topological sort beats the Phase-4 scorer for anchor survival with no
+    # LLM. Takes precedence over assembler_scored_selection. Off by default.
+    assembler_topological_fill: bool = False
     # ARC working set: bound the in-memory briefing + snapshot caches to N
     # sessions with adaptive recency+frequency eviction. Off = unbounded (current,
     # pruned only when a session leaves the graph).

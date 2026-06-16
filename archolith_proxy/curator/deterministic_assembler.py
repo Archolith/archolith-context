@@ -64,6 +64,7 @@ def build_deterministic_context(
     token_budget: int,
     *,
     scored: bool = False,
+    topological: bool = False,
     query: str = "",
     weights: tuple[float, float, float] = (1.0, 1.0, 1.0),
 ) -> tuple[str, list[dict]]:
@@ -71,10 +72,13 @@ def build_deterministic_context(
 
     Returns ``(context_block, files_selected)``. Pure function — no I/O, no LLM.
 
-    When ``scored`` is True the elastic RELEVANT CODE pool is filled in
-    generative-agents score order (recency x importance x relevance vs ``query``)
-    instead of briefing insertion order, so the highest-value files win the
-    budget. When False, behavior is byte-identical to insertion-order fill.
+    Elastic RELEVANT CODE fill order:
+    - ``topological`` True (Layer 2): order files by dependency in-degree
+      (most-depended-upon FOUNDATIONS first) so the structurally load-bearing
+      files survive budget truncation. Takes precedence over ``scored``.
+    - ``scored`` True: generative-agents score order (recency x importance x
+      relevance vs ``query``), so the highest-value files win the budget.
+    - both False: briefing insertion order (byte-identical to the original fill).
     """
     budget_chars = max(0, token_budget) * _CHARS_PER_TOKEN
 
@@ -100,7 +104,10 @@ def build_deterministic_context(
     code_blocks: list[str] = []
     remaining = budget_chars - len(head) - len("\n\n=== RELEVANT CODE ===\n")
 
-    if scored:
+    if topological:
+        from archolith_proxy.curator.dependency_graph import order_by_topology
+        ordered_files = order_by_topology(briefing.files)
+    elif scored:
         from archolith_proxy.curator.scoring import score_files
         ordered_files = [f for (_score, f) in score_files(briefing.files, query, weights)]
     else:
@@ -150,8 +157,10 @@ async def run_deterministic_assembler(
     try:
         token_budget = getattr(settings, "assembler_token_budget", 6000)
         scored = bool(getattr(settings, "assembler_scored_selection", False))
+        topological = bool(getattr(settings, "assembler_topological_fill", False))
         context_block, files_selected = build_deterministic_context(
-            briefing, token_budget, scored=scored, query=user_message or "",
+            briefing, token_budget, scored=scored, topological=topological,
+            query=user_message or "",
         )
 
         if not context_block.strip():
