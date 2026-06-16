@@ -392,6 +392,12 @@ class Settings(BaseSettings):
     # scored/topological interleave (which does NOT beat scored alone).
     assembler_combo_fill: bool = False
     assembler_exemplar_suffixes: str = ""   # comma-separated path suffixes, e.g. "Page.tsx,Page.jsx"
+    # Code map (the MAP job): surface a compact structural overview (foundations +
+    # dependency edges, from the already-computed graph) at the head of the context,
+    # so the agent knows what exists and how files connect. Its char cost is
+    # subtracted from the budget RELEVANT CODE competes for. Off by default;
+    # experiment prep for the B1 selection-criterion rung, not a production feature.
+    assembler_code_map: bool = False
     # ARC working set: bound the in-memory briefing + snapshot caches to N
     # sessions with adaptive recency+frequency eviction. Off = unbounded (current,
     # pruned only when a session leaves the graph).

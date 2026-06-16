@@ -1,5 +1,22 @@
 # Changelog
 
+## [unreleased] — 2026-06-16 — Code map: surface the structural overview (the MAP job)
+
+Surfaces a compact `=== CODE MAP ===` to the agent, built from the dependency graph archolith already
+computes to rank content and then DISCARDS. The MAP job (orientation: what exists, what's load-bearing,
+how files connect) was never surfaced — so every prior experiment varied CONTENT only. Off by default;
+this is prep for the B1 selection-criterion rung, not a production flip. Curator/prepper unchanged.
+
+- **`curator/dependency_graph.py`**: `render_code_map(files, max_foundations=8, max_edges=6,
+  max_chars=1600)` — a Load-bearing line (top in-degree) + per-file out-edges, ASCII, bounded; "" when
+  no edges. On the real corpus it renders ~391 tok (apiClient <-10, models/index <-8, ui/index <-8, ...).
+- **`deterministic_assembler.py`**: `build_deterministic_context(..., emit_map=False)` places the map
+  FIRST in the head so its char cost is subtracted from the RELEVANT CODE budget (no free pass);
+  `run_deterministic_assembler` reads `assembler_code_map`. Byte-identical when off.
+- **`config.py`**: `assembler_code_map` (off by default).
+- **tests**: +3 (emitted-when-on/absent-off, off==default parity, map cost deducted from budget under
+  pressure). Full suite 1133 passed.
+
 ## [unreleased] — 2026-06-16 — Corpus profiler: derive combo role markers (no hardcoding)
 
 Phase 2 of the corpus-profile design note: derive the combo fill's exemplar markers from the corpus's

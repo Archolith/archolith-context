@@ -262,3 +262,50 @@ def test_combo_false_is_identical_to_default():
     b = _briefing(files=files)
     assert build_deterministic_context(b, 6000) == \
            build_deterministic_context(b, 6000, combo=False)
+
+
+# ── code map (the MAP job) ──────────────────────────────────────────────────
+
+
+def _map_briefing():
+    # api.ts is depended on by two pages -> a foundation with in-degree 2.
+    return _briefing(files=[
+        _file("data/api.ts", "export const api = 1;"),
+        _file("features/a/APage.tsx", "import {api} from '@/data/api';"),
+        _file("features/b/BPage.tsx", "import {api} from '@/data/api';"),
+    ])
+
+
+def test_code_map_emitted_when_on_absent_when_off():
+    b = _map_briefing()
+    on, _ = build_deterministic_context(b, 6000, emit_map=True)
+    off, _ = build_deterministic_context(b, 6000, emit_map=False)
+    assert "=== CODE MAP ===" in on
+    assert "=== CODE MAP ===" not in off
+    # the foundation (api.ts, in-degree 2) leads the Load-bearing line
+    assert "data/api.ts (<-2)" in on
+
+
+def test_code_map_off_is_byte_identical_to_default():
+    b = _map_briefing()
+    assert build_deterministic_context(b, 6000) == \
+           build_deterministic_context(b, 6000, emit_map=False)
+
+
+def test_code_map_cost_is_deducted_from_budget():
+    # A briefing that overflows the budget: emitting the map must leave LESS room
+    # for RELEVANT CODE, so the code region is shorter (or fewer files) with the map.
+    big = "Z" * 6000
+    files = [
+        _file("data/api.ts", "export const api=1;\n" + big),
+        _file("features/a/APage.tsx", "import {api} from '@/data/api';\n" + big),
+        _file("features/b/BPage.tsx", "import {api} from '@/data/api';\n" + big),
+    ]
+    b = _briefing(files=files)
+    no_map, _ = build_deterministic_context(b, 1500, emit_map=False)
+    with_map, _ = build_deterministic_context(b, 1500, emit_map=True)
+    assert "=== CODE MAP ===" in with_map
+    # RELEVANT CODE gets squeezed: the with-map output's code region is no larger.
+    code_no = no_map.split("=== RELEVANT CODE ===", 1)[-1]
+    code_with = with_map.split("=== RELEVANT CODE ===", 1)[-1]
+    assert len(code_with) <= len(code_no)

@@ -266,9 +266,62 @@ def order_by_topology(files) -> list:
     )
 
 
+def render_code_map(
+    files,
+    *,
+    max_foundations: int = 8,
+    max_edges: int = 6,
+    max_chars: int = 1600,
+) -> str:
+    """Render a compact structural overview (the MAP job) from the dependency graph.
+
+    archolith computes in-degree + edges only to RANK content, then discards them.
+    This surfaces them to the agent as a small orientation block — what exists,
+    what's load-bearing, and how files connect — so the agent knows what to go read.
+    Pure function over the briefing's own files; no I/O, no LLM. Deterministic.
+
+    Layout (ASCII):
+        === CODE MAP ===
+        Load-bearing: ui/index.ts (<-36), data/apiClient.ts (<-35), ...
+        features/sealed/SealedPage.tsx -> useSealedData.ts, SealedCard.tsx, ...
+        ...
+    Compaction: top ``max_foundations`` by in-degree on the first line; then one
+    out-edge line per file that has edges (capped at ``max_edges`` deps each),
+    truncated to ``max_chars`` total. Returns "" when there are no edges at all.
+    """
+    indeg = compute_indegree(files)
+    deps = extract_dependencies(files)
+    if not any(deps.values()):
+        return ""
+
+    foundations = [(p, n) for p, n in
+                   sorted(indeg.items(), key=lambda kv: (-kv[1], kv[0])) if n > 0]
+    lines = ["=== CODE MAP ==="]
+    if foundations:
+        top = foundations[:max_foundations]
+        lines.append("Load-bearing: " + ", ".join(f"{p} (<-{n})" for p, n in top))
+
+    # Per-file out-edges, ordered by the file's own in-degree (foundations first)
+    # then path, so the most structurally central files lead the map.
+    edge_files = sorted(
+        (p for p, ds in deps.items() if ds),
+        key=lambda p: (-indeg.get(p, 0), p),
+    )
+    for p in edge_files:
+        targets = sorted(deps[p])[:max_edges]
+        more = "" if len(deps[p]) <= max_edges else f", +{len(deps[p]) - max_edges} more"
+        lines.append(f"{p} -> {', '.join(targets)}{more}")
+
+    block = "\n".join(lines)
+    if len(block) > max_chars:
+        block = block[:max_chars].rsplit("\n", 1)[0] + "\n... [map truncated]"
+    return block
+
+
 __all__ = [
     "extract_dependencies",
     "compute_indegree",
     "order_by_topology",
     "order_by_combo",
+    "render_code_map",
 ]
