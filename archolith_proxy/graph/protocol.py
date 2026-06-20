@@ -105,6 +105,16 @@ class GraphBackend(Protocol):
         """Return the per-session config overrides JSON string ('' if none)."""
         ...
 
+    async def merge_session_config_overrides(
+        self,
+        session_id: str,
+        patch_json: str,
+        denylist: frozenset[str],
+        allowlist_keys: list[str],
+    ) -> str:
+        """Merge, persist, and return per-session config overrides JSON."""
+        ...
+
     async def list_active_sessions(self) -> list[dict]:
         """List all active sessions (for admin/metrics endpoints)."""
         ...

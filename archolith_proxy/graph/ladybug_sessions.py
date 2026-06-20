@@ -6,6 +6,8 @@ import asyncio
 import base64
 from uuid import uuid4
 
+from archolith_proxy.graph.session_config import merge_session_config_json
+
 # Per-fingerprint locks serialise the find-or-create slow path so that two
 # concurrent first requests for the same fingerprint cannot both observe no
 # session and each create one.  Keyed on fingerprint; grows to at most the
@@ -84,6 +86,19 @@ async def get_session_config_overrides(execute, session_id: str) -> str:
     if not rows:
         return ""
     return _decode_overrides(rows[0].get("config_overrides"))
+
+
+async def merge_session_config_overrides(
+    execute,
+    session_id: str,
+    patch_json: str,
+    denylist: frozenset[str],
+    allowlist_keys: list[str],
+) -> str:
+    existing_json = await get_session_config_overrides(execute, session_id)
+    merged_json = merge_session_config_json(existing_json, patch_json, denylist, allowlist_keys)
+    await set_session_config_overrides(execute, session_id, merged_json)
+    return merged_json
 
 
 async def find_session_by_id(execute, session_id: str) -> dict | None:

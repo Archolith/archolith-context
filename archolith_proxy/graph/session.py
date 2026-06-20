@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import structlog
 
 from archolith_proxy.graph.repository import CONTEXT_SESSION_LABEL, run_query, run_write
+from archolith_proxy.graph.session_config import merge_session_config_json
 from archolith_proxy.models.graph_nodes import SessionStatus
 
 logger = structlog.get_logger()
@@ -21,6 +22,7 @@ __all__ = [
     "update_goal",
     "set_session_config_overrides",
     "get_session_config_overrides",
+    "merge_session_config_overrides",
     "list_active_sessions",
     "get_session_stats",
 ]
@@ -162,6 +164,19 @@ RETURN s.config_overrides AS config_overrides
     if not rows:
         return ""
     return rows[0].get("config_overrides") or ""
+
+
+async def merge_session_config_overrides(
+    session_id: str,
+    patch_json: str,
+    denylist: frozenset[str],
+    allowlist_keys: list[str],
+) -> str:
+    """Merge, persist, and return per-session config overrides JSON."""
+    existing_json = await get_session_config_overrides(session_id)
+    merged_json = merge_session_config_json(existing_json, patch_json, denylist, allowlist_keys)
+    await set_session_config_overrides(session_id, merged_json)
+    return merged_json
 
 
 async def list_active_sessions() -> list[dict]:

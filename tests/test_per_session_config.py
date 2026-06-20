@@ -24,6 +24,7 @@ from archolith_proxy.config import (
     reset_session_settings,
     set_session_settings,
 )
+from archolith_proxy.graph.session_config import merge_session_config_json
 
 
 # ── Overlay core (config.py) ─────────────────────────────────────────────
@@ -121,10 +122,7 @@ async def test_overlay_propagates_to_created_task():
 
 
 def _fake_backend(stored: str = ""):
-    """Stateful fake: set persists, get returns the last persisted value.
-
-    Mirrors the helper's read -> merge -> write -> read-back sequence.
-    """
+    """Stateful fake: merge/set persist and get returns the last persisted value."""
     state = {"value": stored}
     be = AsyncMock()
 
@@ -134,8 +132,14 @@ def _fake_backend(stored: str = ""):
     async def _set(_session_id, overrides_json):
         state["value"] = overrides_json
 
+    async def _merge(_session_id, patch_json, denylist, allowlist_keys):
+        state["value"] = merge_session_config_json(state["value"], patch_json, denylist, allowlist_keys)
+        return state["value"]
+
     be.get_session_config_overrides = AsyncMock(side_effect=_get)
     be.set_session_config_overrides = AsyncMock(side_effect=_set)
+    be.merge_session_config_overrides = AsyncMock(side_effect=_merge)
+    be.session_config_state = state
     return be
 
 
@@ -148,9 +152,11 @@ async def test_header_merges_persists_and_activates():
         header = json.dumps({"context_token_budget": 888})
         eff = await _apply_session_config_overlay(header, "sess-1", get_settings())
 
-    # Persisted the merged overrides containing the applied field.
-    be.set_session_config_overrides.assert_awaited_once()
-    persisted = json.loads(be.set_session_config_overrides.await_args.args[1])
+    # Persisted the merged overrides containing the applied field via one backend call.
+    be.merge_session_config_overrides.assert_awaited_once()
+    be.get_session_config_overrides.assert_not_awaited()
+    be.set_session_config_overrides.assert_not_awaited()
+    persisted = json.loads(be.session_config_state["value"])
     assert persisted == {"context_token_budget": 888}
     # Overlay activated and returned.
     assert eff.context_token_budget == 888
@@ -172,7 +178,9 @@ async def test_header_denied_and_unknown_not_persisted():
     with patch("archolith_proxy.openai.chat.get_backend", return_value=be):
         eff = await _apply_session_config_overlay(header, "sess-2", get_settings())
 
-    persisted = json.loads(be.set_session_config_overrides.await_args.args[1])
+    be.merge_session_config_overrides.assert_awaited_once()
+    be.set_session_config_overrides.assert_not_awaited()
+    persisted = json.loads(be.session_config_state["value"])
     assert persisted == {"context_token_budget": 1010}  # only the valid field
     assert eff.context_token_budget == 1010
     assert eff.upstream_api_key == base_key  # denylisted secret untouched
@@ -188,6 +196,7 @@ async def test_invalid_header_json_does_not_persist():
         eff = await _apply_session_config_overlay("not-json{{", "sess-3", get_settings())
 
     be.set_session_config_overrides.assert_not_awaited()
+    be.merge_session_config_overrides.assert_not_awaited()
     # No stored overrides → base settings returned, no overlay.
     assert eff is not None
     set_session_settings(None)

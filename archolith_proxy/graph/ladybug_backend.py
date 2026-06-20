@@ -75,6 +75,7 @@ from archolith_proxy.graph.ladybug_sessions import (
     get_session_config_overrides,
     get_turn_number,
     list_active_sessions,
+    merge_session_config_overrides,
     set_session_config_overrides,
     touch_session,
     update_goal,
@@ -335,7 +336,7 @@ class LadybugBackend:
             "create_session", "find_session_by_id", "find_session_by_fingerprint",
             "find_or_create_by_fingerprint", "touch_session", "get_turn_number",
             "update_goal", "set_session_config_overrides",
-            "get_session_config_overrides",
+            "get_session_config_overrides", "merge_session_config_overrides",
             "list_active_sessions", "get_session_stats", "delete_session_data",
             # Fact CRUD
             "store_fact", "store_facts_batch", "invalidate_facts",
@@ -420,6 +421,21 @@ class LadybugBackend:
 
     async def get_session_config_overrides(self, session_id: str) -> str:
         return await get_session_config_overrides(self._execute, session_id)
+
+    async def merge_session_config_overrides(
+        self,
+        session_id: str,
+        patch_json: str,
+        denylist: frozenset[str],
+        allowlist_keys: list[str],
+    ) -> str:
+        return await merge_session_config_overrides(
+            self._execute,
+            session_id,
+            patch_json,
+            denylist,
+            allowlist_keys,
+        )
 
     async def list_active_sessions(self) -> list[dict]:
         return await list_active_sessions(self._execute)

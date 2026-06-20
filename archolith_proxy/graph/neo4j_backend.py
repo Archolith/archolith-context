@@ -71,7 +71,9 @@ class Neo4jBackend:
             # Session CRUD
             "create_session", "find_session_by_id", "find_session_by_fingerprint",
             "find_or_create_by_fingerprint", "touch_session", "get_turn_number",
-            "update_goal", "list_active_sessions", "get_session_stats", "delete_session_data",
+            "update_goal", "set_session_config_overrides", "get_session_config_overrides",
+            "merge_session_config_overrides", "list_active_sessions", "get_session_stats",
+            "delete_session_data",
             # Fact CRUD
             "store_fact", "store_facts_batch", "invalidate_facts",
             "find_matching_fact_ids", "get_active_facts", "get_active_fact_count",
@@ -113,6 +115,15 @@ class Neo4jBackend:
 
     async def get_session_config_overrides(self, session_id: str) -> str:
         return await _session.get_session_config_overrides(session_id)
+
+    async def merge_session_config_overrides(
+        self,
+        session_id: str,
+        patch_json: str,
+        denylist: frozenset[str],
+        allowlist_keys: list[str],
+    ) -> str:
+        return await _session.merge_session_config_overrides(session_id, patch_json, denylist, allowlist_keys)
 
     async def list_active_sessions(self) -> list[dict]:
         return await _session.list_active_sessions()

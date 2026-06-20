@@ -4,6 +4,7 @@ Uses a temporary directory for each test — no external server needed.
 """
 
 import tempfile
+import json
 from pathlib import Path
 
 import pytest
@@ -125,6 +126,31 @@ async def test_session_config_overrides_default_empty(backend):
 
     got = await backend.get_session_config_overrides("sess-cfg-2")
     assert got == ""
+
+
+@pytest.mark.asyncio
+async def test_merge_session_config_overrides_filters_and_preserves_existing(backend):
+    """Merge applies allowed patch fields and preserves existing overrides."""
+    await backend.create_session("sess-cfg-merge")
+    await backend.set_session_config_overrides(
+        "sess-cfg-merge",
+        json.dumps({"context_token_budget": 1000}),
+    )
+
+    merged = await backend.merge_session_config_overrides(
+        "sess-cfg-merge",
+        json.dumps({
+            "context_token_budget": 2000,
+            "upstream_api_key": "EVIL",
+            "bogus_field_xyz": True,
+        }),
+        frozenset({"upstream_api_key"}),
+        ["context_token_budget"],
+    )
+
+    assert json.loads(merged) == {"context_token_budget": 2000}
+    stored = await backend.get_session_config_overrides("sess-cfg-merge")
+    assert json.loads(stored) == {"context_token_budget": 2000}
 
 
 @pytest.mark.asyncio

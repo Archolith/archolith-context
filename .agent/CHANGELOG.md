@@ -1,5 +1,11 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Session Config Overlay Merge Path
+
+- **Perf**: Added a backend `merge_session_config_overrides` contract and changed valid `X-Session-Config` requests to use one backend merge call instead of get + set + get in the chat overlay path.
+- **Safety**: Kept chat-layer denylist/unknown-field filtering and added backend-side allowlist/denylist filtering for defense in depth.
+- **Tests**: Updated per-session config tests and added Ladybug backend merge coverage.
+
 ## 2026-06-20 — Curator Phase Latency Metrics
 
 - **Metrics**: Added bounded per-phase curator latency histograms for LLM dispatch, tool-call fetch, score/evict, and final emit phases.
