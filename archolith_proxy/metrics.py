@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 
 _CURATOR_PHASE_LATENCY_MAX_SAMPLES = 1000
+_GAUGE_METRICS = {"reconciled_set_size"}
 
 # Module-level metrics dictionary — single source of truth for the process
 _metrics: dict = {
@@ -100,6 +101,7 @@ _metrics: dict = {
     "native_read_cache_misses": 0,
     "native_read_intercept_errors": 0,
     "file_cache_invalidations": 0,
+    "reconciled_set_size": 0,
     # Plugin metrics — aggregated from PluginRegistry.aggregate_metrics()
     # at each /metrics poll. Stored as a nested dict keyed by plugin ID.
     "plugins": {},
@@ -165,6 +167,9 @@ def record_metric(key: str, delta: int | float = 1, *, phase: str | None = None)
         return
 
     if key in _metrics:
+        if key in _GAUGE_METRICS:
+            _metrics[key] = delta
+            return
         current = _metrics[key]
         if isinstance(current, (int, float)):
             _metrics[key] = current + delta

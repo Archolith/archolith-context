@@ -249,6 +249,7 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
         "native_read_cache_misses": get_metrics()["native_read_cache_misses"],
         "native_read_intercept_errors": get_metrics()["native_read_intercept_errors"],
         "file_cache_invalidations": get_metrics()["file_cache_invalidations"],
+        "reconciled_set_size": get_metrics()["reconciled_set_size"],
         "file_cache_hit_rate": file_cache_hit_rate,
         "trace_records": trace_store.total_traces,
         "trace_sessions": trace_store.session_count,

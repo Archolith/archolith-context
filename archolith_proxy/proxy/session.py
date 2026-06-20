@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import OrderedDict
 
 import structlog
 
@@ -28,7 +29,8 @@ logger = structlog.get_logger()
 
 # Track which sessions have already been reconciled this process lifetime.
 # Reconciliation only needs to happen once per session after a restart.
-_reconciled_sessions: set[str] = set()
+_RECONCILED_SESSIONS_MAX = 5000
+_reconciled_sessions: OrderedDict[str, None] = OrderedDict()
 
 def _reset_sessions() -> None:
     """Clear all session state (test isolation helper)."""
@@ -180,14 +182,16 @@ async def _reconcile_turn_number(session_id: str) -> None:
 
     Only runs once per session per process lifetime (cheap no-op after that).
     """
-    if session_id in _reconciled_sessions:
-        return
-    _reconciled_sessions.add(session_id)
+    from archolith_proxy.metrics import record_metric
 
-    # Memory leak mitigation: cap the reconciliation set size to prevent unbounded growth
-    # when reconciling large numbers of sessions over a long-running process lifetime.
-    if len(_reconciled_sessions) > 100000:
-        _reconciled_sessions.clear()
+    if session_id in _reconciled_sessions:
+        _reconciled_sessions.move_to_end(session_id)
+        record_metric("reconciled_set_size", len(_reconciled_sessions))
+        return
+    _reconciled_sessions[session_id] = None
+    if len(_reconciled_sessions) > _RECONCILED_SESSIONS_MAX:
+        _reconciled_sessions.popitem(last=False)
+    record_metric("reconciled_set_size", len(_reconciled_sessions))
 
     try:
         trace_max = await get_trace_store().get_max_turn_number(session_id)
