@@ -160,7 +160,7 @@ async def test_session_end_stops_drain_loop():
     worker.start()
 
     try:
-        with patch("archolith_proxy.curator.pipeline.run_background_pass", new_callable=AsyncMock) as mock_pass:
+        with patch("archolith_proxy.curator.pipeline.run_background_pass", new_callable=AsyncMock):
             # Enqueue a normal event
             event1 = SessionEvent(session_id="test_session", turn_number=1, user_message="msg1", kind="turn")
             worker.enqueue(event1)
@@ -285,6 +285,7 @@ async def test_registry_shutdown_session():
 # 8: REGISTRY SHUTDOWN_ALL TEST
 # ============================================================================
 
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
 @pytest.mark.asyncio
 async def test_registry_shutdown_all():
     """WorkerRegistry.shutdown_all stops all workers."""
@@ -360,7 +361,6 @@ async def test_events_coalesced_counter():
 @pytest.mark.asyncio
 async def test_last_active_tracking():
     """last_active is updated on enqueue and pass completion."""
-    import time
     worker = CuratorWorker("test_session", debounce_ms=10, max_queue=100)
 
     initial = worker.last_active
@@ -494,7 +494,7 @@ async def test_multiple_sequential_passes():
     worker.start()
 
     try:
-        with patch("archolith_proxy.curator.pipeline.run_background_pass", new_callable=AsyncMock) as mock_pass:
+        with patch("archolith_proxy.curator.pipeline.run_background_pass", new_callable=AsyncMock):
             # First event
             event1 = SessionEvent(session_id="test_session", turn_number=1, user_message="msg1")
             worker.enqueue(event1)
