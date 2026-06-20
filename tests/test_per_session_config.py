@@ -32,9 +32,9 @@ from archolith_proxy.config import (
 def test_build_effective_settings_applies_overrides():
     base = get_settings()
     eff = build_effective_settings(
-        {"curator_enabled": not base.curator_enabled, "context_token_budget": 999}
+        {"embedding_enabled": not base.embedding_enabled, "context_token_budget": 999}
     )
-    assert eff.curator_enabled == (not base.curator_enabled)
+    assert eff.embedding_enabled == (not base.embedding_enabled)
     assert eff.context_token_budget == 999
     # Base singleton must be untouched (model_copy isolation).
     assert get_settings().context_token_budget == base.context_token_budget
@@ -46,6 +46,21 @@ def test_build_effective_settings_denylist_blocks_secrets():
     eff = build_effective_settings({"upstream_api_key": "EVIL", "context_token_budget": 123})
     assert eff.upstream_api_key == base.upstream_api_key  # blocked
     assert eff.context_token_budget == 123  # non-denylisted still applies
+
+
+def test_build_effective_settings_denylist_blocks_security_toggles():
+    assert "curator_enabled" in SESSION_CONFIG_DENYLIST
+    assert "filter_enabled" in SESSION_CONFIG_DENYLIST
+    assert "synthetic_tools_enabled" in SESSION_CONFIG_DENYLIST
+    base = get_settings()
+    eff = build_effective_settings({
+        "curator_enabled": not base.curator_enabled,
+        "filter_enabled": not base.filter_enabled,
+        "synthetic_tools_enabled": not base.synthetic_tools_enabled,
+    })
+    assert eff.curator_enabled == base.curator_enabled
+    assert eff.filter_enabled == base.filter_enabled
+    assert eff.synthetic_tools_enabled == base.synthetic_tools_enabled
 
 
 def test_build_effective_settings_ignores_unknown_field():

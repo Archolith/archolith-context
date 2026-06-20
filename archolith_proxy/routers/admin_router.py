@@ -51,7 +51,6 @@ TUNABLE_FIELDS = {
     "assembler_model",
     "assembler_max_iterations",
     "assembler_latency_budget_ms",
-    "synthetic_tools_enabled",
     "drop_middle_on_assembly",
 }
 

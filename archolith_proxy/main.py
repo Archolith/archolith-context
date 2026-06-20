@@ -490,6 +490,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
+    settings = get_settings()
     app = FastAPI(
         title="archolith-proxy",
         description="OpenAI-compatible proxy with graph-assembled context",
@@ -499,7 +500,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.cors_origin_list,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -678,7 +679,7 @@ def run() -> None:
 
     uvicorn.run(
         app=app,
-        host="0.0.0.0",
+        host=settings.proxy_host,
         port=settings.proxy_port,
         log_level="info",
     )

@@ -1,5 +1,13 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Outstanding security surface remediation
+
+- **`archolith_proxy/routers/live_router.py`**: `/ws/stream` now uses the same admin boundary as REST operator endpoints: `ADMIN_TOKEN` when configured, otherwise loopback-only unless `ADMIN_ALLOW_OPEN_NONLOCAL=true`.
+- **`archolith_proxy/config.py` / `main.py`**: Default CLI bind host is now `127.0.0.1` via `PROXY_HOST`; CORS defaults to loopback dashboard origins via `CORS_ALLOWED_ORIGINS`; remote plaintext `UPSTREAM_BASE_URL=http://...` is rejected unless `ALLOW_INSECURE_UPSTREAM_HTTP=true`.
+- **`archolith_proxy/config.py` / `routers/admin_router.py`**: `curator_enabled`, `filter_enabled`, and deprecated `synthetic_tools_enabled` are blocked from unauthenticated per-session overrides; `synthetic_tools_enabled` is no longer admin-runtime tunable.
+- **`archolith_proxy/session_goal.py`**: Added storage-boundary session-goal sanitization and wired it into initial goal creation plus extraction-driven goal updates.
+- **Tests/docs**: Added targeted regressions for WebSocket auth, config denylist/runtime tunables, upstream URL validation, CORS defaults, and goal sanitization. Updated `.env.example` and architecture docs for the new operator defaults.
+
 ## 2026-06-11 — Helper-cost telemetry review closure
 
 - **`archolith_proxy/trace/builder.py`**: `set_helper_usage()` now preserves prior helper-stage fields across multiple calls so curator usage is not zeroed by later extractor/embedding updates.

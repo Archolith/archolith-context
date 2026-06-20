@@ -48,6 +48,7 @@ from archolith_proxy.openai.errors import make_error_response, UpstreamError
 from archolith_proxy.proxy.live import broadcast_request, broadcast_session_event
 from archolith_proxy.proxy.session import resolve_session
 from archolith_proxy.proxy.upstream import upstream_request_with_retry
+from archolith_proxy.session_goal import sanitize_session_goal
 from archolith_proxy.trace.builder import TraceBuilder
 from archolith_proxy.trace.store import get_trace_store
 
@@ -353,10 +354,11 @@ async def chat_completions(
                         first_user_msg = content[:200]
                         break
                 if first_user_msg:
-                    goal = first_user_msg.split("\n")[0].strip()[:120]
+                    goal = sanitize_session_goal(first_user_msg)
                     try:
-                        await get_backend().update_goal(session_id, goal)
-                        await broadcast_session_event(session_id, "session_created", goal=goal)
+                        if goal:
+                            await get_backend().update_goal(session_id, goal)
+                            await broadcast_session_event(session_id, "session_created", goal=goal)
                     except Exception:
                         pass
 

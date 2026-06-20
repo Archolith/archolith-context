@@ -720,6 +720,7 @@ When running without a durable memory backend such as `menhir`, long-term memory
 # Upstream API (what the proxy forwards to)
 UPSTREAM_BASE_URL=https://api.openai.com/v1
 UPSTREAM_API_KEY=sk-...
+ALLOW_INSECURE_UPSTREAM_HTTP=false # true only for intentional non-loopback http:// upstreams
 
 # Extraction model
 EXTRACTOR_BASE_URL=https://api.openai.com/v1
@@ -744,6 +745,8 @@ SESSION_NEO4J_PASSWORD=...
 
 # Proxy settings
 PROXY_PORT=9800
+PROXY_HOST=127.0.0.1
+CORS_ALLOWED_ORIGINS= # empty = loopback origins for PROXY_PORT
 COHERENCE_TAIL_SIZE=10
 MAX_TAIL_MESSAGES=20
 CONTEXT_TOKEN_BUDGET=15000
@@ -776,7 +779,7 @@ NEO4J_MAX_RETRIES=3
 NEO4J_RETRY_BACKOFF_BASE_S=1.0
 
 # Synthetic session-summary tools
-SYNTHETIC_TOOLS_ENABLED=false         # inject recall_session_work, recall_files_read, recall_file
+SYNTHETIC_TOOLS_ENABLED=false         # deprecated; not runtime-tunable through admin or session config
 SYNTHETIC_CIRCUIT_MAX_CONSECUTIVE=3   # consecutive failures before circuit opens
 SYNTHETIC_CIRCUIT_COOLDOWN_S=300      # cooldown duration in seconds
 SYNTHETIC_CIRCUIT_MAX_TOTAL=10        # total failures before session-lifetime disable
@@ -835,7 +838,7 @@ PROMOTION_DRY_RUN=false
 | `GET /promotions` | Promotion history and stats |
 | `POST /promotions/retry/{id}` | Retry a failed promotion |
 | `GET /dashboard/` | Web dashboard (single-page HTML, zero build step) with per-turn RTK strategy savings, proxy-recall annotations, and curator proxy-note visibility |
-| `GET /ws/stream` | WebSocket live event stream |
+| `GET /ws/stream` | WebSocket live event stream; same admin boundary as REST operator endpoints (`ADMIN_TOKEN` when set, otherwise loopback-only unless explicitly opened) |
 
 Metrics are in-memory (`_metrics` dict surfaced via `archolith_proxy/metrics.py`), reset on process restart. Prometheus-compatible OpenMetrics format is a future goal.
 

@@ -2,14 +2,40 @@
 
 from __future__ import annotations
 
+import hmac
+
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from archolith_proxy.admin import _is_loopback
 from archolith_proxy.config import get_settings
 
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+
+def _websocket_authorized(websocket: WebSocket, admin_token: str, allow_open_nonlocal: bool) -> bool:
+    """Apply the admin boundary rules to the live-stream WebSocket handshake."""
+    if not admin_token:
+        if allow_open_nonlocal:
+            return True
+        client_host = websocket.client.host if websocket.client else None
+        return _is_loopback(client_host)
+
+    query_token = websocket.query_params.get("token", "")
+    if query_token and hmac.compare_digest(query_token, admin_token):
+        return True
+
+    header_token = websocket.headers.get("x-admin-token", "")
+    if header_token and hmac.compare_digest(header_token, admin_token):
+        return True
+
+    auth_header = websocket.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return hmac.compare_digest(auth_header[7:], admin_token)
+
+    return False
 
 
 @router.websocket("/ws/stream")
@@ -20,15 +46,19 @@ async def ws_live_stream(websocket: WebSocket) -> None:
     response, extraction, and recall event that flows through the proxy.
     Slow clients are disconnected after 256 queued events.
 
-    When ADMIN_TOKEN is set, clients must provide it via query param
-    ?token=<value> or the connection is closed.
+    Uses the same admin boundary as REST operator surfaces: when ADMIN_TOKEN is
+    empty, only loopback clients are allowed unless ADMIN_ALLOW_OPEN_NONLOCAL is
+    set; when ADMIN_TOKEN is set, clients must provide it via query param
+    ?token=<value>, X-Admin-Token, or Authorization: Bearer.
     """
     settings = get_settings()
-    if settings.admin_token:
-        token = websocket.query_params.get("token", "")
-        if token != settings.admin_token:
-            await websocket.close(code=4001, reason="Invalid admin token")
-            return
+    if not _websocket_authorized(
+        websocket,
+        admin_token=settings.admin_token,
+        allow_open_nonlocal=settings.admin_allow_open_nonlocal,
+    ):
+        await websocket.close(code=4001, reason="Admin token required")
+        return
 
     await websocket.accept()
     live_stream = getattr(websocket.app.state, "live_stream", None)

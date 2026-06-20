@@ -1,7 +1,5 @@
 """Phase 4 unit tests — config validation, graceful degradation, metrics, retry logic."""
 
-import os
-
 import pytest
 
 from archolith_proxy.config import Settings, get_settings, reset_settings
@@ -17,6 +15,7 @@ class TestConfigValidation:
         """Settings should load with defaults (no env vars required)."""
         s = Settings(_env_file=None)  # Ignore .env file for test isolation
         assert s.proxy_port == 9800
+        assert s.proxy_host == "127.0.0.1"
         assert s.cold_start_turns == 3
         assert s.filter_enabled is False
         # upstream_base_url default is "https://api.deepseek.com/v1" but .env may override
@@ -26,15 +25,42 @@ class TestConfigValidation:
         with pytest.raises(Exception):
             Settings(upstream_base_url="ftp://bad.url/v1", _env_file=None)
 
-    def test_valid_http_upstream_url(self):
-        """http:// URL should be accepted."""
+    def test_valid_loopback_http_upstream_url(self):
+        """http:// loopback URL should be accepted for local OpenAI-compatible servers."""
         s = Settings(upstream_base_url="http://localhost:8080/v1", _env_file=None)
         assert s.upstream_base_url == "http://localhost:8080/v1"
+
+    def test_remote_http_upstream_url_rejected_by_default(self):
+        """Plaintext remote upstreams are rejected unless explicitly opted in."""
+        with pytest.raises(Exception):
+            Settings(upstream_base_url="http://api.example.test/v1", _env_file=None)
+
+    def test_remote_http_upstream_url_escape_hatch(self):
+        """Operators can explicitly opt into plaintext HTTP for non-loopback upstreams."""
+        s = Settings(
+            upstream_base_url="http://api.example.test/v1",
+            allow_insecure_upstream_http=True,
+            _env_file=None,
+        )
+        assert s.upstream_base_url == "http://api.example.test/v1"
 
     def test_valid_https_upstream_url(self):
         """https:// URL should be accepted."""
         s = Settings(upstream_base_url="https://api.openai.com/v1", _env_file=None)
         assert s.upstream_base_url == "https://api.openai.com/v1"
+
+    def test_default_cors_origins_are_loopback(self):
+        """Default CORS origins are limited to loopback dashboard origins."""
+        s = Settings(_env_file=None)
+        assert s.cors_origin_list == [
+            "http://127.0.0.1:9800",
+            "http://localhost:9800",
+        ]
+
+    def test_configured_cors_origins_are_split(self):
+        """CORS_ALLOWED_ORIGINS accepts a comma-separated deployment allowlist."""
+        s = Settings(cors_allowed_origins="https://example.test, http://127.0.0.1:3000", _env_file=None)
+        assert s.cors_origin_list == ["https://example.test", "http://127.0.0.1:3000"]
 
     def test_invalid_port_raises(self):
         """Port out of range should raise validation error."""

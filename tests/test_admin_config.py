@@ -80,6 +80,19 @@ async def test_update_config_float_preserved(client):
 
 
 @pytest.mark.asyncio
+async def test_update_config_rejects_deprecated_synthetic_tools_toggle(client):
+    """PATCH /admin/config no longer re-enables the deprecated synthetic tools feature."""
+    response = await client.patch(
+        "/admin/config",
+        json={"synthetic_tools_enabled": True},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "synthetic_tools_enabled" not in data["updated"]
+    assert data["rejected"]["synthetic_tools_enabled"] == "not a tunable field"
+
+
+@pytest.mark.asyncio
 async def test_retry_promotion_returns_501(client, app):
     """POST /promotions/retry/{id} returns 501 when the promotion is found (stub)."""
     from types import SimpleNamespace

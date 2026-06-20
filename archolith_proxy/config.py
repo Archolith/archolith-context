@@ -14,11 +14,13 @@ paths begin. The module-level lock guards the first-access race condition.
 from __future__ import annotations
 
 import json
+import ipaddress
 import threading
 from contextvars import ContextVar
 from pathlib import Path
+from urllib.parse import urlparse
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Module-level singleton
@@ -41,10 +43,13 @@ SESSION_CONFIG_DENYLIST: frozenset[str] = frozenset({
     "upstream_api_key",
     "extractor_base_url",
     "extractor_api_key",
+    "curator_enabled",
     "curator_base_url",
     "curator_api_key",
     "embedding_base_url",
     "embedding_api_key",
+    "filter_enabled",
+    "synthetic_tools_enabled",
     "memory_api_url",
     "memory_api_key",
     "admin_token",
@@ -113,6 +118,7 @@ class Settings(BaseSettings):
     # Upstream API
     upstream_base_url: str = "https://api.deepseek.com/v1"
     upstream_api_key: str = ""
+    allow_insecure_upstream_http: bool = False
 
     # Extraction model
     extractor_base_url: str = "https://api.openai.com/v1"
@@ -132,6 +138,8 @@ class Settings(BaseSettings):
 
     # Proxy settings
     proxy_port: int = 9800
+    proxy_host: str = "127.0.0.1"
+    cors_allowed_origins: str = ""
     coherence_tail_size: int = 10
     max_tail_messages: int = 20
     context_token_budget: int = 15000
@@ -450,6 +458,25 @@ class Settings(BaseSettings):
         """Full upstream API base URL (ensures no trailing slash issues)."""
         return self.upstream_base_url.rstrip("/")
 
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """Allowed browser origins for CORS.
+
+        Empty config resolves to loopback dashboard origins for the active port.
+        Use a comma-separated CORS_ALLOWED_ORIGINS value to add deployment-specific
+        browser clients.
+        """
+        if not self.cors_allowed_origins.strip():
+            return [
+                f"http://127.0.0.1:{self.proxy_port}",
+                f"http://localhost:{self.proxy_port}",
+            ]
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
+
     @field_validator("upstream_api_key")
     @classmethod
     def _warn_empty_upstream_key(cls, v: str) -> str:
@@ -467,6 +494,27 @@ class Settings(BaseSettings):
         if not v.startswith(("http://", "https://")):
             raise ValueError(f"UPSTREAM_BASE_URL must start with http:// or https://, got: {v}")
         return v
+
+    @model_validator(mode="after")
+    def _validate_plaintext_upstream(self) -> "Settings":
+        parsed = urlparse(self.upstream_base_url)
+        if parsed.scheme != "http" or self.allow_insecure_upstream_http:
+            return self
+
+        host = parsed.hostname or ""
+        if host == "localhost":
+            return self
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                return self
+        except ValueError:
+            pass
+
+        raise ValueError(
+            "UPSTREAM_BASE_URL uses plaintext http for a non-loopback host. "
+            "Use https://, point to localhost/127.0.0.1, or set "
+            "ALLOW_INSECURE_UPSTREAM_HTTP=true to opt into sending the upstream key over plaintext HTTP."
+        )
 
     @field_validator("proxy_port")
     @classmethod

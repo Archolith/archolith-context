@@ -21,6 +21,7 @@ from archolith_proxy.openai.helpers import (
 )
 from archolith_proxy.proxy.live import broadcast_extraction, broadcast_session_event
 from archolith_proxy.proxy.rewrite import strip_reasoning
+from archolith_proxy.session_goal import sanitize_session_goal
 from archolith_proxy.trace.builder import TraceBuilder
 
 logger = structlog.get_logger()
@@ -202,9 +203,11 @@ async def _run_extraction(
 
         if result and result.session_goal:
             try:
-                await get_backend().update_goal(session_id, result.session_goal)
-                logger.info("session_goal_updated", session_id=session_id, goal=result.session_goal[:80])
-                await broadcast_session_event(session_id, "goal_updated", goal=result.session_goal)
+                sanitized_goal = sanitize_session_goal(result.session_goal)
+                if sanitized_goal:
+                    await get_backend().update_goal(session_id, sanitized_goal)
+                    logger.info("session_goal_updated", session_id=session_id, goal=sanitized_goal[:80])
+                    await broadcast_session_event(session_id, "goal_updated", goal=sanitized_goal)
             except Exception as e:
                 logger.warning("session_goal_update_failed", session_id=session_id, error=str(e))
 
