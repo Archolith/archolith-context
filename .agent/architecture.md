@@ -838,7 +838,6 @@ WS_ALLOW_ANONYMOUS=false              # legacy opt-in; otherwise /ws/stream need
 | `GET /trace/graph/{sid}/decisions` | Decisions recorded for a session |
 | `GET /trace/graph/{sid}/recall` | Recall events from trace records |
 | `POST /trace/qa/extract` | Extraction QA workbench — run extraction without full proxy replay; dedup and invalidation checks now route through the active backend (`ladybug` or `neo4j`) |
-| `GET/POST/DELETE /trace/benchmark/session-id` | Benchmark session-id override for traceable scripted runs |
 | `GET /memory-engines` | List configured memory engines with health status |
 | `GET /memory-engines/{id}` | Single engine details, health, and capabilities |
 | `GET /promotions` | Promotion history and stats |

@@ -1,5 +1,11 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Benchmark Session Override Removal
+
+- **`archolith_proxy/proxy/session.py`, `trace/router.py`, `openai/chat.py`**: Removed the process-global benchmark session-ID override API and state. Session identity now stays request-scoped via `X-Session-ID`/`x-session-affinity`, including passthrough trace recording.
+- **`scripts/harness_benchmark.py`, `scripts/scripted_benchmark.py`**: Migrated benchmark setup away from `/trace/benchmark/session-id`; scripts now print or pass explicit `X-Session-ID` values for benchmark sessions.
+- **`.agent/architecture.md`**: Removed the deleted benchmark session override endpoint from the current endpoint table.
+
 ## 2026-06-20 — Compliance Package Dependency
 
 - **`pyproject.toml`**: Added the `compliance` optional dependency group for `archolith-compliance>=0.1.0` and included it in the `full` extra so upcoming retention, consent, and PII-redaction adoption can use the shared package.

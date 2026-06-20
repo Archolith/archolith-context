@@ -4,7 +4,7 @@
 Manages the proxy side of a harness-based OpenCode benchmark:
 
   - Pre-generates session IDs for proxy and direct sessions
-  - Sets the proxy session-ID override so the trace is keyed correctly
+  - Prints X-Session-ID values so the trace is keyed correctly
   - Polls the proxy trace store until the session completes
   - Builds turn records from the proxy trace (user messages + response summaries)
   - Generates an HTML comparison report using session_explorer's renderer
@@ -37,8 +37,7 @@ import json
 import os
 import sys
 import time
-import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -75,25 +74,7 @@ PROXY_MODEL = os.getenv("BENCHMARK_PROXY_MODEL", _dotenv.get("BENCHMARK_PROXY_MO
 DIRECT_MODEL = os.getenv("BENCHMARK_DIRECT_MODEL", _dotenv.get("BENCHMARK_DIRECT_MODEL", "deepseek-passthrough/deepseek-v4-flash-passthrough"))
 
 
-# ── Proxy admin API ───────────────────────────────────────────────────────────
-
-def set_proxy_session(session_id: str) -> None:
-    """Set the proxy benchmark session-ID override."""
-    with httpx.Client(timeout=10) as c:
-        r = c.post(
-            f"{ADMIN_URL}/trace/benchmark/session-id",
-            json={"session_id": session_id},
-        )
-        r.raise_for_status()
-    print(f"  [proxy] session override set -> {session_id}")
-
-
-def clear_proxy_session() -> None:
-    """Clear the proxy benchmark session-ID override."""
-    with httpx.Client(timeout=10) as c:
-        r = c.delete(f"{ADMIN_URL}/trace/benchmark/session-id")
-        r.raise_for_status()
-    print("  [proxy] session override cleared")
+# ── Trace API ─────────────────────────────────────────────────────────────────
 
 
 def fetch_trace(session_id: str, retries: int = 6, delay: float = 2.0) -> dict | None:
@@ -208,27 +189,30 @@ def generate_report(
 # ── CLI commands ──────────────────────────────────────────────────────────────
 
 def cmd_setup(args) -> None:
-    """Generate IDs and set the proxy override. Print IDs for the orchestrator."""
+    """Generate IDs and print header values for the orchestrator."""
     ts = int(time.time())
     proxy_session_id = f"bench-proxy-{ts}"
     direct_session_id = f"bench-direct-{ts}"
 
-    print(f"\nBenchmark session IDs:")
+    print("\nBenchmark session IDs:")
     print(f"  proxy  : {proxy_session_id}")
     print(f"  direct : {direct_session_id}")
     print(f"\nProxy model  : {PROXY_MODEL}")
     print(f"Direct model : {DIRECT_MODEL}")
     print(f"\nTask: {args.task or '(none specified)'}")
 
-    print("\nSetting proxy session override...")
-    set_proxy_session(proxy_session_id)
-
     print("\nNext: Claude Code should run:")
-    print(f"  harness_create_worktree  × 2  (same repo, same branch)")
-    print(f"  harness_start_session(id='{proxy_session_id}', model='{PROXY_MODEL}', task=...)")
-    print(f"  harness_start_session(id='{direct_session_id}', model='{DIRECT_MODEL}', task=...)")
+    print("  harness_create_worktree  × 2  (same repo, same branch)")
+    print(
+        f"  harness_start_session(id='{proxy_session_id}', model='{PROXY_MODEL}', "
+        f"headers={{'X-Session-ID': '{proxy_session_id}'}}, task=...)"
+    )
+    print(
+        f"  harness_start_session(id='{direct_session_id}', model='{DIRECT_MODEL}', "
+        f"headers={{'X-Session-ID': '{direct_session_id}'}}, task=...)"
+    )
     print(f"  harness_start_comparison(leftSessionId='{proxy_session_id}', rightSessionId='{direct_session_id}')")
-    print(f"\nAfter sessions finish:")
+    print("\nAfter sessions finish:")
     print(f"  python scripts/harness_benchmark.py report --session-id {proxy_session_id}")
 
     # Write IDs to a state file for the report step
@@ -277,12 +261,6 @@ def cmd_report(args) -> None:
     print(f"\nReport saved -> {report_path}")
     print(f"Open: file://{report_path.resolve()}")
 
-    # Clear the proxy override if still set
-    try:
-        clear_proxy_session()
-    except Exception:
-        pass
-
 
 def cmd_run(args) -> None:
     """Setup + wait + report in one shot (blocking)."""
@@ -296,7 +274,9 @@ def cmd_run(args) -> None:
     print(f"Direct session : {direct_session_id}")
     print(f"Task           : {task or '(none)'}")
 
-    set_proxy_session(proxy_session_id)
+    print("\nStart harness sessions with these request headers:")
+    print(f"  proxy  : X-Session-ID={proxy_session_id}")
+    print(f"  direct : X-Session-ID={direct_session_id}")
 
     print("\nWaiting for proxy trace...")
     print("  (start harness sessions now if not already running)")
@@ -311,17 +291,12 @@ def cmd_run(args) -> None:
     print(f"\nReport -> {report_path}")
     print(f"Open  : file://{report_path.resolve()}")
 
-    try:
-        clear_proxy_session()
-    except Exception:
-        pass
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Harness benchmark proxy utility")
     sub = parser.add_subparsers(dest="command")
 
-    p_setup = sub.add_parser("setup", help="Generate IDs, set proxy override, print orchestration commands")
+    p_setup = sub.add_parser("setup", help="Generate IDs and print orchestration commands")
     p_setup.add_argument("--task", default="", help="Benchmark task description")
 
     p_report = sub.add_parser("report", help="Fetch trace and generate HTML report")

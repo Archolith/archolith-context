@@ -86,12 +86,14 @@ async def chat_completions(
     _PASSTHROUGH_SUFFIX = "-passthrough"
     is_passthrough = req.model.endswith(_PASSTHROUGH_SUFFIX)
     if is_passthrough:
-        from archolith_proxy.proxy.session import get_benchmark_passthrough_session_id
-
         clean_model = req.model[: -len(_PASSTHROUGH_SUFFIX)]
         body["model"] = clean_model
         input_tokens = _estimate_input_tokens(body.get("messages", []))
-        passthrough_session_id = get_benchmark_passthrough_session_id()
+        passthrough_session_id = (
+            request.headers.get("x-session-id")
+            or request.headers.get("X-Session-ID")
+            or request.headers.get("x-session-affinity")
+        )
         trace_builder.set_request(
             session_id=passthrough_session_id, turn_number=0, model=clean_model,
             stream=req.stream, input_tokens=input_tokens,

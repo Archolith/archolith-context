@@ -197,18 +197,6 @@ def cmd_setup(args: argparse.Namespace) -> None:
     proxy_sid = f"bench-proxy-{ts}"
     pass_sid = f"bench-pass-{ts}"
 
-    # Register both session IDs so proxy traces both paths under their benchmark IDs
-    try:
-        with httpx.Client(timeout=10) as c:
-            r = c.post(
-                f"{PROXY_BASE}/trace/benchmark/session-id",
-                json={"session_id": proxy_sid, "passthrough_session_id": pass_sid},
-            )
-            if r.status_code not in (200, 201, 204):
-                print(f"WARNING: trace/benchmark/session-id returned {r.status_code}")
-    except Exception as e:
-        print(f"WARNING: Could not set proxy trace session: {e}")
-
     # ── Create worktrees via harness API ──────────────────────────────────────
     worktree_root = HARNESS_WORKTREE_ROOT.replace("\\", "/")
     proxy_worktree_path = f"{worktree_root}/archolith-bench-proxy-{ts}"
@@ -244,7 +232,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
             if r.status_code >= 300:
                 print(f"ERROR: harness worktree creation failed for passthrough: {r.status_code} {r.text}", file=sys.stderr)
                 sys.exit(1)
-    except httpx.ConnectError as e:
+    except httpx.ConnectError:
         print(f"ERROR: Cannot reach harness at {HARNESS_URL} — is it running?", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
@@ -266,6 +254,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
                     "model": proxy_model,
                     "cwd": proxy_worktree_path,
                     "task": scenario["task_prompt"],
+                    "headers": {"X-Session-ID": proxy_sid},
                     "cols": 220,
                     "rows": 50,
                 },
@@ -283,6 +272,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
                     "model": passthrough_model,
                     "cwd": passthrough_worktree_path,
                     "task": scenario["task_prompt"],
+                    "headers": {"X-Session-ID": pass_sid},
                     "cols": 220,
                     "rows": 50,
                 },
@@ -290,7 +280,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
             if r.status_code >= 300:
                 print(f"ERROR: harness session start failed for passthrough: {r.status_code} {r.text}", file=sys.stderr)
                 sys.exit(1)
-    except httpx.ConnectError as e:
+    except httpx.ConnectError:
         print(f"ERROR: Cannot reach harness at {HARNESS_URL} — is it running?", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
@@ -324,6 +314,8 @@ def cmd_setup(args: argparse.Namespace) -> None:
     # Print key=value output for orchestrator
     print(f"PROXY_SESSION_ID={proxy_sid}")
     print(f"PASSTHROUGH_SESSION_ID={pass_sid}")
+    print(f"PROXY_HEADER=X-Session-ID:{proxy_sid}")
+    print(f"PASSTHROUGH_HEADER=X-Session-ID:{pass_sid}")
     print(f"PROXY_MODEL={state['proxy_model']}")
     print(f"PASSTHROUGH_MODEL={state['passthrough_model']}")
     print(f"PROXY_WORKTREE={proxy_worktree_path}")
