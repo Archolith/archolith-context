@@ -359,7 +359,7 @@ async def _handle_streaming(
                                         question=second_question, facts_returned=0,
                                     )
                                     if trace_builder:
-                                        trace_builder.set_recall(used=True, question=question, facts_returned=0)
+                                        trace_builder.set_recall(used=True, question=second_question, facts_returned=0)
 
                                     # Keep assistant tool_calls intact for the
                                     # same reason as the first round.

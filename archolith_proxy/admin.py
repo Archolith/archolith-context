@@ -8,6 +8,7 @@ require either X-Admin-Token or Authorization: Bearer matching the value.
 
 from __future__ import annotations
 
+import hmac
 import ipaddress
 
 from fastapi import Depends, HTTPException, Request
@@ -59,14 +60,14 @@ async def require_admin_token(request: Request) -> None:
 
     # Check X-Admin-Token header first
     admin_header = request.headers.get("x-admin-token")
-    if admin_header == settings.admin_token:
+    if admin_header is not None and hmac.compare_digest(admin_header, settings.admin_token):
         return
 
     # Check Authorization: Bearer <token>
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
-        if token == settings.admin_token:
+        if hmac.compare_digest(token, settings.admin_token):
             return
 
     raise HTTPException(

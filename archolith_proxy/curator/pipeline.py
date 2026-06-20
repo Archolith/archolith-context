@@ -305,9 +305,6 @@ async def _run_with_briefing(
     )
 
 
-__all__ = ["curate_context", "run_background_pass", "get_last_attempt", "prune_last_attempts"]
-
-
 async def curate_context(
     session_id: str, turn_number: int, user_message: str,
     session_goal: str | None, http_client, messages: list[dict],

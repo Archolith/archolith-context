@@ -1,7 +1,7 @@
 [project]
 name = "archolith-proxy"
 version = "0.5.0"
-description = "Self-hosted context intelligence proxy for LLMs — extracts knowledge, compresses context, remembers everything"
+description = "Experimental OpenAI-compatible proxy for context compression, session tracing, and context-curation research"
 requires-python = ">=3.12"
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 authors = [
@@ -10,7 +10,6 @@ authors = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: Other/Proprietary License",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
@@ -22,7 +21,6 @@ dependencies = [
     "httpx>=0.28.0",
     "neo4j>=5.26.0",
     "openai>=1.60.0",
-    "graphiti-core>=0.1.0",
     "tiktoken>=0.9.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
@@ -37,7 +35,7 @@ archolith-proxy = "archolith_proxy.main:run"
 Homepage = "https://archolith.dev"
 Repository = "https://github.com/Archolith/archolith-context"
 Documentation = "https://github.com/Archolith/archolith-context#readme"
-Benchmarks = "https://github.com/ctharvey/archolith-bench"
+Benchmarks = "https://github.com/Archolith/archolith-bench"
 
 [project.optional-dependencies]
 java = [

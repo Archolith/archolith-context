@@ -172,6 +172,15 @@ async def lifespan(app: FastAPI):
     if proxy_missing:
         logger.warning("missing_required_env_vars", vars=proxy_missing, note="proxy calls will fail")
 
+    if not settings.admin_token:
+        logger.warning(
+            "admin_token_not_set",
+            note=(
+                "ADMIN_TOKEN is empty — admin endpoints are open to any loopback process. "
+                "Set ADMIN_TOKEN for shared machines or network-exposed deployments."
+            ),
+        )
+
     # Log active profile with resolved flag bundle for operator clarity
     from archolith_proxy.config import PROFILES
     _profile = getattr(settings, "archolith_profile", "passthrough")
@@ -262,6 +271,15 @@ async def lifespan(app: FastAPI):
         timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0),
     )
 
+    # Pre-warm tiktoken encoding so the first request doesn't pay the BPE table
+    # load cost (100-500ms) inline on the event loop.
+    try:
+        import tiktoken
+        await asyncio.to_thread(tiktoken.get_encoding, "cl100k_base")
+        logger.info("tiktoken_prewarm_complete", encoding="cl100k_base")
+    except Exception as _tiktoken_err:
+        logger.warning("tiktoken_prewarm_failed", error=str(_tiktoken_err))
+
     # D4: track whether a configured graph backend ended up degraded so /health
     # can report it honestly instead of always returning 200.
     app.state.graph_degraded_reason = None
@@ -290,7 +308,7 @@ async def lifespan(app: FastAPI):
             backoff_base=settings.neo4j_retry_backoff_base_s,
         )
     else:
-        logger.info("graph_not_configured", note="set GRAPH_BACKEND=ladybug or SESSION_NEO4J_PASSWORD for graph features")
+        logger.warning("graph_not_configured", note="running in passthrough-only mode — set GRAPH_BACKEND=ladybug or SESSION_NEO4J_PASSWORD for graph features")
 
     # D4: a configured graph backend that did not come up is "degraded", not
     # "not_configured". Surface it; optionally fail closed.

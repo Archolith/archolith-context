@@ -1,0 +1,93 @@
+archolith-proxy Third-Party License Notices
+============================================
+
+This file lists the direct runtime dependencies of archolith-proxy and their licenses.
+Apache-2.0 packages are listed first, as their license requires this notice to be
+reproduced when the software is distributed.
+
+Generated: 2026-06-20
+Package versions reflect the environment at the time of generation.
+
+
+-------------------------------------------------------------------------------
+APACHE-2.0 PACKAGES (require attribution on distribution)
+-------------------------------------------------------------------------------
+
+openai 2.38.0
+  License: Apache-2.0
+  Copyright: OpenAI <support@openai.com>
+  Source: https://github.com/openai/openai-python
+  Apache-2.0 full text: https://www.apache.org/licenses/LICENSE-2.0
+
+neo4j 6.2.0
+  License: Apache-2.0 AND Python-2.0
+  Copyright: Neo4j, Inc. <drivers@neo4j.com>
+  Source: https://github.com/neo4j/neo4j-python-driver
+  Apache-2.0 full text: https://www.apache.org/licenses/LICENSE-2.0
+  Python-2.0 full text: https://www.python.org/download/releases/2.0/license/
+
+
+-------------------------------------------------------------------------------
+MIT / BSD / OTHER PERMISSIVE PACKAGES
+-------------------------------------------------------------------------------
+
+fastapi 0.136.3
+  License: MIT
+  Author: Sebastián Ramírez <tiangolo@gmail.com>
+  Source: https://github.com/fastapi/fastapi
+
+uvicorn 0.47.0
+  License: BSD-3-Clause
+  Author: Tom Christie <tom@tomchristie.com>
+  Source: https://github.com/encode/uvicorn
+
+httpx 0.28.1
+  License: BSD-3-Clause
+  Author: Tom Christie <tom@tomchristie.com>
+  Source: https://github.com/encode/httpx
+
+tiktoken 0.13.0
+  License: MIT
+  Copyright: 2022 OpenAI, Shantanu Jain
+  Source: https://github.com/openai/tiktoken
+
+pydantic 2.13.4
+  License: MIT
+  Source: https://github.com/pydantic/pydantic
+
+pydantic-settings 2.14.1
+  License: MIT
+  Source: https://github.com/pydantic/pydantic-settings
+
+structlog 25.5.0
+  License: MIT OR Apache-2.0 (MIT selected for distribution)
+  Author: Hynek Schlawack <hs@ox.cx>
+  Source: https://github.com/hynek/structlog
+
+
+-------------------------------------------------------------------------------
+FULL LICENSE TEXTS
+-------------------------------------------------------------------------------
+
+The Apache License, Version 2.0 is available at:
+  https://www.apache.org/licenses/LICENSE-2.0
+
+The MIT License text (applies to MIT-licensed packages above):
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.

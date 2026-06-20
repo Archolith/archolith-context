@@ -13,6 +13,7 @@ __all__ = ["PromotionService"]
 import json
 import os
 import time
+from collections import deque
 
 import structlog
 
@@ -72,7 +73,8 @@ class PromotionService:
         self.min_confidence = min_confidence
 
         # In-memory audit trail (process-level, reset on restart).
-        self._audit: list[PromotionResult] = []
+        # Bounded deque to prevent unbounded growth in long-running processes.
+        self._audit: deque[PromotionResult] = deque(maxlen=10_000)
         self._stats = {
             "attempted": 0,
             "succeeded": 0,
