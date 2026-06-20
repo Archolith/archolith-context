@@ -1,5 +1,9 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Upstream Retry Coverage
+
+- **Tests**: Added focused `upstream_request_with_retry` coverage for successful first attempts, retryable HTTP statuses, connection failures, timeout failures, non-retryable statuses, backoff sequencing, and final-failure metrics.
+
 ## 2026-06-20 — Live Stream WebSocket Route Coverage
 
 - **Tests**: Added `/ws/stream` route integration coverage for event delivery and overflow close handling.
