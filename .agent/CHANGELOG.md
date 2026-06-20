@@ -1,5 +1,9 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Removed Dead Streaming Retry Helper
+
+- **Maintenance**: Removed the unused `stream_with_connection_retry` helper from `proxy/upstream.py`; streaming retry behavior remains owned by the active streaming path.
+
 ## 2026-06-20 — Bounded Session Reconciliation Cache
 
 - **Architecture**: Replaced the process-lifetime `_reconciled_sessions` set with a bounded LRU cache capped at 5000 session IDs.
