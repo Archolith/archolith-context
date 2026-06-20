@@ -1,5 +1,11 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Curator Phase Latency Metrics
+
+- **Metrics**: Added bounded per-phase curator latency histograms for LLM dispatch, tool-call fetch, score/evict, and final emit phases.
+- **`/metrics`**: Surfaced p50/p95/p99 latency maps and sample counts by curator phase.
+- **Docs/tests**: Documented the Phase 0 profiling layer and added focused metric coverage.
+
 ## 2026-06-20 — Curator Worker Shutdown Warning Scope
 
 - **Tests**: Added a test-local `RuntimeWarning` filter to `test_registry_shutdown_all` for the known shutdown-time `AsyncMock` coroutine warning.

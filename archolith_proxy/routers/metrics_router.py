@@ -10,7 +10,7 @@ from archolith_proxy import __version__
 from archolith_proxy.admin import require_admin_token
 from archolith_proxy.config import get_settings
 from archolith_proxy.graph.backend import is_graph_ready
-from archolith_proxy.metrics import get_metrics
+from archolith_proxy.metrics import get_curator_phase_latency_percentiles, get_metrics
 from archolith_proxy.trace.store import get_trace_store
 
 router = APIRouter()
@@ -173,6 +173,7 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
         round(get_metrics()["hot_path_briefing_lag_sum"] / _lag_count, 2)
         if _lag_count > 0 else 0.0
     )
+    curator_phase_latency = get_curator_phase_latency_percentiles()
 
     return {
         "proxy": "archolith-proxy",
@@ -199,6 +200,18 @@ async def metrics(request: Request, admin: None = Depends(require_admin_token)) 
         "curator_success_rate": curator_success_rate,
         "avg_curator_latency_ms": avg_curator_latency_ms,
         "avg_curator_tool_calls": avg_curator_tool_calls,
+        "curator_phase_latency_ms_p50_by_phase": {
+            phase: values["p50"] for phase, values in curator_phase_latency.items()
+        },
+        "curator_phase_latency_ms_p95_by_phase": {
+            phase: values["p95"] for phase, values in curator_phase_latency.items()
+        },
+        "curator_phase_latency_ms_p99_by_phase": {
+            phase: values["p99"] for phase, values in curator_phase_latency.items()
+        },
+        "curator_phase_latency_samples_by_phase": {
+            phase: values["count"] for phase, values in curator_phase_latency.items()
+        },
         "curator_worker_diag": {
             "prepper_fires": prepper_fires,
             "prepper_starved": prepper_starved,

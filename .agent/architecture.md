@@ -348,6 +348,9 @@ onto a long-lived per-session `CuratorWorker` on **every turn boundary**:
    - Observability: the `/metrics` `curator_worker_diag` block (`prepper_fires`, `prepper_starved`,
      `prepper_cancels`, `hot_path_llm_calls`, `avg_briefing_lag_turns`, `deterministic_assemblies`,
      `prepper_block_topups/timeouts`, `curator_worker_lease_held/blocked`) quantifies the pipeline.
+     The `/metrics` curator phase-latency maps (`curator_phase_latency_ms_p50/p95/p99_by_phase`) are the
+     Phase 0 profiling layer for deciding whether later worker consolidation should target LLM dispatch,
+     tool fetch, score/evict, or final emit work first.
    - Default off; when off, the legacy `swap_background_task` path is preserved unchanged.
    - **Single-leader leasing** (`CURATOR_WORKER_LEASE_ENABLED`, default off): the `WorkerRegistry`
      can take a cross-process lease (`archolith-maintenance` `SchedulerLeaseStore`, SQLite) so only

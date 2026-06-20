@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import time
 
+_CURATOR_PHASE_LATENCY_MAX_SAMPLES = 1000
+
 # Module-level metrics dictionary — single source of truth for the process
 _metrics: dict = {
     "start_time": 0.0,
@@ -75,6 +77,9 @@ _metrics: dict = {
     # (held) vs. another process is leader so workers are skipped here (blocked).
     "curator_worker_lease_held": 0,
     "curator_worker_lease_blocked": 0,
+    # Phase latency histograms for curator profiling. Values are milliseconds,
+    # grouped by phase name and bounded per phase to keep process memory stable.
+    "curator_phase_latency_ms": {},
     # Phase 4 — ARC working set evicted a session's cached state under memory
     # pressure (bound exceeded). The persisted row (if any) is kept for warm-start.
     "curator_workingset_evictions": 0,
@@ -112,8 +117,53 @@ def record_assembly_mode(mode: str) -> None:
         _metrics["assembly_modes"][mode] += 1
 
 
-def record_metric(key: str, delta: int | float = 1) -> None:
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = round((len(ordered) - 1) * percentile)
+    return round(ordered[index], 2)
+
+
+def get_curator_phase_latency_percentiles() -> dict[str, dict[str, float | int]]:
+    """Return p50/p95/p99 latency summaries for curator phases."""
+    raw = _metrics.get("curator_phase_latency_ms", {})
+    if not isinstance(raw, dict):
+        return {}
+    summary: dict[str, dict[str, float | int]] = {}
+    for phase, values in raw.items():
+        if not isinstance(values, list):
+            continue
+        samples = [float(v) for v in values]
+        summary[str(phase)] = {
+            "count": len(samples),
+            "p50": _percentile(samples, 0.50),
+            "p95": _percentile(samples, 0.95),
+            "p99": _percentile(samples, 0.99),
+        }
+    return summary
+
+
+def record_metric(key: str, delta: int | float = 1, *, phase: str | None = None) -> None:
     """Increment a numeric metric by delta."""
+    if key == "curator_phase_latency_ms":
+        if not phase:
+            import structlog
+            logger = structlog.get_logger()
+            logger.warning("missing_curator_phase_latency_phase")
+            return
+        raw = _metrics.setdefault(key, {})
+        if not isinstance(raw, dict):
+            return
+        samples = raw.setdefault(phase, [])
+        if not isinstance(samples, list):
+            return
+        samples.append(float(delta))
+        excess = len(samples) - _CURATOR_PHASE_LATENCY_MAX_SAMPLES
+        if excess > 0:
+            del samples[:excess]
+        return
+
     if key in _metrics:
         current = _metrics[key]
         if isinstance(current, (int, float)):

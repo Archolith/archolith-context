@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import time
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -31,6 +32,12 @@ logger = structlog.get_logger()
 _RETRYABLE_ERRORS = (RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
 
 _ERROR_WINDOW_SIZE = 4
+
+
+def _record_phase_latency(phase: str, start: float) -> None:
+    from archolith_proxy.metrics import record_metric
+
+    record_metric("curator_phase_latency_ms", (time.perf_counter() - start) * 1000, phase=phase)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -200,6 +207,7 @@ async def _run_curator_native(
             session_id=session_id,
         )
         try:
+            llm_start = time.perf_counter()
             response = await _llm_call_with_retry(
                 client,
                 max_retries=2,
@@ -210,6 +218,7 @@ async def _run_curator_native(
                 tool_choice="auto",
                 temperature=0.2,
             )
+            _record_phase_latency("llm_call", llm_start)
             if not response.choices:
                 logger.warning("curator_empty_response", session_id=session_id)
                 _save_failure_diagnostic(session_id, "empty_response", messages,
@@ -274,7 +283,8 @@ async def _run_curator_native(
                 _save_failure_diagnostic(session_id, "empty_final", messages,
                     total_tool_calls, curated_paths, retained_turn_numbers, iteration)
                 return None, tool_log, "empty_final"
-            return CuratorResult(
+            final_start = time.perf_counter()
+            result = CuratorResult(
                 context_text=content,
                 curated_paths=curated_paths,
                 retained_turn_numbers=retained_turn_numbers,
@@ -285,7 +295,9 @@ async def _run_curator_native(
                 prompt_tokens_used=curator_prompt_tokens,
                 completion_tokens_used=curator_completion_tokens,
                 cached_tokens_used=curator_cached_tokens,
-            ), tool_log, ""
+            )
+            _record_phase_latency("final_emit", final_start)
+            return result, tool_log, ""
 
         if choice.finish_reason == "length":
             logger.warning(
@@ -333,7 +345,12 @@ async def _run_curator_native(
 
             try:
                 handler = TOOL_HANDLERS[tool_name]
+                tool_start = time.perf_counter()
                 result_str = await handler(session_id=session_id, **args)
+                if tool_name in ("get_file", "get_file_lines", "prefetch_file"):
+                    _record_phase_latency("tool_call_fetch", tool_start)
+                elif tool_name in ("select_relevant_turns", "score_file_relevance", "evict_working_set"):
+                    _record_phase_latency("score_evict", tool_start)
                 total_tool_calls += 1
                 proxy_note = ""
                 if tool_name in ("get_file", "get_file_lines", "prefetch_file"):

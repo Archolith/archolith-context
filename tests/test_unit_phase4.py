@@ -238,6 +238,10 @@ class TestGracefulDegradation:
         assert "graph_ready" in data
         assert "active_sessions" in data
         assert "uptime_s" in data
+        assert "curator_phase_latency_ms_p50_by_phase" in data
+        assert "curator_phase_latency_ms_p95_by_phase" in data
+        assert "curator_phase_latency_ms_p99_by_phase" in data
+        assert "curator_phase_latency_samples_by_phase" in data
 
     @pytest.mark.asyncio
     async def test_sessions_endpoint_returns_503_without_neo4j(self, client):
