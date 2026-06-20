@@ -563,6 +563,7 @@ Precedence: `session > config_overrides.json > env > profile > default`. Explici
 - Promotion settings (if wired to long-term memory)
 - Memory engine config (JSON array of engine definitions)
 - Promotion policy defaults (min confidence, dry-run mode)
+- Structured-log PII redaction policy (`log_pii_redaction_level`: `none`, `truncated_32`, `hashed`, or `redacted`)
 - Synthetic tools: enabled, circuit breaker thresholds, file recall limits
 - Native read interception toggle (`native_read_intercept_enabled`) for serving repeated file reads from cache
 - Per-tool extraction toggles (`per_tool_extraction_enabled`, `extractor_llm_concurrency`)

@@ -9,6 +9,7 @@ import httpx
 import structlog
 
 from archolith_proxy.config import get_settings
+from archolith_proxy.compliance import redact_for_log
 from archolith_proxy.extractor.client import extract_facts, extract_facts_per_tool
 from archolith_proxy.graph.backend import get_backend
 from archolith_proxy.metrics import record_metric
@@ -206,7 +207,7 @@ async def _run_extraction(
                 sanitized_goal = sanitize_session_goal(result.session_goal)
                 if sanitized_goal:
                     await get_backend().update_goal(session_id, sanitized_goal)
-                    logger.info("session_goal_updated", session_id=session_id, goal=sanitized_goal[:80])
+                    logger.info("session_goal_updated", session_id=session_id, goal=redact_for_log(sanitized_goal))
                     await broadcast_session_event(session_id, "goal_updated", goal=sanitized_goal)
             except Exception as e:
                 logger.warning("session_goal_update_failed", session_id=session_id, error=str(e))

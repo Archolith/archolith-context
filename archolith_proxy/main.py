@@ -206,6 +206,12 @@ async def lifespan(app: FastAPI):
             msg="Non-loopback HTTP base URLs are enabled by explicit operator opt-in",
         )
 
+    if settings.log_pii_redaction_level != "truncated_32":
+        logger.info(
+            "log_pii_redaction_level_configured",
+            level=settings.log_pii_redaction_level,
+        )
+
     if settings.synthetic_tools_enabled:
         logger.warning(
             "synthetic_tools_deprecated",

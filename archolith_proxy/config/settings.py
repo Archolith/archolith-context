@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from archolith_proxy.config.groups.api import ModelApiGroup, UpstreamGroup
 from archolith_proxy.config.groups.backend import BackendMemoryGroup
+from archolith_proxy.config.groups.compliance import ComplianceGroup
 from archolith_proxy.config.groups.curator import CuratorGroup
 from archolith_proxy.config.groups.proxy import (
     FeatureRuntimeGroup,
@@ -40,6 +41,7 @@ def _is_non_loopback_http_url(value: str) -> bool:
 
 class Settings(
     BaseSettings,
+    ComplianceGroup,
     TerminalGroup,
     CuratorGroup,
     BackendMemoryGroup,
@@ -98,6 +100,17 @@ class Settings(
     @classmethod
     def _parse_cors_origins(cls, v):
         return _parse_string_list(v)
+
+    @field_validator("log_pii_redaction_level")
+    @classmethod
+    def _validate_log_pii_redaction_level(cls, v: str) -> str:
+        allowed = {"none", "truncated_32", "hashed", "redacted"}
+        if v not in allowed:
+            raise ValueError(
+                "log_pii_redaction_level must be one of: "
+                f"{', '.join(sorted(allowed))}"
+            )
+        return v
 
     @field_validator("prefetch_allowed_roots", mode="before")
     @classmethod

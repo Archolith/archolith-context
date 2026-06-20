@@ -20,6 +20,7 @@ SESSION_CONFIG_DENYLIST: frozenset[str] = frozenset({
     "admin_token",
     "ladybug_db_path",
     "archolith_profile",
+    "log_pii_redaction_level",
 })
 
 _SNAPSHOT_EXCLUDE = frozenset({

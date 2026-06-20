@@ -1,5 +1,11 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Structured Log PII Redaction
+
+- **`archolith_proxy/compliance.py` + `archolith_proxy/config/groups/compliance.py`**: Added a setting-driven log redaction wrapper around `archolith_compliance.redact`, defaulting to `truncated_32`.
+- **`archolith_proxy/openai/extraction.py`, `extractor/client.py`**: Redacted structured-log `goal` and extraction parse-error `content` fields without changing stored facts, trace payloads, broadcasts, or extraction prompts.
+- **Docs/config**: Documented `LOG_PII_REDACTION_LEVEL`; startup logs when operators select a non-default redaction level.
+
 ## 2026-06-20 — Benchmark Session Override Removal
 
 - **`archolith_proxy/proxy/session.py`, `trace/router.py`, `openai/chat.py`**: Removed the process-global benchmark session-ID override API and state. Session identity now stays request-scoped via `X-Session-ID`/`x-session-affinity`, including passthrough trace recording.

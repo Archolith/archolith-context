@@ -9,6 +9,7 @@ import httpx
 import structlog
 
 from archolith_proxy.config import get_settings
+from archolith_proxy.compliance import redact_for_log
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord
 from archolith_proxy.extractor.dedup import deduplicate_facts
 from archolith_proxy.extractor.prompts import (
@@ -123,13 +124,13 @@ def _parse_extraction_response(
     if text.startswith("```"):
         lines = text.split("\n")
         # Remove first and last lines (code fences)
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         text = "\n".join(lines)
 
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        logger.warning("extraction_parse_error", content=content[:200])
+        logger.warning("extraction_parse_error", content=redact_for_log(content))
         return ExtractionResult(
             facts=[], files_touched=[], decisions=[],
             invalidated_fact_ids=[], turn_number=turn_number,
