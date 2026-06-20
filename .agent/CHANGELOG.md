@@ -1,5 +1,9 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Live Stream WebSocket Route Coverage
+
+- **Tests**: Added `/ws/stream` route integration coverage for event delivery and overflow close handling.
+
 ## 2026-06-20 — Session Retention And Consent Controls
 
 - **`DELETE /admin/sessions/{session_id}`**: Added an admin deletion path that coordinates graph and trace-store deletion through the shared `archolith_compliance.retention` report contract.
