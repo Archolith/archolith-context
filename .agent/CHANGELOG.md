@@ -5,6 +5,10 @@
 - **`archolith_proxy/config/`**: Converted the oversized `config.py` module into a package with domain field groups, a `Settings` model module, runtime override helpers, profile constants, and path constants.
 - **Compatibility**: Preserved the existing `archolith_proxy.config` import surface, including private helpers used by current tests and admin config code; no settings or defaults changed.
 
+## 2026-06-20 — Chat Module Split
+
+- **`archolith_proxy/openai/chat.py`**: Split passthrough handlers into `chat_passthrough.py` and session overlay helpers into `chat_overlay.py`; `chat.py` re-imports the helper names for compatibility.
+
 ## 2026-06-20 — Outstanding security surface remediation
 
 - **`archolith_proxy/routers/live_router.py`**: `/ws/stream` now follows the approved dedicated boundary: `ADMIN_TOKEN` when configured, otherwise loopback-only unless `WS_ALLOW_ANONYMOUS=true`.

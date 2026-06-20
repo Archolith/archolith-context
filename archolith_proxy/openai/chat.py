@@ -1,11 +1,4 @@
-"""Chat completions endpoint — main orchestrator for OpenAI-compatible proxy.
-
-Routes requests through session resolution, context assembly (curator),
-streaming/non-streaming dispatch, and async extraction.
-
-Heavy logic is delegated to sub-modules: helpers, streaming, non_streaming,
-extraction, file_cache.
-"""
+"""Chat completions endpoint for the OpenAI-compatible proxy."""
 
 from __future__ import annotations
 
@@ -13,25 +6,28 @@ import asyncio
 import json
 import time
 
-import httpx
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 
-from archolith_proxy.config import (
-    SESSION_CONFIG_DENYLIST,
-    build_effective_settings,
-    get_settings,
-    set_session_settings,
-)
+from archolith_proxy.config import get_settings
 from archolith_proxy.curator.pipeline import curate_context
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
 from archolith_proxy.metrics import record_assembly_mode, record_metric
 from archolith_proxy.openai.schemas import ChatCompletionRequest
+from archolith_proxy.openai.chat_overlay import (
+    _apply_session_config_overlay as _apply_session_config_overlay_impl,
+    _clear_session_overlay,
+)
+from archolith_proxy.openai.chat_passthrough import (
+    _estimate_input_tokens,
+    _handle_passthrough_non_stream,
+    _handle_passthrough_stream,
+)
 from archolith_proxy.openai.helpers import (
     _build_call_map,  # noqa: F401 — re-exported for test compatibility
     _collect_tool_call_records,  # noqa: F401 — re-exported for test compatibility
-    _extract_response_text,
+    _extract_response_text,  # noqa: F401 — re-exported for test compatibility
     _extract_user_message,
     _infer_file_touch_statuses,  # noqa: F401 — re-exported for test compatibility
 )
@@ -47,7 +43,6 @@ from archolith_proxy.token_accounting import build_telemetry, extract_client_hin
 from archolith_proxy.openai.errors import make_error_response, UpstreamError
 from archolith_proxy.proxy.live import broadcast_request, broadcast_session_event
 from archolith_proxy.proxy.session import resolve_session
-from archolith_proxy.proxy.upstream import upstream_request_with_retry
 from archolith_proxy.trace.builder import TraceBuilder
 from archolith_proxy.trace.store import get_trace_store
 
@@ -56,209 +51,8 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
-# ── Passthrough helpers ─────────────────────────────────────────────────
-
-
-def _estimate_input_tokens(messages: list[dict]) -> int:
-    """Rough token estimate for input messages."""
-    return sum(len(json.dumps(m)) // 4 for m in messages)
-
-
-async def _handle_passthrough_stream(
-    request: Request, body: dict, req: ChatCompletionRequest,
-    trace_builder: TraceBuilder, background_tasks: BackgroundTasks,
-    settings, request_start: float,
-) -> Response:
-    """Handle streaming passthrough (no context management)."""
-    from archolith_proxy.proxy.streaming import ResponseCapture
-
-    clean_model = req.model[: -len("-passthrough")]
-    body["model"] = clean_model
-    upstream_url = f"{settings.upstream_api_url}/chat/completions"
-    upstream_headers = {
-        "Authorization": f"Bearer {settings.upstream_api_key}",
-        "Content-Type": "application/json",
-    }
-    if req.stream:
-        body.setdefault("stream_options", {})["include_usage"] = True
-    request_body = json.dumps(body).encode("utf-8")
-    t0 = time.monotonic()
-    http_client = request.app.state.http_client
-    pt_capture = ResponseCapture()
-
-    async def _passthrough_stream():
-        try:
-            async with http_client.stream(
-                "POST", upstream_url, headers=upstream_headers,
-                content=request_body,
-                timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0),
-            ) as resp:
-                async for chunk in resp.aiter_bytes():
-                    for line in chunk.decode("utf-8", errors="replace").split("\n"):
-                        line = line.strip()
-                        if line.startswith("data: ") and line != "data: [DONE]":
-                            pt_capture.add_chunk(line[6:])
-                    yield chunk
-        except (httpx.TimeoutException, httpx.ConnectError) as exc:
-            logger.warning("passthrough_stream_error", error=str(exc))
-
-    latency_ms = (time.monotonic() - t0) * 1000
-
-    async def _finalize_passthrough_trace():
-        trace_builder.set_response(
-            status=200, latency_ms=latency_ms,
-            output_tokens=pt_capture.output_tokens,
-            response_summary="(passthrough streaming)",
-            cache_hit_tokens=pt_capture.cache_hit_tokens,
-            cache_miss_tokens=pt_capture.cache_miss_tokens,
-        )
-        trace_builder.finalize_timing(time.monotonic())
-        try:
-            await get_trace_store().record(trace_builder.build())
-        except Exception:
-            pass
-
-    background_tasks.add_task(_finalize_passthrough_trace)
-    return StreamingResponse(
-        _passthrough_stream(), status_code=200,
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-        background=background_tasks,
-    )
-
-
-async def _handle_passthrough_non_stream(
-    request: Request, body: dict, req: ChatCompletionRequest,
-    trace_builder: TraceBuilder, background_tasks: BackgroundTasks,
-    settings, request_start: float,
-) -> Response:
-    """Handle non-streaming passthrough."""
-    clean_model = req.model[: -len("-passthrough")]
-    body["model"] = clean_model
-    upstream_url = f"{settings.upstream_api_url}/chat/completions"
-    upstream_headers = {
-        "Authorization": f"Bearer {settings.upstream_api_key}",
-        "Content-Type": "application/json",
-    }
-    request_body = json.dumps(body).encode("utf-8")
-    t0 = time.monotonic()
-    try:
-        resp = await upstream_request_with_retry(
-            client=request.app.state.http_client, url=upstream_url,
-            headers=upstream_headers, content=request_body,
-            max_retries=settings.upstream_max_retries,
-            backoff_base=settings.upstream_retry_backoff_base_s,
-        )
-    except httpx.TimeoutException:
-        return make_error_response(504, "Upstream request timed out", "upstream_timeout", code="timeout")
-    except httpx.ConnectError as e:
-        return make_error_response(502, f"Upstream connection failed: {e}", "upstream_error")
-
-    latency_ms = (time.monotonic() - t0) * 1000
-    response_data = resp.json() if resp.status_code == 200 else {}
-    usage = response_data.get("usage", {})
-    output_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
-    trace_builder.set_response(
-        status=resp.status_code, latency_ms=latency_ms,
-        output_tokens=output_tokens,
-        response_summary=_extract_response_text(response_data)[:500],
-        cache_hit_tokens=usage.get("prompt_cache_hit_tokens", 0) or 0,
-        cache_miss_tokens=usage.get("prompt_cache_miss_tokens", 0) or 0,
-    )
-    trace_builder.finalize_timing(time.monotonic())
-
-    async def _finalize_trace():
-        try:
-            await get_trace_store().record(trace_builder.build())
-        except Exception:
-            pass
-
-    background_tasks.add_task(_finalize_trace)
-    return Response(
-        content=resp.content, status_code=resp.status_code,
-        media_type="application/json", background=background_tasks,
-    )
-
-
-# ── Per-session config overlay ──────────────────────────────────────────
-
-
-async def _clear_session_overlay():
-    """Request-scoped dependency: clear the per-session settings overlay after the
-    response is sent (including its background tasks) so it never bleeds into the
-    next request sharing this task's context. In production each request runs in
-    its own task (overlay is task-local), but the test client shares a context, so
-    an explicit reset keeps behavior correct in both."""
-    try:
-        yield
-    finally:
-        set_session_settings(None)
-
-
 async def _apply_session_config_overlay(header_value: str | None, session_id: str, settings):
-    """Merge an X-Session-Config header into the session's persisted overrides,
-    persist the merge, and activate the per-session settings overlay.
-
-    Returns the effective settings (the overlay if any overrides apply, else the
-    settings passed in). Denylisted and unknown fields are rejected loudly (logged,
-    not silently dropped) and never persisted. The contextvar is reset by the
-    _clear_session_overlay dependency after the response.
-    """
-    backend = get_backend()
-
-    # 1. Apply an inbound header (launch-with-config or mutate-this-session).
-    if header_value:
-        incoming = None
-        try:
-            parsed = json.loads(header_value)
-            if not isinstance(parsed, dict):
-                raise ValueError("X-Session-Config must be a JSON object")
-            incoming = parsed
-        except (ValueError, json.JSONDecodeError) as e:
-            logger.warning("session_config_header_invalid", session_id=session_id, error=str(e))
-
-        if incoming is not None:
-            denied = sorted(k for k in incoming if k in SESSION_CONFIG_DENYLIST)
-            unknown = sorted(k for k in incoming if k not in SESSION_CONFIG_DENYLIST and not hasattr(settings, k))
-            if denied:
-                logger.warning("session_config_denied_fields", session_id=session_id, fields=denied)
-            if unknown:
-                logger.warning("session_config_unknown_fields", session_id=session_id, fields=unknown)
-
-            existing_json = await backend.get_session_config_overrides(session_id)
-            try:
-                merged = json.loads(existing_json) if existing_json else {}
-                if not isinstance(merged, dict):
-                    merged = {}
-            except (ValueError, json.JSONDecodeError):
-                merged = {}
-            applied = {
-                k: v for k, v in incoming.items()
-                if k not in SESSION_CONFIG_DENYLIST and hasattr(settings, k)
-            }
-            if applied:
-                merged.update(applied)
-                await backend.set_session_config_overrides(session_id, json.dumps(merged))
-                logger.info("session_config_applied", session_id=session_id, fields=sorted(applied))
-
-    # 2. Load the session's effective overrides and activate the overlay.
-    overrides_json = await backend.get_session_config_overrides(session_id)
-    if not overrides_json:
-        return settings
-    try:
-        overrides = json.loads(overrides_json)
-    except (ValueError, json.JSONDecodeError):
-        logger.warning("session_config_load_corrupt", session_id=session_id)
-        return settings
-    if not isinstance(overrides, dict) or not overrides:
-        return settings
-
-    effective = build_effective_settings(overrides)
-    set_session_settings(effective)
-    return effective
-
-
-# ── Main entry point ────────────────────────────────────────────────────
+    return await _apply_session_config_overlay_impl(header_value, session_id, settings, backend_factory=get_backend)
 
 
 @router.post("/chat/completions")
@@ -537,12 +331,6 @@ async def chat_completions(
         trace_builder.set_curator_skip_reason(_curator_skip)
 
     # ── Record final assembly outcome on the trace ──
-    # Without this, normal (non-"-passthrough") requests never called
-    # set_assembly, so the trace always defaulted to mode="passthrough" with
-    # 0 savings — even when agent-solo or the curator compressed heavily. The
-    # only prior set_assembly call lived on the -passthrough branch.
-    # Use the per-block values already computed above (passthrough leaves them at
-    # 0, preserving the existing "passthrough => rewritten_tokens == 0" invariant).
     _comp_ratio = round((input_tokens - savings) / input_tokens, 4) if input_tokens > 0 else 1.0
     trace_builder.set_assembly(
         mode=assembly_mode,
