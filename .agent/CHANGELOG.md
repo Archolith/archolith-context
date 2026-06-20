@@ -1,5 +1,10 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Config Package Split
+
+- **`archolith_proxy/config/`**: Converted the oversized `config.py` module into a package with domain field groups, a `Settings` model module, runtime override helpers, profile constants, and path constants.
+- **Compatibility**: Preserved the existing `archolith_proxy.config` import surface, including private helpers used by current tests and admin config code; no settings or defaults changed.
+
 ## 2026-06-20 — Outstanding security surface remediation
 
 - **`archolith_proxy/routers/live_router.py`**: `/ws/stream` now follows the approved dedicated boundary: `ADMIN_TOKEN` when configured, otherwise loopback-only unless `WS_ALLOW_ANONYMOUS=true`.

@@ -1,0 +1,35 @@
+"""Deployment profile bundles."""
+
+PROFILES: dict[str, dict[str, object]] = {
+    "passthrough": {},
+    "mechanical": {
+        "filter_enabled": True,
+        "agent_solo_shrink_enabled": True,
+        "agent_solo_dedup_enabled": True,
+        "agent_solo_compress_middle_enabled": True,
+        "agent_solo_min_input_tokens": 3000,
+    },
+    "curated": {
+        "filter_enabled": True,
+        "agent_solo_shrink_enabled": True,
+        "agent_solo_dedup_enabled": True,
+        "agent_solo_compress_middle_enabled": True,
+        "agent_solo_min_input_tokens": 3000,
+        "curator_enabled": True,
+        "background_pass_enabled": True,
+        "file_cache_enabled": True,
+    },
+    "full": {
+        "filter_enabled": True,
+        "agent_solo_shrink_enabled": True,
+        "agent_solo_dedup_enabled": True,
+        "agent_solo_compress_middle_enabled": True,
+        "agent_solo_min_input_tokens": 3000,
+        "curator_enabled": True,
+        "background_pass_enabled": True,
+        "file_cache_enabled": True,
+        "embedding_enabled": True,
+        "per_tool_extraction_enabled": True,
+        "session_recall_tool_enabled": True,
+    },
+}
