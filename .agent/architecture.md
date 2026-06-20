@@ -583,8 +583,10 @@ response via a request-scoped dependency. Async follow-up work (extraction, the
 curator background pass spawned with `asyncio.create_task`) inherits the overlay
 through context copying. Because that endpoint is unauthenticated, `SESSION_CONFIG_DENYLIST`
 blocks per-session override of secrets/infra (upstream/extractor/curator/embedding/memory
-URLs + keys, `admin_token`, `ladybug_db_path`); denied and unknown fields are rejected
-loudly (logged) and never persisted. Set/get/reset helpers: `set_session_settings`,
+URLs + keys, `admin_token`, `ladybug_db_path`) and security/behavior toggles
+(`curator_enabled`, `filter_enabled`, `native_read_intercept_enabled`,
+`synthetic_tools_enabled`, `drop_middle_on_assembly`); denied and unknown fields
+are rejected loudly (logged) and never persisted. Set/get/reset helpers: `set_session_settings`,
 `reset_session_settings`, graph `set_session_config_overrides` / `get_session_config_overrides`.
 
 **Token accounting (`archolith_proxy/token_accounting/`).** The assembly gate keys
@@ -720,7 +722,7 @@ When running without a durable memory backend such as `menhir`, long-term memory
 # Upstream API (what the proxy forwards to)
 UPSTREAM_BASE_URL=https://api.openai.com/v1
 UPSTREAM_API_KEY=sk-...
-ALLOW_INSECURE_UPSTREAM_HTTP=false # true only for intentional non-loopback http:// upstreams
+ALLOW_INSECURE_UPSTREAM_URL=false # true only for intentional non-loopback http:// base URLs
 
 # Extraction model
 EXTRACTOR_BASE_URL=https://api.openai.com/v1
@@ -746,7 +748,7 @@ SESSION_NEO4J_PASSWORD=...
 # Proxy settings
 PROXY_PORT=9800
 PROXY_HOST=127.0.0.1
-CORS_ALLOWED_ORIGINS= # empty = loopback origins for PROXY_PORT
+CORS_ALLOWED_ORIGINS= # empty = localhost/127.0.0.1/[::1] origins via regex; ["*"] is explicit legacy opt-in
 COHERENCE_TAIL_SIZE=10
 MAX_TAIL_MESSAGES=20
 CONTEXT_TOKEN_BUDGET=15000
@@ -757,6 +759,9 @@ COLD_START_TOKEN_THRESHOLD=20000
 # File content cache
 FILE_CACHE_ENABLED=true
 FILE_CACHE_MAX_FILE_BYTES=500000  # skip caching files larger than this
+PREFETCH_ALLOWED_ROOTS=
+PREFETCH_RESTRICT_TO_WORKSPACE=true
+I_ACCEPT_UNRESTRICTED_FS_RISK=false
 
 # Context Manager LLM (curator)
 CURATOR_ENABLED=false             # disabled by default; enable to activate LLM-driven assembly
@@ -809,6 +814,7 @@ PROMOTION_ENABLED=false
 MEMORY_ENGINES_JSON=[{"id":"menhir","type":"cth_mcp_memory","enabled":true,"priority":10,"base_url":"http://localhost:8200","api_key_env":"MEMORY_API_KEY"}]
 PROMOTION_MIN_CONFIDENCE=0.9
 PROMOTION_DRY_RUN=false
+WS_ALLOW_ANONYMOUS=false              # legacy opt-in; otherwise /ws/stream needs ADMIN_TOKEN or loopback
 ```
 
 ## Observability (Phase 4)
@@ -838,7 +844,7 @@ PROMOTION_DRY_RUN=false
 | `GET /promotions` | Promotion history and stats |
 | `POST /promotions/retry/{id}` | Retry a failed promotion |
 | `GET /dashboard/` | Web dashboard (single-page HTML, zero build step) with per-turn RTK strategy savings, proxy-recall annotations, and curator proxy-note visibility |
-| `GET /ws/stream` | WebSocket live event stream; same admin boundary as REST operator endpoints (`ADMIN_TOKEN` when set, otherwise loopback-only unless explicitly opened) |
+| `GET /ws/stream` | WebSocket live event stream; `ADMIN_TOKEN` when set, otherwise loopback-only unless `WS_ALLOW_ANONYMOUS=true` explicitly opens the legacy feed |
 
 Metrics are in-memory (`_metrics` dict surfaced via `archolith_proxy/metrics.py`), reset on process restart. Prometheus-compatible OpenMetrics format is a future goal.
 

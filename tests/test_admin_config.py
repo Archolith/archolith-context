@@ -86,10 +86,9 @@ async def test_update_config_rejects_deprecated_synthetic_tools_toggle(client):
         "/admin/config",
         json={"synthetic_tools_enabled": True},
     )
-    assert response.status_code == 200
+    assert response.status_code == 422
     data = response.json()
-    assert "synthetic_tools_enabled" not in data["updated"]
-    assert data["rejected"]["synthetic_tools_enabled"] == "not a tunable field"
+    assert "synthetic_tools_enabled is denylisted" in data["detail"]
 
 
 @pytest.mark.asyncio

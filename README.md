@@ -45,6 +45,10 @@ archolith-proxy
 # Point any OpenAI-compatible client at http://localhost:9800/v1
 ```
 
+By default the proxy binds to `127.0.0.1`. Docker, VM, or LAN deployments that
+need network exposure must set `PROXY_HOST=0.0.0.0` explicitly and should also
+set `ADMIN_TOKEN` for operator endpoints.
+
 ## Documentation
 
 | File | Purpose |

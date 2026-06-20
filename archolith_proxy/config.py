@@ -46,10 +46,12 @@ SESSION_CONFIG_DENYLIST: frozenset[str] = frozenset({
     "curator_enabled",
     "curator_base_url",
     "curator_api_key",
+    "native_read_intercept_enabled",
     "embedding_base_url",
     "embedding_api_key",
     "filter_enabled",
     "synthetic_tools_enabled",
+    "drop_middle_on_assembly",
     "memory_api_url",
     "memory_api_key",
     "admin_token",
@@ -108,17 +110,34 @@ _base_values: dict[str, object] = {}
 _settings_lock = threading.Lock()
 
 
+def _is_loopback_host(host: str | None) -> bool:
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_non_loopback_http_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme == "http" and not _is_loopback_host(parsed.hostname)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
+        enable_decoding=False,
     )
 
     # Upstream API
     upstream_base_url: str = "https://api.deepseek.com/v1"
     upstream_api_key: str = ""
-    allow_insecure_upstream_http: bool = False
+    allow_insecure_upstream_url: bool = False
 
     # Extraction model
     extractor_base_url: str = "https://api.openai.com/v1"
@@ -139,7 +158,7 @@ class Settings(BaseSettings):
     # Proxy settings
     proxy_port: int = 9800
     proxy_host: str = "127.0.0.1"
-    cors_allowed_origins: str = ""
+    cors_allowed_origins: list[str] = []
     coherence_tail_size: int = 10
     max_tail_messages: int = 20
     context_token_budget: int = 15000
@@ -253,6 +272,7 @@ class Settings(BaseSettings):
     # Comma-separated directory prefixes the curator LLM may read.
     # Empty list = unrestricted (backward compat).
     prefetch_allowed_roots: list[str] = []
+    i_accept_unrestricted_fs_risk: bool = False
 
     # When prefetch_allowed_roots is empty, restrict prefetch_file to the
     # session's working_directory (resolved from harness_env metadata) instead
@@ -442,6 +462,7 @@ class Settings(BaseSettings):
     # When empty (default), admin endpoints are open (localhost-only assumption).
     # When set, all operator endpoints require X-Admin-Token or Authorization: Bearer matching this value.
     admin_token: str = ""
+    ws_allow_anonymous: bool = False
     # Escape hatch: when True, an empty admin_token leaves admin endpoints open
     # even to non-loopback peers. Default False — empty token is loopback-only.
     admin_allow_open_nonlocal: bool = False
@@ -459,23 +480,25 @@ class Settings(BaseSettings):
         return self.upstream_base_url.rstrip("/")
 
     @property
-    def cors_origin_list(self) -> list[str]:
-        """Allowed browser origins for CORS.
+    def cors_origin_regex(self) -> str:
+        """Default loopback browser origins allowed when no explicit list is set."""
+        return r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?"
 
-        Empty config resolves to loopback dashboard origins for the active port.
-        Use a comma-separated CORS_ALLOWED_ORIGINS value to add deployment-specific
-        browser clients.
-        """
-        if not self.cors_allowed_origins.strip():
-            return [
-                f"http://127.0.0.1:{self.proxy_port}",
-                f"http://localhost:{self.proxy_port}",
-            ]
-        return [
-            origin.strip()
-            for origin in self.cors_allowed_origins.split(",")
-            if origin.strip()
-        ]
+    @property
+    def insecure_http_base_urls(self) -> list[str]:
+        """Configured non-loopback HTTP base URLs that require explicit opt-in."""
+        insecure = []
+        for name in (
+            "upstream_base_url",
+            "extractor_base_url",
+            "embedding_base_url",
+            "curator_base_url",
+            "prepper_base_url",
+        ):
+            value = getattr(self, name, "")
+            if value and _is_non_loopback_http_url(value):
+                insecure.append(name)
+        return insecure
 
     @field_validator("upstream_api_key")
     @classmethod
@@ -488,32 +511,63 @@ class Settings(BaseSettings):
             )
         return v
 
-    @field_validator("upstream_base_url")
+    @field_validator("cors_allowed_origins", mode="before")
     @classmethod
-    def _validate_upstream_url(cls, v: str) -> str:
+    def _parse_cors_origins(cls, v):
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            if v.strip().startswith("["):
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [str(origin).strip() for origin in parsed if str(origin).strip()]
+                except json.JSONDecodeError:
+                    pass
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
+
+    @field_validator("prefetch_allowed_roots", mode="before")
+    @classmethod
+    def _parse_prefetch_allowed_roots(cls, v):
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            if v.strip().startswith("["):
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [str(root).strip() for root in parsed if str(root).strip()]
+                except json.JSONDecodeError:
+                    pass
+            return [root.strip() for root in v.split(",") if root.strip()]
+        return v
+
+    @field_validator(
+        "upstream_base_url",
+        "extractor_base_url",
+        "embedding_base_url",
+        "curator_base_url",
+        "prepper_base_url",
+    )
+    @classmethod
+    def _validate_base_url(cls, v: str) -> str:
+        if not v:
+            return v
         if not v.startswith(("http://", "https://")):
-            raise ValueError(f"UPSTREAM_BASE_URL must start with http:// or https://, got: {v}")
+            raise ValueError(f"Base URLs must start with http:// or https://, got: {v}")
         return v
 
     @model_validator(mode="after")
-    def _validate_plaintext_upstream(self) -> "Settings":
-        parsed = urlparse(self.upstream_base_url)
-        if parsed.scheme != "http" or self.allow_insecure_upstream_http:
+    def _validate_plaintext_base_urls(self) -> "Settings":
+        insecure = self.insecure_http_base_urls
+        if not insecure or self.allow_insecure_upstream_url:
             return self
-
-        host = parsed.hostname or ""
-        if host == "localhost":
-            return self
-        try:
-            if ipaddress.ip_address(host).is_loopback:
-                return self
-        except ValueError:
-            pass
 
         raise ValueError(
-            "UPSTREAM_BASE_URL uses plaintext http for a non-loopback host. "
-            "Use https://, point to localhost/127.0.0.1, or set "
-            "ALLOW_INSECURE_UPSTREAM_HTTP=true to opt into sending the upstream key over plaintext HTTP."
+            "Base URL setting(s) use plaintext http for a non-loopback host: "
+            f"{', '.join(insecure)}. Use https://, point to localhost/127.0.0.1/::1, "
+            "or set ALLOW_INSECURE_UPSTREAM_URL=true to opt into sending API keys over plaintext HTTP."
         )
 
     @field_validator("proxy_port")

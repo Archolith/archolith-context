@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import time
 from contextlib import asynccontextmanager
@@ -36,6 +37,17 @@ from archolith_proxy.trace.store import get_trace_store
 configure_logging()
 
 logger = structlog.get_logger()
+
+
+def _is_loopback_name_or_address(host: str | None) -> bool:
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _load_memory_engines(settings, registry) -> None:
@@ -179,6 +191,49 @@ async def lifespan(app: FastAPI):
                 "ADMIN_TOKEN is empty — admin endpoints are open to any loopback process. "
                 "Set ADMIN_TOKEN for shared machines or network-exposed deployments."
             ),
+        )
+
+    if settings.ws_allow_anonymous:
+        logger.warning("ws_anonymous_enabled", msg="WS /ws/stream is open to any peer")
+
+    if settings.cors_allowed_origins == ["*"]:
+        logger.warning("cors_wildcard_enabled", msg='CORS allows all origins because cors_allowed_origins=["*"]')
+
+    if settings.insecure_http_base_urls:
+        logger.warning(
+            "insecure_upstream_urls_enabled",
+            urls=settings.insecure_http_base_urls,
+            msg="Non-loopback HTTP base URLs are enabled by explicit operator opt-in",
+        )
+
+    if settings.synthetic_tools_enabled:
+        logger.warning(
+            "synthetic_tools_deprecated",
+            msg=(
+                "synthetic_tools_enabled is deprecated since 2026-05-25 production incident. "
+                "Will be removed in a future version. native_read_intercept is unavailable while this is on."
+            ),
+        )
+
+    if not _is_loopback_name_or_address(settings.proxy_host) and not settings.admin_token:
+        logger.warning(
+            "proxy_bind_non_loopback_unauthenticated",
+            msg=(
+                "PROXY_HOST=0.0.0.0 exposes /v1/chat/completions to any network peer; "
+                "set ADMIN_TOKEN or restrict PROXY_HOST to loopback"
+            ),
+        )
+
+    if (
+        settings.curator_enabled
+        and not settings.prefetch_restrict_to_workspace
+        and not settings.prefetch_allowed_roots
+        and not settings.i_accept_unrestricted_fs_risk
+    ):
+        raise RuntimeError(
+            "Refusing to start with CURATOR_ENABLED=true, PREFETCH_RESTRICT_TO_WORKSPACE=false, "
+            "and PREFETCH_ALLOWED_ROOTS empty. Set PREFETCH_ALLOWED_ROOTS, set "
+            "PREFETCH_RESTRICT_TO_WORKSPACE=true, or set I_ACCEPT_UNRESTRICTED_FS_RISK=true."
         )
 
     # Log active profile with resolved flag bundle for operator clarity
@@ -500,7 +555,8 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origin_list,
+        allow_origins=settings.cors_allowed_origins,
+        allow_origin_regex=None if settings.cors_allowed_origins else settings.cors_origin_regex,
         allow_methods=["*"],
         allow_headers=["*"],
     )

@@ -2,11 +2,14 @@
 
 ## 2026-06-20 — Outstanding security surface remediation
 
-- **`archolith_proxy/routers/live_router.py`**: `/ws/stream` now uses the same admin boundary as REST operator endpoints: `ADMIN_TOKEN` when configured, otherwise loopback-only unless `ADMIN_ALLOW_OPEN_NONLOCAL=true`.
-- **`archolith_proxy/config.py` / `main.py`**: Default CLI bind host is now `127.0.0.1` via `PROXY_HOST`; CORS defaults to loopback dashboard origins via `CORS_ALLOWED_ORIGINS`; remote plaintext `UPSTREAM_BASE_URL=http://...` is rejected unless `ALLOW_INSECURE_UPSTREAM_HTTP=true`.
-- **`archolith_proxy/config.py` / `routers/admin_router.py`**: `curator_enabled`, `filter_enabled`, and deprecated `synthetic_tools_enabled` are blocked from unauthenticated per-session overrides; `synthetic_tools_enabled` is no longer admin-runtime tunable.
-- **`archolith_proxy/session_goal.py`**: Added storage-boundary session-goal sanitization and wired it into initial goal creation plus extraction-driven goal updates.
-- **Tests/docs**: Added targeted regressions for WebSocket auth, config denylist/runtime tunables, upstream URL validation, CORS defaults, and goal sanitization. Updated `.env.example` and architecture docs for the new operator defaults.
+- **`archolith_proxy/routers/live_router.py`**: `/ws/stream` now follows the approved dedicated boundary: `ADMIN_TOKEN` when configured, otherwise loopback-only unless `WS_ALLOW_ANONYMOUS=true`.
+- **`archolith_proxy/config.py` / `main.py`**: Default CLI bind host is `127.0.0.1` via `PROXY_HOST`; non-loopback binds without `ADMIN_TOKEN` warn at startup; CORS defaults to a loopback-origin regex unless `cors_allowed_origins` is explicitly set; `["*"]` is a warning-backed legacy opt-in.
+- **`archolith_proxy/config.py` / `main.py`**: Non-loopback plaintext HTTP is rejected for `upstream_base_url`, `extractor_base_url`, `embedding_base_url`, `curator_base_url`, and `prepper_base_url` unless `ALLOW_INSECURE_UPSTREAM_URL=true`; explicit opt-in logs the insecure setting names.
+- **`archolith_proxy/config.py` / `main.py`**: Startup refuses `curator_enabled=true` with unrestricted prefetch filesystem access unless `I_ACCEPT_UNRESTRICTED_FS_RISK=true` is set.
+- **`archolith_proxy/config.py` / `routers/admin_router.py`**: `curator_enabled`, `filter_enabled`, `native_read_intercept_enabled`, `synthetic_tools_enabled`, and `drop_middle_on_assembly` are blocked from unauthenticated per-session overrides; `synthetic_tools_enabled` is no longer admin-runtime tunable and returns 422 if patched.
+- **`archolith_proxy/openai/chat.py`, `curator/briefing.py`, `extractor/prompts.py`, `session_goal.py`**: Cold-start goal creation from the first user message is removed. Extraction-driven goal updates are sanitized on storage, and stored goals are quoted as data in curator/extractor prompts.
+- **Tests/docs**: Added targeted regressions for WebSocket auth, config denylist/runtime tunables, URL validation, CORS middleware behavior, prefetch focus-path allowlists, and goal prompt framing. Updated `.env.example`, README, architecture, and data-model docs for the operator defaults.
+- **Sequencing note**: This is a forward correction to the current security-hardening changes. The approved Wave A refactors (`config.py` package split and `chat.py` split) are still outstanding.
 
 ## 2026-06-11 — Helper-cost telemetry review closure
 

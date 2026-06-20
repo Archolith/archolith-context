@@ -6,7 +6,7 @@ import os
 import signal
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 
 from archolith_proxy.admin import require_admin_token
 from archolith_proxy.config import _write_overrides, get_settings, get_settings_delta
@@ -88,6 +88,14 @@ async def update_config(
     updated = {}
     rejected = {}
     for key, value in body.items():
+        if key == "synthetic_tools_enabled":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "synthetic_tools_enabled is denylisted from runtime admin config; "
+                    "set SYNTHETIC_TOOLS_ENABLED in the environment for the deprecated escape hatch"
+                ),
+            )
         if key not in TUNABLE_FIELDS:
             rejected[key] = "not a tunable field"
             continue

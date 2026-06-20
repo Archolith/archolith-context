@@ -19,15 +19,15 @@ def _ws(host: str | None, query: str = "", headers: dict[str, str] | None = None
 
 
 def test_empty_admin_token_allows_loopback_websocket():
-    assert _websocket_authorized(_ws("127.0.0.1"), admin_token="", allow_open_nonlocal=False) is True
+    assert _websocket_authorized(_ws("127.0.0.1"), admin_token="", ws_allow_anonymous=False) is True
 
 
 def test_empty_admin_token_rejects_non_loopback_websocket():
-    assert _websocket_authorized(_ws("203.0.113.7"), admin_token="", allow_open_nonlocal=False) is False
+    assert _websocket_authorized(_ws("203.0.113.7"), admin_token="", ws_allow_anonymous=False) is False
 
 
-def test_empty_admin_token_escape_hatch_allows_non_loopback_websocket():
-    assert _websocket_authorized(_ws("203.0.113.7"), admin_token="", allow_open_nonlocal=True) is True
+def test_ws_allow_anonymous_allows_non_loopback_websocket():
+    assert _websocket_authorized(_ws("203.0.113.7"), admin_token="", ws_allow_anonymous=True) is True
 
 
 def test_admin_token_accepts_query_token():

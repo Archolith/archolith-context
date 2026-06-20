@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import sys
 import types
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -124,6 +123,48 @@ class TestPrefetchWorkspaceRestriction:
         # Should be blocked
         assert "(blocked:" in result
         assert "outside allowed workspace roots" in result
+
+    @pytest.mark.asyncio
+    async def test_focus_path_honors_allowed_roots(self, tmp_path):
+        """The focus= branch must not bypass workspace allowlist enforcement."""
+        workspace_dir = tmp_path / "workspace"
+        workspace_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+
+        test_file = outside_dir / "test.py"
+        test_file.write_text(
+            "def auth_handler():\n"
+            "    return 'secret'\n",
+            encoding="utf-8",
+        )
+
+        mock_trace_store = AsyncMock()
+        mock_trace_store.get_session_metadata = AsyncMock(
+            return_value={"working_directory": str(workspace_dir), "workspace_root": None}
+        )
+
+        mock_backend = AsyncMock()
+        mock_backend.list_cached_files = AsyncMock(return_value=[])
+        mock_backend.upsert_file_content = AsyncMock()
+        mock_backend.upsert_file_outline = AsyncMock()
+
+        mock_settings = MagicMock()
+        mock_settings.prefetch_allowed_roots = []
+        mock_settings.prefetch_restrict_to_workspace = True
+        mock_settings.file_cache_max_file_bytes = 500_000
+
+        with (
+            patch("archolith_proxy.trace.store.get_trace_store", return_value=mock_trace_store),
+            patch("archolith_proxy.curator.tools.get_backend", return_value=mock_backend),
+            patch("archolith_proxy.config.get_settings", return_value=mock_settings),
+        ):
+            result = await prefetch_file("session-1", path=str(test_file), focus="auth handler")
+
+        assert "(blocked:" in result
+        assert "outside allowed workspace roots" in result
+        mock_backend.upsert_file_content.assert_not_called()
+        mock_backend.upsert_file_outline.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_harness_env_deny(self, tmp_path):

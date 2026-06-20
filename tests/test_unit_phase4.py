@@ -30,37 +30,64 @@ class TestConfigValidation:
         s = Settings(upstream_base_url="http://localhost:8080/v1", _env_file=None)
         assert s.upstream_base_url == "http://localhost:8080/v1"
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:8080/v1",
+            "http://127.0.0.1:8080/v1",
+            "http://[::1]:8080/v1",
+        ],
+    )
+    def test_http_loopback_base_urls_are_allowed(self, url):
+        """http:// loopback URLs are accepted without the insecure opt-in."""
+        s = Settings(upstream_base_url=url, _env_file=None)
+        assert s.upstream_base_url == url
+
     def test_remote_http_upstream_url_rejected_by_default(self):
         """Plaintext remote upstreams are rejected unless explicitly opted in."""
         with pytest.raises(Exception):
             Settings(upstream_base_url="http://api.example.test/v1", _env_file=None)
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "upstream_base_url",
+            "extractor_base_url",
+            "embedding_base_url",
+            "curator_base_url",
+            "prepper_base_url",
+        ],
+    )
+    def test_remote_http_base_urls_rejected_by_default(self, field):
+        """Plaintext remote URLs are rejected for every API-bearing base URL."""
+        with pytest.raises(Exception):
+            Settings(**{field: "http://api.example.test/v1"}, _env_file=None)
+
     def test_remote_http_upstream_url_escape_hatch(self):
         """Operators can explicitly opt into plaintext HTTP for non-loopback upstreams."""
         s = Settings(
             upstream_base_url="http://api.example.test/v1",
-            allow_insecure_upstream_http=True,
+            allow_insecure_upstream_url=True,
             _env_file=None,
         )
         assert s.upstream_base_url == "http://api.example.test/v1"
+        assert s.insecure_http_base_urls == ["upstream_base_url"]
 
     def test_valid_https_upstream_url(self):
         """https:// URL should be accepted."""
         s = Settings(upstream_base_url="https://api.openai.com/v1", _env_file=None)
         assert s.upstream_base_url == "https://api.openai.com/v1"
 
-    def test_default_cors_origins_are_loopback(self):
-        """Default CORS origins are limited to loopback dashboard origins."""
+    def test_default_cors_uses_loopback_regex(self):
+        """Default CORS accepts loopback origins via regex, not wildcard."""
         s = Settings(_env_file=None)
-        assert s.cors_origin_list == [
-            "http://127.0.0.1:9800",
-            "http://localhost:9800",
-        ]
+        assert s.cors_allowed_origins == []
+        assert "localhost" in s.cors_origin_regex
 
-    def test_configured_cors_origins_are_split(self):
+    def test_configured_cors_origins_accept_legacy_comma_string(self):
         """CORS_ALLOWED_ORIGINS accepts a comma-separated deployment allowlist."""
         s = Settings(cors_allowed_origins="https://example.test, http://127.0.0.1:3000", _env_file=None)
-        assert s.cors_origin_list == ["https://example.test", "http://127.0.0.1:3000"]
+        assert s.cors_allowed_origins == ["https://example.test", "http://127.0.0.1:3000"]
 
     def test_invalid_port_raises(self):
         """Port out of range should raise validation error."""
@@ -245,6 +272,27 @@ class TestGracefulDegradation:
         # in the request logging middleware itself.
         # Status code may vary: 500 (internal), or the middleware might catch it.
         assert resp.status_code >= 400
+
+
+class TestStartupValidation:
+    """Startup validation for unsafe operator configurations."""
+
+    @pytest.mark.asyncio
+    async def test_curator_unrestricted_filesystem_requires_explicit_risk_acceptance(self, monkeypatch):
+        """Curator cannot start with unrestricted filesystem access by accident."""
+        from archolith_proxy.config import reset_settings
+        from archolith_proxy.main import create_app
+
+        reset_settings()
+        monkeypatch.setenv("CURATOR_ENABLED", "true")
+        monkeypatch.setenv("PREFETCH_RESTRICT_TO_WORKSPACE", "false")
+        monkeypatch.setenv("PREFETCH_ALLOWED_ROOTS", "")
+        monkeypatch.setenv("I_ACCEPT_UNRESTRICTED_FS_RISK", "false")
+
+        app = create_app()
+        with pytest.raises(RuntimeError, match="Refusing to start"):
+            async with app.router.lifespan_context(app):
+                pass
 
 
 class TestTokenEstimation:

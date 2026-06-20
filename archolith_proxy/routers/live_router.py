@@ -15,11 +15,12 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
-def _websocket_authorized(websocket: WebSocket, admin_token: str, allow_open_nonlocal: bool) -> bool:
+def _websocket_authorized(websocket: WebSocket, admin_token: str, ws_allow_anonymous: bool) -> bool:
     """Apply the admin boundary rules to the live-stream WebSocket handshake."""
+    if ws_allow_anonymous:
+        return True
+
     if not admin_token:
-        if allow_open_nonlocal:
-            return True
         client_host = websocket.client.host if websocket.client else None
         return _is_loopback(client_host)
 
@@ -46,18 +47,20 @@ async def ws_live_stream(websocket: WebSocket) -> None:
     response, extraction, and recall event that flows through the proxy.
     Slow clients are disconnected after 256 queued events.
 
-    Uses the same admin boundary as REST operator surfaces: when ADMIN_TOKEN is
-    empty, only loopback clients are allowed unless ADMIN_ALLOW_OPEN_NONLOCAL is
-    set; when ADMIN_TOKEN is set, clients must provide it via query param
-    ?token=<value>, X-Admin-Token, or Authorization: Bearer.
+    Uses an explicit live-stream boundary: WS_ALLOW_ANONYMOUS=true preserves the
+    legacy open feed; otherwise ADMIN_TOKEN is enforced when set, and empty-token
+    local development is loopback-only.
     """
     settings = get_settings()
     if not _websocket_authorized(
         websocket,
         admin_token=settings.admin_token,
-        allow_open_nonlocal=settings.admin_allow_open_nonlocal,
+        ws_allow_anonymous=settings.ws_allow_anonymous,
     ):
-        await websocket.close(code=4001, reason="Admin token required")
+        await websocket.close(
+            code=4001,
+            reason="non-loopback access requires ADMIN_TOKEN or ws_allow_anonymous=True",
+        )
         return
 
     await websocket.accept()

@@ -52,15 +52,21 @@ def test_build_effective_settings_denylist_blocks_security_toggles():
     assert "curator_enabled" in SESSION_CONFIG_DENYLIST
     assert "filter_enabled" in SESSION_CONFIG_DENYLIST
     assert "synthetic_tools_enabled" in SESSION_CONFIG_DENYLIST
+    assert "native_read_intercept_enabled" in SESSION_CONFIG_DENYLIST
+    assert "drop_middle_on_assembly" in SESSION_CONFIG_DENYLIST
     base = get_settings()
     eff = build_effective_settings({
         "curator_enabled": not base.curator_enabled,
         "filter_enabled": not base.filter_enabled,
         "synthetic_tools_enabled": not base.synthetic_tools_enabled,
+        "native_read_intercept_enabled": not base.native_read_intercept_enabled,
+        "drop_middle_on_assembly": not base.drop_middle_on_assembly,
     })
     assert eff.curator_enabled == base.curator_enabled
     assert eff.filter_enabled == base.filter_enabled
     assert eff.synthetic_tools_enabled == base.synthetic_tools_enabled
+    assert eff.native_read_intercept_enabled == base.native_read_intercept_enabled
+    assert eff.drop_middle_on_assembly == base.drop_middle_on_assembly
 
 
 def test_build_effective_settings_ignores_unknown_field():
