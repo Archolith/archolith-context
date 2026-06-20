@@ -24,6 +24,7 @@ from pathlib import Path
 
 import structlog
 
+from archolith_proxy.compliance import trace_recording_allowed
 from archolith_proxy.models.dtos import BackgroundPassTrace, SessionTraceSummary, TurnTrace
 
 logger = structlog.get_logger()
@@ -109,6 +110,9 @@ class TraceStore:
         Evicts oldest turns if the session exceeds the per-session limit.
         If disk persistence is enabled, appends the trace as JSONL.
         """
+        if not trace_recording_allowed():
+            return
+
         async with self._lock:
             session_id = trace.session_id or "__no_session__"
             turn_list = self._by_session[session_id]
@@ -161,10 +165,61 @@ class TraceStore:
         self._bg_passes.pop(session_id, None)
         self._session_meta.pop(session_id, None)
 
+    def _trace_file_path(self, session_id: str) -> Path | None:
+        if not self._trace_dir:
+            return None
+        safe_session = session_id.replace("/", "_").replace("\\", "_")
+        return self._trace_dir / f"{safe_session}.jsonl"
+
+    async def session_storage_summary(self, session_id: str) -> dict:
+        """Return which trace-store locations currently hold data for a session."""
+        async with self._lock:
+            turn_count = len(self._by_session.get(session_id, []))
+            bg_pass_count = len(self._bg_passes.get(session_id, []))
+            metadata_keys = sorted(self._session_meta.get(session_id, {}).keys())
+
+        trace_file = self._trace_file_path(session_id)
+        trace_file_exists = bool(trace_file and trace_file.exists())
+        trace_file_bytes = trace_file.stat().st_size if trace_file_exists and trace_file else 0
+        return {
+            "present": bool(turn_count or bg_pass_count or metadata_keys or trace_file_exists),
+            "turns": turn_count,
+            "background_passes": bg_pass_count,
+            "metadata_keys": metadata_keys,
+            "jsonl_file": str(trace_file) if trace_file else "",
+            "jsonl_file_exists": trace_file_exists,
+            "jsonl_file_bytes": trace_file_bytes,
+        }
+
+    async def delete_session_data(self, session_id: str) -> dict:
+        """Delete all trace-store data for a session."""
+        async with self._lock:
+            turns_deleted = len(self._by_session.get(session_id, []))
+            bg_passes_deleted = len(self._bg_passes.get(session_id, []))
+            metadata_deleted = bool(self._session_meta.get(session_id))
+            self._drop_session_state(session_id)
+            self._session_order.pop(session_id, None)
+
+        trace_file = self._trace_file_path(session_id)
+        trace_file_deleted = False
+        if trace_file and trace_file.exists():
+            trace_file.unlink()
+            trace_file_deleted = True
+
+        return {
+            "turns_deleted": turns_deleted,
+            "background_passes_deleted": bg_passes_deleted,
+            "metadata_deleted": metadata_deleted,
+            "jsonl_file_deleted": trace_file_deleted,
+        }
+
     async def set_session_metadata(
         self, session_id: str, key: str, value: object,
     ) -> None:
         """Store per-session metadata (e.g. harness_env)."""
+        if not trace_recording_allowed():
+            return
+
         async with self._lock:
             meta = self._session_meta.setdefault(session_id, {})
             meta[key] = value
@@ -191,6 +246,9 @@ class TraceStore:
 
         Persists to disk as JSONL with record_type="bg_pass" discriminator.
         """
+        if not trace_recording_allowed():
+            return
+
         session_id = trace.session_id or "__no_session__"
         async with self._lock:
             bg_list = self._bg_passes[session_id]

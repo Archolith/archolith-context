@@ -71,7 +71,7 @@ class Neo4jBackend:
             # Session CRUD
             "create_session", "find_session_by_id", "find_session_by_fingerprint",
             "find_or_create_by_fingerprint", "touch_session", "get_turn_number",
-            "update_goal", "list_active_sessions", "get_session_stats",
+            "update_goal", "list_active_sessions", "get_session_stats", "delete_session_data",
             # Fact CRUD
             "store_fact", "store_facts_batch", "invalidate_facts",
             "find_matching_fact_ids", "get_active_facts", "get_active_fact_count",
@@ -338,6 +338,9 @@ class Neo4jBackend:
 
     async def delete_expired_sessions(self) -> int:
         return await _cleanup.delete_expired_sessions()
+
+    async def delete_session_data(self, session_id: str) -> dict:
+        return await _cleanup.delete_session_data(session_id)
 
 
 # Verify the adapter implements the protocol at import time

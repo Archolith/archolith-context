@@ -10,6 +10,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import Response
 
+from archolith_proxy.compliance import apply_session_consent
 from archolith_proxy.config import get_settings
 from archolith_proxy.curator.pipeline import curate_context
 from archolith_proxy.graph.backend import get_backend, is_graph_ready
@@ -81,6 +82,8 @@ async def chat_completions(
 
     if not req.messages:
         return make_error_response(400, "Messages array must not be empty", "invalid_request_error", param="messages")
+
+    apply_session_consent(request.headers)
 
     # ── Passthrough mode ──
     _PASSTHROUGH_SUFFIX = "-passthrough"

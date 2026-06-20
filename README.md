@@ -65,6 +65,20 @@ The proxy intercepts `POST /v1/chat/completions`, classifies each turn (user vs 
 
 See [.agent/architecture.md](.agent/architecture.md) for the full data flow diagram and component breakdown.
 
+## Data Processing And Retention
+
+archolith-context processes chat-completion requests to provide proxying, session tracing, context assembly,
+file-cache recall, and extraction of session facts for long-context research. By default, processing is based on
+the operator's legitimate interest in debugging and improving local agent workflows. Operators that need explicit
+session consent can set `SESSION_CONSENT_REQUIRED=true`; trace-store writes then require the request header
+`X-Session-Consent: opt-in`.
+
+Retention defaults are conservative but local: graph sessions expire after `SESSION_TTL_HOURS=24`, while JSONL
+trace retention is disabled unless `TRACE_RETENTION_DAYS` is set. Operators can inspect stored data with
+`GET /admin/sessions/{session_id}/stored` and delete known graph and trace-store data for a session with
+`DELETE /admin/sessions/{session_id}`. Structured logs redact sensitive text according to
+`LOG_PII_REDACTION_LEVEL` (`truncated_32` by default).
+
 ## License
 
 Source-available under the PolyForm Noncommercial License 1.0.0.

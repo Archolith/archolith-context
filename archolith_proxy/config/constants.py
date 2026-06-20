@@ -21,6 +21,7 @@ SESSION_CONFIG_DENYLIST: frozenset[str] = frozenset({
     "ladybug_db_path",
     "archolith_profile",
     "log_pii_redaction_level",
+    "session_consent_required",
 })
 
 _SNAPSHOT_EXCLUDE = frozenset({

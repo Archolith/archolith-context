@@ -28,6 +28,7 @@ logs/
 
 # Pytest
 .pytest_cache/
+.pytest-tmp/
 
 # Linter cache
 .ruff_cache/

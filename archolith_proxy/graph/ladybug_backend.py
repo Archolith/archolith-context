@@ -336,7 +336,7 @@ class LadybugBackend:
             "find_or_create_by_fingerprint", "touch_session", "get_turn_number",
             "update_goal", "set_session_config_overrides",
             "get_session_config_overrides",
-            "list_active_sessions", "get_session_stats",
+            "list_active_sessions", "get_session_stats", "delete_session_data",
             # Fact CRUD
             "store_fact", "store_facts_batch", "invalidate_facts",
             "find_matching_fact_ids", "get_active_facts", "get_active_fact_count",
@@ -602,3 +602,17 @@ class LadybugBackend:
         if count:
             logger.info("ladybug_expired_sessions_deleted", count=count)
         return count
+
+    async def delete_session_data(self, session_id: str) -> dict:
+        rows = await self._execute(
+            """
+            MATCH (n {session_id: $session_id})
+            DETACH DELETE n
+            RETURN count(n) AS deleted
+            """,
+            {"session_id": session_id},
+        )
+        deleted = rows[0]["deleted"] if rows else 0
+        if deleted:
+            logger.info("ladybug_session_data_deleted", session_id=session_id, nodes_deleted=deleted)
+        return {"nodes_deleted": deleted}

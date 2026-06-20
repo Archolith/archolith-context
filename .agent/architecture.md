@@ -564,6 +564,7 @@ Precedence: `session > config_overrides.json > env > profile > default`. Explici
 - Memory engine config (JSON array of engine definitions)
 - Promotion policy defaults (min confidence, dry-run mode)
 - Structured-log PII redaction policy (`log_pii_redaction_level`: `none`, `truncated_32`, `hashed`, or `redacted`)
+- Session consent gate (`session_consent_required`): when true, trace-store writes require `X-Session-Consent: opt-in`
 - Synthetic tools: enabled, circuit breaker thresholds, file recall limits
 - Native read interception toggle (`native_read_intercept_enabled`) for serving repeated file reads from cache
 - Per-tool extraction toggles (`per_tool_extraction_enabled`, `extractor_llm_concurrency`)
@@ -828,6 +829,8 @@ WS_ALLOW_ANONYMOUS=false              # legacy opt-in; otherwise /ws/stream need
 | `GET /metrics` | Process-level counters: total_requests, assembly_modes, extraction_successes/empties/failures, upstream_errors, neo4j_errors, active_sessions, token_savings_estimated, total_input_tokens_seen, trace_records, trace_sessions, uptime, curator_calls, curator_timeouts, curator_fallbacks, synthetic_tool_successes, synthetic_tool_failures, synthetic_circuit_opens, synthetic_circuit_hard_disables, synthetic_injections_skipped, synthetic_circuit_states (per-session) |
 | `GET/PATCH/POST /admin/config` | Runtime-tunable config surface for experiments and operator control |
 | `POST /admin/shutdown` | Graceful SIGTERM-based shutdown path |
+| `GET /admin/sessions/{id}/stored` | Enumerate graph and trace-store data currently held for a session |
+| `DELETE /admin/sessions/{id}` | Delete known graph and trace-store data for a session |
 | `GET /sessions` | List active sessions (admin, 503 if Neo4j down) |
 | `GET /sessions/{id}` | Session stats (admin, 404 if not found, 503 if Neo4j down) |
 | `GET /trace/sessions` | List all sessions with trace records |

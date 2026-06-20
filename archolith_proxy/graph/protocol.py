@@ -365,3 +365,7 @@ class GraphBackend(Protocol):
     async def delete_expired_sessions(self) -> int:
         """Delete all nodes/edges for expired sessions. Returns count deleted."""
         ...
+
+    async def delete_session_data(self, session_id: str) -> dict:
+        """Delete all graph data for one session."""
+        ...

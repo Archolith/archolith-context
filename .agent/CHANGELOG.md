@@ -1,5 +1,12 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Session Retention And Consent Controls
+
+- **`DELETE /admin/sessions/{session_id}`**: Added an admin deletion path that coordinates graph and trace-store deletion through the shared `archolith_compliance.retention` report contract.
+- **`GET /admin/sessions/{session_id}/stored`**: Added an admin enumeration endpoint for graph presence, active fact count, cached file count, trace turns, background passes, metadata keys, and trace JSONL file status.
+- **`SESSION_CONSENT_REQUIRED`**: Added an operator setting and `X-Session-Consent: opt-in` protocol. When required consent is missing, trace-store writes are skipped for that request context.
+- **Docs/config**: Documented processing purpose, retention defaults, deletion endpoints, consent protocol, and the new `.env.example` settings.
+
 ## 2026-06-20 — Structured Log PII Redaction
 
 - **`archolith_proxy/compliance.py` + `archolith_proxy/config/groups/compliance.py`**: Added a setting-driven log redaction wrapper around `archolith_compliance.redact`, defaulting to `truncated_32`.
