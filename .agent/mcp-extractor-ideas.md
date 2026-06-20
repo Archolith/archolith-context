@@ -11,7 +11,7 @@ The per-tool extraction plan (`archolith-per-tool-extraction-plan.md`) tracks
 the agnostic extractors.  Unknown MCP tools fall through to `DefaultExtractor`
 in the meantime — they still get extracted, just generically.
 
-> **Note — archolith-memory is a first-class project.**
+> **Note — durable memory is now the `menhir` direction.**
 > `MemoryRecallExtractor` has been promoted into the main extraction plan
 > (`archolith-per-tool-extraction-plan.md` §3.3) and is no longer listed here.
 > It covers `mcp__memory__recall_*` and `mcp__memory__build_context` via

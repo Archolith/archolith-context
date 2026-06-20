@@ -588,7 +588,7 @@ Canonical outbound payload for one promoted fact.
 | `resolved_api_key` (property) | `str \| None` | Resolved credential from environment (read-only) |
 
 **Concrete adapter implementations** (`archolith_proxy/memory/adapters/`):
-- `archolith_memory.py` — integration with archolith-memory library (sister project)
+- `archolith_memory.py` — legacy adapter name for the durable memory integration; current product direction is `menhir`
 - `basic_memory.py` — minimal in-memory adapter for local/dev use
 - `claude_mem.py` — placeholder adapter (reference only)
 - `cognee.py` — Cognee knowledge graph adapter

@@ -1,8 +1,8 @@
 # archolith-context
 
-OpenAI-compatible proxy that replaces linear conversation replay with graph-assembled context for AI coding agents. Any harness that supports a base URL override (Reasonix, Claude Code, Aider, Cursor, etc.) works unchanged.
+Experimental OpenAI-compatible proxy that explores replacing linear conversation replay with graph-assembled context for AI coding agents. Any harness that supports a base URL override (Reasonix, Claude Code, Aider, Cursor, etc.) works unchanged.
 
-Instead of re-sending stale conversation history on every turn, the proxy extracts durable session facts and file content into a local knowledge store, then rebuilds the minimal viable context window for each upstream API call. The goal: lower token spend, better continuity in long coding sessions, and agents that never re-read files they already know (via the file content cache and curator file-outline tools — note that the synthetic-tools-based native read intercept is deprecated and disabled by default in all documented configurations).
+Instead of re-sending stale conversation history on every turn, the proxy extracts session facts and file content into a local knowledge store, then attempts to rebuild a smaller context window for each upstream API call. This remains experimental: the current system is useful for proxy, filtering, tracing, and context-quality research, but it does not yet achieve the desired long-session behavior.
 
 **Naming:** Public repo is `archolith-context`; Python package is `archolith_proxy`; PyPI dist is `archolith-proxy`.
 

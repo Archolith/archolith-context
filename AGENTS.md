@@ -51,8 +51,9 @@ See `.agent/workflows/code_conventions.md` for full rules. Key points:
 
 - **Naming**: Public product/repo is `archolith-context`; Python package is `archolith_proxy`; PyPI distribution is `archolith-proxy`. Older `cth.context-engine` naming still appears in some historical docs.
 - The proxy default config (`Settings` class) uses Neo4j as the graph backend and DeepSeek as upstream. The README and `.env.example` are optimized for the LadybugDB + OpenAI bootstrap path. Both realities are valid.
-- All peer integrations (archolith-filter, archolith-memory) are fail-open — when absent, the proxy operates in passthrough mode.
+- All peer integrations (archolith-filter, menhir/durable memory adapters) are fail-open — when absent, the proxy operates in passthrough mode.
 - archolith-filter is not a `pyproject.toml` dependency. Install it alongside with `uv pip install -e ../archolith-filter`.
 - Session state is ephemeral (TTL default 24h). No durable storage without memory promotion enabled.
 - The proxy serves on port 9800 by default. Health check at `GET /health`.
 - Runtime config tunable via `GET/PATCH /admin/config`. Overrides persisted to `config_overrides.json`.
+- Treat `archolith-context` as experimental. Do not update public docs to imply solved/perfect context recall or no-reread behavior.

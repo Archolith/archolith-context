@@ -150,7 +150,7 @@ archolith_proxy/
 
 ## Error Handling
 
-- All peer integrations (archolith-filter, archolith-memory) are fail-open: `ImportError` → return input unchanged
+- All peer integrations (archolith-filter, menhir/durable memory adapters) are fail-open: `ImportError` → return input unchanged
 - Graph backend failures → assembly falls back to passthrough; logged, never crashes the proxy
 - Extraction failures → logged and counted in metrics; never blocks response streaming
 - Upstream failures → exponential backoff with `upstream_request_with_retry()`; max retries configurable

@@ -8,14 +8,13 @@ base URL override (Reasonix, Claude Code, Aider, Cursor, etc.) works unchanged.
 
 ## Project Description
 
-`archolith-context` is a transparent OpenAI-compatible proxy for coding agent sessions
-that replaces append-only transcript replay with LLM-driven context curation. Instead
-of resending stale conversation history, it extracts durable session facts and file
+`archolith-context` is an experimental OpenAI-compatible proxy for coding agent sessions
+that explores replacing append-only transcript replay with LLM-driven context curation.
+Instead of resending stale conversation history, it extracts session facts and file
 content into a local knowledge store, then uses a dedicated Context Manager LLM to
-build the minimum viable context window for each turn. The goal is lower token spend,
-better continuity in long coding sessions, and — critically — a coding agent that
-never re-reads a file it already knows, never loses a decision it has already made,
-and never degrades from context bloat.
+build a smaller candidate context window for each turn. The goal is lower token spend
+and better continuity in long coding sessions, but the current project is not yet the
+stable/solved context layer the product ultimately needs.
 
 **Naming reality in the live repo:**
 - Public repo / product name: `archolith-context`
@@ -33,7 +32,7 @@ that wires them together at the proxy boundary.
 | Module | Role | Dependency model |
 |--------|------|-----------------|
 | **archolith-filter** | Token reduction — filter noise, shrink oversized tool results | Optional peer; fail-open lazy import |
-| **archolith-memory** | Long-term memory — cross-session fact storage and retrieval | Optional peer; fail-open lazy import (planned) |
+| **menhir** | Long-term memory — cross-session fact storage and retrieval | Optional peer / external durable-memory direction |
 | **archolith-context** | Proxy — orchestrates session context, extraction, curation | Orchestrator; imports peers when available |
 
 **Design constraint (applies to all modules):**
@@ -43,9 +42,9 @@ that wires them together at the proxy boundary.
 - MCP servers (when they exist) are thin wrappers around the library — not the primary integration surface
 - The proxy is the primary integration surface: it imports libraries directly, not via HTTP or tool calls
 
-**archolith-memory integration shape (planned):**
-- Read path: proxy queries `archolith_memory.recall(query)` before each upstream call and injects relevant long-term memories into context automatically — no agent tool call required
-- Write path: proxy calls `archolith_memory.store(fact, confidence)` from the promotion pipeline for high-confidence session facts — no agent tool call required
+**menhir integration shape (planned/current direction):**
+- Read path: proxy queries the durable memory backend before each upstream call and injects relevant long-term memories into context automatically — no agent tool call required
+- Write path: proxy promotes high-confidence session facts into the durable memory backend — no agent tool call required
 - Explicit write: MCP server exposes `add_memory` / `add_todo` as thin wrappers for agent-initiated writes when the agent wants to tag something important
 - The MCP server's recall tools (`recall_memories`, `build_context`) become optional/legacy once proxy-side injection is live
 
@@ -627,7 +626,7 @@ Per-turn observability records and session-level telemetry.
 - **Registry** (`registry.py`): Config-driven engine registration, lazy adapter instantiation, priority-based default resolution
 - **Canonical models** (`models.py`): `PromotionRecord`, `PromotionResult`, `EngineCapabilities`, `MemoryEngineConfig`
 - **Adapter base** (`adapters/base.py`): Abstract contract — validate_config, capabilities, healthcheck, promote_fact, optional batch/dedupe/CRUD
-- **Concrete adapters** (`adapters/`): 9 total — `archolith_memory`, `basic_memory`, `claude_mem`, `cognee`, `generic_http`, `mem0`, `nocturne_memory`, `openmemory`, `zep`
+- **Concrete adapters** (`adapters/`): 9 total — legacy `archolith_memory` adapter name plus `basic_memory`, `claude_mem`, `cognee`, `generic_http`, `mem0`, `nocturne_memory`, `openmemory`, `zep`; current durable-memory product direction is `menhir`
 - **Promotion service** (`promotion.py`): Policy layer (confidence threshold, fact type allowlist, multi-turn survival), dedupe, dry-run, audit trail
 
 ### Synthetic Session-Summary Tools (`archolith_proxy/proxy/synthetic_tools.py`)
@@ -703,15 +702,15 @@ for the `MAX_INPUT_TOKENS_PER_SESSION` hard cap.
 
 ## Isolation from Long-term Memory
 
-| | Long-term memory (archolith-memory) | Session context (this project) |
+| | Long-term memory (menhir / durable memory backend) | Session context (this project) |
 |--|-------------------------------------|-------------------------------|
 | Storage backend | Library-defined (PostgreSQL, SQLite, or custom adapter) | LadybugDB (default, embedded) or Neo4j |
 | Isolation | Separate store entirely — no shared tables or labels | Session-scoped; all nodes carry `session_id` |
 | Lifecycle | Persistent, cross-session, survives proxy restarts | Ephemeral, TTL per session (default 24h) |
 | Write path | Proxy promotion pipeline (high-confidence facts) + agent via MCP `add_memory` | Proxy extracts automatically every turn |
-| Read path | Proxy injects via `archolith_memory.recall()` (planned); MCP `recall_memories` / `build_context` today | Proxy assembler (internal, no agent tool call needed) |
+| Read path | Proxy-side durable memory recall (planned/current direction); MCP `recall_memories` / `build_context` where provided today | Proxy assembler (internal, no agent tool call needed) |
 
-When running without archolith-memory, long-term memory is handled by whatever the agent's MCP server provides (`cth.mcp.memory` or equivalent). The proxy promotion pipeline writes to whichever memory backend is configured via `MEMORY_ENGINES_JSON`.
+When running without a durable memory backend such as `menhir`, long-term memory is handled by whatever the agent's MCP server provides. The proxy promotion pipeline writes to whichever memory backend is configured via `MEMORY_ENGINES_JSON`.
 
 **Neo4j isolation note (when used as session backend):** Session nodes carry the `:ContextSession` label; any long-term memory nodes in the same Neo4j instance use `:Memory`. All queries are label-scoped. Session data is bulk-droppable: `MATCH (n:ContextSession) DETACH DELETE n`.
 
@@ -804,7 +803,7 @@ MEMORY_API_KEY=...
 PROMOTION_ENABLED=false
 
 # Memory engine configuration (JSON array)
-MEMORY_ENGINES_JSON=[{"id":"cth-memory","type":"cth_mcp_memory","enabled":true,"priority":10,"base_url":"http://localhost:8200","api_key_env":"MEMORY_API_KEY"}]
+MEMORY_ENGINES_JSON=[{"id":"menhir","type":"cth_mcp_memory","enabled":true,"priority":10,"base_url":"http://localhost:8200","api_key_env":"MEMORY_API_KEY"}]
 PROMOTION_MIN_CONFIDENCE=0.9
 PROMOTION_DRY_RUN=false
 ```
@@ -927,7 +926,7 @@ CONTEXT ASSEMBLY:
 ### Relationship Between Projects
 
 archolith-filter is the first concrete module in the [Archolith Ecosystem](#archolith-ecosystem) —
-the same optional-peer pattern applies to archolith-memory (planned) and any future modules.
+the same optional-peer pattern applies to menhir/durable memory integration and any future modules.
 
 archolith-filter is **not a dependency** of archolith-context in the `pyproject.toml` sense — it is an optional peer.  This preserves the ability to run archolith-context standalone without the RTK library installed.  When both are present in the same virtualenv, RTK is used automatically with no configuration required.
 
@@ -998,8 +997,8 @@ Version compatibility is enforced: `MIN_PLUGIN_VERSIONS` in `registry.py` define
 | OpenAI API (embeddings) | Semantic similarity for `search_facts_semantic` | Optional — falls back to substring search |
 | Upstream LLM API | Target for proxied requests | **Yes — required** |
 | archolith-filter | Token reduction (Layer 1 + Layer 2) | Optional peer (fail-open) |
-| archolith-memory | Long-term cross-session memory | Optional peer (planned — fail-open) |
-| Memory backend API (e.g. cth.mcp.memory) | Promotion target for durable facts | Optional — only when `PROMOTION_ENABLED=true` |
+| menhir / durable memory backend | Long-term cross-session memory | Optional peer / external backend (fail-open) |
+| Memory backend API | Promotion target for durable facts | Optional — only when `PROMOTION_ENABLED=true` |
 
 ## Port Assignment
 

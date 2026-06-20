@@ -99,7 +99,7 @@ should I care, how do I try it?"
 
 10. **Roadmap** — Brief list:
     - Native Anthropic/Claude API support
-    - Long-term cross-session memory (archolith-memory)
+    - Long-term cross-session memory (menhir)
     - Domain-aware tool output filtering (archolith-filter)
     - Streaming recall
     - Plugin system for custom extractors
