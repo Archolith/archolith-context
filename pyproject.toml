@@ -44,11 +44,14 @@ java = [
 filter = [
     "archolith-filter>=0.1.0",
 ]
+compliance = [
+    "archolith-compliance>=0.1.0",
+]
 audit = [
     "archolith-audit>=0.1.0",
 ]
 full = [
-    "archolith-proxy[filter,audit]",
+    "archolith-proxy[filter,compliance,audit]",
 ]
 dev = [
     "archolith-proxy[full]",

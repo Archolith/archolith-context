@@ -1,5 +1,9 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Compliance Package Dependency
+
+- **`pyproject.toml`**: Added the `compliance` optional dependency group for `archolith-compliance>=0.1.0` and included it in the `full` extra so upcoming retention, consent, and PII-redaction adoption can use the shared package.
+
 ## 2026-06-20 — Config Package Split
 
 - **`archolith_proxy/config/`**: Converted the oversized `config.py` module into a package with domain field groups, a `Settings` model module, runtime override helpers, profile constants, and path constants.
