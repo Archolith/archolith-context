@@ -228,7 +228,7 @@ async def chat_completions(
     if session_id and settings.max_input_tokens_per_session > 0:
         from archolith_proxy.proxy.circuit_breaker import add_session_tokens, is_session_over_budget
         if is_user_turn:
-            add_session_tokens(session_id, input_tokens)
+            add_session_tokens(session_id, gate_input_tokens)
         session_over_budget = is_session_over_budget(session_id, settings.max_input_tokens_per_session)
         if session_over_budget and settings.session_token_budget_action == "reject":
             raise UpstreamError(

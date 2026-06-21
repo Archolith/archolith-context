@@ -13,11 +13,13 @@ All tests use a mock upstream and mocked graph backend — no live proxy needed.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from httpx import ASGITransport
+from starlette.responses import Response
 
 from archolith_proxy.config import get_settings
 from archolith_proxy.main import create_app
@@ -25,7 +27,6 @@ from archolith_proxy.metrics import get_metrics
 from archolith_proxy.proxy.circuit_breaker import (
     get_circuit_state,
     is_synthetic_allowed,
-    reset_all,
     reset_circuit,
 )
 
@@ -168,7 +169,7 @@ class TestCircuitBreakerIntegration:
 
         # synthetic_circuit_opens metric incremented by exactly 1
         assert m["synthetic_circuit_opens"] == opens_before + 1, (
-            f"Expected synthetic_circuit_opens to increment by 1"
+            "Expected synthetic_circuit_opens to increment by 1"
         )
         # synthetic_tool_failures incremented by 3
         assert m["synthetic_tool_failures"] == failures_before + 3, (
@@ -249,7 +250,7 @@ class TestCircuitBreakerIntegration:
 
         # synthetic_injections_skipped metric incremented
         assert m["synthetic_injections_skipped"] == skipped_before + 1, (
-            f"Expected synthetic_injections_skipped to increment by 1"
+            "Expected synthetic_injections_skipped to increment by 1"
         )
 
         # Upstream must NOT have received synthetic tool definitions
@@ -335,3 +336,97 @@ class TestCircuitBreakerIntegration:
         assert not is_synthetic_allowed(SESSION_ID), (
             "is_synthetic_allowed must return False after hard disable"
         )
+
+
+class TestSessionBudgetAccounting:
+    @pytest.mark.asyncio
+    async def test_session_budget_uses_structural_gate_tokens(self):
+        """Session-budget accumulation should use structural gate tokens."""
+        from archolith_proxy.openai import chat as chat_module
+
+        session_id = "budget-structural-001"
+        gate_tokens = 987
+        crude_tokens = 111
+        recorded_tokens: list[tuple[str, int]] = []
+
+        telemetry = SimpleNamespace(
+            breakdown=SimpleNamespace(
+                gate_input_tokens=gate_tokens,
+                input_tokens_content_est=crude_tokens,
+                input_tokens_structural_est=gate_tokens,
+                input_tokens_client_reported=None,
+                gate_source=SimpleNamespace(value="structural"),
+                estimator_version="test",
+            )
+        )
+
+        settings = get_settings()
+        original_max = settings.max_input_tokens_per_session
+        original_action = settings.session_token_budget_action
+        original_curator = settings.curator_enabled
+        original_file_cache = settings.file_cache_enabled
+        original_filter = settings.filter_enabled
+        original_synthetic = settings.synthetic_tools_enabled
+        original_recall_tool = settings.session_recall_tool_enabled
+
+        settings.max_input_tokens_per_session = 10_000
+        settings.session_token_budget_action = "degrade"
+        settings.curator_enabled = False
+        settings.file_cache_enabled = False
+        settings.filter_enabled = False
+        settings.synthetic_tools_enabled = False
+        settings.session_recall_tool_enabled = False
+
+        backend = AsyncMock()
+        backend.get_turn_number = AsyncMock(return_value=1)
+        backend.find_session_by_id = AsyncMock(return_value=None)
+
+        trace_store = AsyncMock()
+        trace_store.has_session_metadata = AsyncMock(return_value=True)
+
+        async def fake_handle_non_streaming(**kwargs):
+            return Response(content=b'{"ok": true}', media_type="application/json")
+
+        def fake_add_session_tokens(sid: str, tokens: int) -> None:
+            recorded_tokens.append((sid, tokens))
+
+        try:
+            app = create_app()
+            app.state.http_client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+            app.state.extractor_client = AsyncMock()
+
+            with patch.object(chat_module, "is_graph_ready", return_value=True), \
+                 patch.object(chat_module, "resolve_session", new_callable=AsyncMock) as mock_resolve, \
+                 patch.object(chat_module, "get_backend", return_value=backend), \
+                 patch.object(chat_module, "get_trace_store", return_value=trace_store), \
+                 patch.object(chat_module, "_apply_session_config_overlay", new_callable=AsyncMock) as mock_overlay, \
+                 patch.object(chat_module, "_estimate_input_tokens", return_value=crude_tokens), \
+                 patch.object(chat_module, "build_telemetry", return_value=telemetry), \
+                 patch.object(chat_module, "_handle_non_streaming", side_effect=fake_handle_non_streaming), \
+                 patch("archolith_proxy.proxy.circuit_breaker.add_session_tokens", side_effect=fake_add_session_tokens), \
+                 patch("archolith_proxy.proxy.circuit_breaker.is_session_over_budget", return_value=False):
+                mock_resolve.return_value = (session_id, False)
+                mock_overlay.return_value = settings
+
+                transport = ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                    response = await ac.post(
+                        "/v1/chat/completions",
+                        json={
+                            "model": "test-model",
+                            "messages": [{"role": "user", "content": "large structural request"}],
+                            "stream": False,
+                        },
+                        headers={"X-Session-ID": session_id},
+                    )
+        finally:
+            settings.max_input_tokens_per_session = original_max
+            settings.session_token_budget_action = original_action
+            settings.curator_enabled = original_curator
+            settings.file_cache_enabled = original_file_cache
+            settings.filter_enabled = original_filter
+            settings.synthetic_tools_enabled = original_synthetic
+            settings.session_recall_tool_enabled = original_recall_tool
+
+        assert response.status_code == 200
+        assert recorded_tokens == [(session_id, gate_tokens)]

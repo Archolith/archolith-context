@@ -606,7 +606,8 @@ when present and falls back to `len/3.6`. It runs on the request hot path via
 `asyncio.to_thread` — tiktoken releases the GIL, so encoding does not block the
 event loop. The per-turn trace records the breakdown plus the actual upstream
 `prompt_tokens` (`prompt_tokens_actual`) so estimate-vs-actual is inspectable. The
-session token budget still uses the legacy content estimate (controlled migration).
+session token budget also records `gate_input_tokens`, so the over-budget circuit
+uses the same structural estimate as the assembly gate.
 
 **Important default nuance:** the Python `Settings` class still defaults `graph_backend` to `neo4j`
 and `upstream_base_url` to DeepSeek. The repo README and `.env.example` are optimized around the

@@ -1,5 +1,10 @@
 # Changelog — archolith-context
 
+## 2026-06-20 — Session Budget Uses Structural Gate Tokens
+
+- **Correctness**: Session token-budget accumulation now records `gate_input_tokens` from structural token telemetry instead of the legacy content-only estimate.
+- **Tests**: Added a chat-route regression asserting the session circuit breaker receives the structural gate count.
+
 ## 2026-06-20 — Removed Dead Streaming Retry Helper
 
 - **Maintenance**: Removed the unused `stream_with_connection_retry` helper from `proxy/upstream.py`; streaming retry behavior remains owned by the active streaming path.
