@@ -2,13 +2,13 @@
 
 Provides a lightweight in-proxy surface for archolith-audit:
 - activate() confirms the package is importable
-- healthcheck() reports package version
+- healthcheck() reports package version and accumulator state
 - contribute_metrics() reads LiveAccumulator totals when available
 
-The LiveAccumulator is wired into the proxy's extraction pipeline separately
-(see archolith_mcp_audit.accumulator). This plugin provides the registry
-lifecycle surface and the metrics aggregation — it does not feed the
-accumulator itself.
+NOTE: No live metrics feed is currently wired in proxy runtime. set_accumulator()
+exists for attaching a LiveAccumulator, but nothing in the proxy calls it yet
+(only tests do). Until a feed is attached, contribute_metrics() returns {} and
+healthcheck() reports feed='none'.
 """
 
 from __future__ import annotations
@@ -26,8 +26,9 @@ class AuditPlugin:
     activate() → confirms archolith_mcp_audit is importable. Returns False when
     the package is not installed; proxy still starts normally.
 
-    contribute_metrics() → reads the global LiveAccumulator if one is attached
-    to app state (set by proxy startup code). Falls back to empty dict.
+    contribute_metrics() → reads the global LiveAccumulator only if one has been
+    attached via set_accumulator(). No runtime caller attaches one yet (only tests
+    do). Falls back to empty dict when accumulator is None.
     """
 
     def __init__(self) -> None:
@@ -75,6 +76,7 @@ class AuditPlugin:
                 "status": "ok",
                 "version": self.plugin_version,
                 "accumulator_active": accumulator_active,
+                "feed": "live" if self._accumulator is not None else "none",
             }
         except ImportError:
             return {"status": "unavailable", "version": "not_installed"}
