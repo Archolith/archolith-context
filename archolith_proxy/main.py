@@ -485,13 +485,21 @@ async def lifespan(app: FastAPI):
     plugin_registry = get_plugin_registry()
     plugin_registry.register(FilterPlugin())
     plugin_registry.register(MemoryPlugin())
-    plugin_registry.register(AuditPlugin())
+    audit_plugin = AuditPlugin()
+    plugin_registry.register(audit_plugin)
 
     # Activate all registered plugins (fail-safe — proxy always starts)
     plugin_results = await plugin_registry.activate_all()
     if plugin_results:
         active_count = sum(1 for ok in plugin_results.values() if ok)
         logger.info("plugins_activated", total=len(plugin_results), active=active_count)
+
+    # Wire the audit plugin's lazy filter-telemetry feed: a read-only, on-demand
+    # pull from archolith-filter's telemetry store computed at /metrics poll time
+    # (never on the request path). No-op unless both archolith_filter and
+    # archolith_mcp_audit are installed.
+    if plugin_results.get("audit"):
+        audit_plugin.enable_filter_feed()
 
     logger.info("proxy_starting", port=settings.proxy_port, upstream=settings.upstream_base_url)
 

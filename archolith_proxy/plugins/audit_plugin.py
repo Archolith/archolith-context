@@ -2,13 +2,21 @@
 
 Provides a lightweight in-proxy surface for archolith-audit:
 - activate() confirms the package is importable
-- healthcheck() reports package version and accumulator state
-- contribute_metrics() reads LiveAccumulator totals when available
+- healthcheck() reports package version and metrics feed state
+- contribute_metrics() reports per-server token usage totals
 
-NOTE: No live metrics feed is currently wired in proxy runtime. set_accumulator()
-exists for attaching a LiveAccumulator, but nothing in the proxy calls it yet
-(only tests do). Until a feed is attached, contribute_metrics() returns {} and
-healthcheck() reports feed='none'.
+Metrics feed:
+- An explicit LiveAccumulator may be attached via set_accumulator() (used by
+  tests and any external feeder); when present, its totals are reported as-is.
+- Otherwise, when the lazy filter feed is enabled at startup via
+  enable_filter_feed() and both archolith_filter and archolith_mcp_audit are
+  installed, contribute_metrics() builds a fresh LiveAccumulator on demand from
+  archolith-filter's FilterTelemetryStore singleton (the same store the
+  FilterPlugin reports on). This is a pull-based, read-only feed computed on
+  each /metrics poll — it never touches the request path and never mutates the
+  telemetry store.
+- With no attached accumulator and the lazy feed disabled (or no activity),
+  contribute_metrics() returns {} and healthcheck() reports feed='none'.
 """
 
 from __future__ import annotations
@@ -26,14 +34,17 @@ class AuditPlugin:
     activate() → confirms archolith_mcp_audit is importable. Returns False when
     the package is not installed; proxy still starts normally.
 
-    contribute_metrics() → reads the global LiveAccumulator only if one has been
-    attached via set_accumulator(). No runtime caller attaches one yet (only tests
-    do). Falls back to empty dict when accumulator is None.
+    contribute_metrics() → reports LiveAccumulator totals. An explicitly
+    attached accumulator (set_accumulator) takes precedence; otherwise, when the
+    lazy filter feed is enabled, totals are computed on demand from
+    archolith-filter telemetry. Falls back to an empty dict.
     """
 
     def __init__(self) -> None:
-        # LiveAccumulator reference, set externally after app startup
+        # LiveAccumulator reference, set externally via set_accumulator().
         self._accumulator = None
+        # Lazy filter-telemetry feed gate; enabled at startup by enable_filter_feed().
+        self._live_feed_enabled = False
 
     @property
     def plugin_id(self) -> str:
@@ -64,11 +75,12 @@ class AuditPlugin:
             return False
 
     async def deactivate(self) -> None:
-        """Release accumulator reference."""
+        """Release accumulator reference and disable the lazy feed."""
         self._accumulator = None
+        self._live_feed_enabled = False
 
     async def healthcheck(self) -> dict:
-        """Report audit package availability and accumulator state."""
+        """Report audit package availability and metrics feed state."""
         try:
             import archolith_mcp_audit  # noqa: F401
             accumulator_active = self._accumulator is not None
@@ -76,7 +88,7 @@ class AuditPlugin:
                 "status": "ok",
                 "version": self.plugin_version,
                 "accumulator_active": accumulator_active,
-                "feed": "live" if self._accumulator is not None else "none",
+                "feed": self._feed_state(),
             }
         except ImportError:
             return {"status": "unavailable", "version": "not_installed"}
@@ -87,12 +99,66 @@ class AuditPlugin:
         """Attach a LiveAccumulator instance for metrics reporting."""
         self._accumulator = accumulator
 
-    def contribute_metrics(self) -> dict[str, int | float]:
-        """Return aggregate stats from the attached LiveAccumulator."""
-        if self._accumulator is None:
-            return {}
+    def enable_filter_feed(self) -> bool:
+        """Enable the lazy filter-telemetry feed (called once at proxy startup).
+
+        Returns True when both archolith_filter and archolith_mcp_audit are
+        importable, so contribute_metrics() can compute totals on demand from
+        the filter telemetry store. No-op (returns False) otherwise.
+        """
+        if not self._filter_feed_available():
+            return False
+        self._live_feed_enabled = True
+        logger.info("audit_plugin_filter_feed_enabled")
+        return True
+
+    def _feed_state(self) -> str:
+        """Return the current metrics feed state: 'live' | 'lazy' | 'none'."""
+        if self._accumulator is not None:
+            return "live"
+        if self._live_feed_enabled and self._filter_feed_available():
+            return "lazy"
+        return "none"
+
+    @staticmethod
+    def _filter_feed_available() -> bool:
+        """True when the lazy filter feed's dependencies are importable."""
         try:
-            acc = self._accumulator
+            import archolith_filter.telemetry  # noqa: F401
+            import archolith_mcp_audit.accumulator  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def _live_accumulator_from_filter(self):
+        """Build a fresh LiveAccumulator from archolith-filter telemetry.
+
+        Reads the FilterTelemetryStore singleton (the same one FilterPlugin
+        reports on) and replays its entries into a new LiveAccumulator.
+        Read-only: never mutates the store. Returns None when unavailable.
+        """
+        try:
+            from archolith_filter.telemetry import get_filter_telemetry_store
+            from archolith_mcp_audit.accumulator import LiveAccumulator
+        except ImportError:
+            return None
+        try:
+            store = get_filter_telemetry_store()
+            acc = LiveAccumulator()
+            for entry in store.entries:
+                acc.observe(
+                    getattr(entry, "tool", None) or "unknown",
+                    getattr(entry, "raw_chars", 0),
+                    getattr(entry, "filtered_chars", 0),
+                )
+            return acc
+        except Exception:
+            return None
+
+    @staticmethod
+    def _accumulator_totals(acc) -> dict[str, int | float]:
+        """Extract reportable totals from a LiveAccumulator."""
+        try:
             return {
                 "total_results": acc.total_results,
                 "total_raw_chars": acc.total_raw_chars,
@@ -101,3 +167,19 @@ class AuditPlugin:
             }
         except Exception:
             return {}
+
+    def contribute_metrics(self) -> dict[str, int | float]:
+        """Return aggregate per-server token totals.
+
+        An explicitly attached accumulator takes precedence and is reported
+        as-is. Otherwise, when the lazy filter feed is enabled, totals are
+        computed on demand from filter telemetry (suppressed when there is no
+        activity). Returns {} when no source is available.
+        """
+        if self._accumulator is not None:
+            return self._accumulator_totals(self._accumulator)
+        if self._live_feed_enabled:
+            acc = self._live_accumulator_from_filter()
+            if acc is not None and acc.total_results > 0:
+                return self._accumulator_totals(acc)
+        return {}
