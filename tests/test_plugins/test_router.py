@@ -100,3 +100,41 @@ async def test_get_plugin_metrics(registered_client):
 async def test_get_plugin_not_found(client):
     resp = await client.get("/plugins/nonexistent")
     assert resp.status_code == 404
+
+
+async def test_audit_report_empty_when_no_audit_plugin(client):
+    """The report endpoint degrades to an empty body, never 500/404."""
+    resp = await client.get("/plugins/audit/report")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"feed": "none", "servers": [], "totals": {}}
+
+
+async def test_audit_report_returns_per_server_breakdown(client):
+    """A registered audit plugin's server_report is surfaced over HTTP and is
+    not shadowed by the /plugins/{plugin_id} route."""
+
+    class _ReportingAudit(_OkPlugin):
+        def server_report(self) -> dict:
+            return {
+                "feed": "live",
+                "servers": [
+                    {
+                        "server": "vps",
+                        "call_count": 2,
+                        "raw_chars": 1500,
+                        "share_pct": 88.2,
+                        "savings_pct": 40.0,
+                        "tools": ["mcp__vps__vps_status"],
+                    }
+                ],
+                "totals": {"total_results": 2, "servers_seen": 1},
+            }
+
+    get_plugin_registry().register(_ReportingAudit("audit", "0.2.0"))
+    resp = await client.get("/plugins/audit/report")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["feed"] == "live"
+    assert body["servers"][0]["server"] == "vps"
+    assert body["totals"]["servers_seen"] == 1

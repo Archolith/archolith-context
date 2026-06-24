@@ -183,3 +183,50 @@ class AuditPlugin:
             if acc is not None and acc.total_results > 0:
                 return self._accumulator_totals(acc)
         return {}
+
+    def _resolve_accumulator(self):
+        """Return the accumulator to report from: attached, else lazy feed."""
+        if self._accumulator is not None:
+            return self._accumulator
+        if self._live_feed_enabled:
+            return self._live_accumulator_from_filter()
+        return None
+
+    def server_report(self) -> dict:
+        """Return a per-server usage/savings breakdown for the report endpoint.
+
+        Uses the same source as contribute_metrics() (attached accumulator,
+        else the lazy filter feed), but exposes the per-server detail that the
+        flat /metrics totals drop: call count, token share, filter savings, and
+        the tools seen per server. On the proxy live path the savings are real
+        (archolith-filter telemetry carries true filtered counts).
+
+        NOTE: this is a usage breakdown, NOT the offline audit tool's
+        waste-pattern report — detector findings (polling waste, oversized
+        results, schema cost, ...) require a pass over session logs via the
+        audit CLI and are intentionally not included here.
+
+        Returns {"feed", "servers": [...], "totals": {...}}; an empty report
+        (no servers) when there is no telemetry or no source attached.
+        """
+        feed = self._feed_state()
+        acc = self._resolve_accumulator()
+        if acc is None or getattr(acc, "total_results", 0) == 0:
+            return {"feed": feed, "servers": [], "totals": {}}
+        summary = acc.get_server_summary()
+        servers = [
+            {
+                "server": name,
+                "call_count": data["call_count"],
+                "raw_chars": data["raw_chars"],
+                "share_pct": data["share_pct"],
+                "savings_pct": data["savings_pct"],
+                "tools": data["tools"],
+            }
+            for name, data in summary.items()
+        ]
+        return {
+            "feed": feed,
+            "servers": servers,
+            "totals": self._accumulator_totals(acc),
+        }

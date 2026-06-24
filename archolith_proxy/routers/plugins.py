@@ -30,6 +30,26 @@ async def list_plugins() -> dict:
     }
 
 
+@router.get("/plugins/audit/report")
+async def audit_report() -> dict:
+    """Per-server audit usage breakdown (token share + filter savings).
+
+    Complements GET /metrics, which carries only flat audit totals, with the
+    per-server detail (which server dominates token usage, and how much the
+    filter saves per server). Returns an empty report when the audit plugin is
+    absent or there is no telemetry yet — never 500s on missing data.
+    """
+    empty = {"feed": "none", "servers": [], "totals": {}}
+    registry = get_plugin_registry()
+    plugin = registry.get_plugin("audit")
+    if plugin is None or not hasattr(plugin, "server_report"):
+        return empty
+    try:
+        return plugin.server_report()
+    except Exception:
+        return empty
+
+
 @router.get("/plugins/{plugin_id}")
 async def get_plugin(plugin_id: str) -> dict:
     """Return detail + live health for a single plugin."""

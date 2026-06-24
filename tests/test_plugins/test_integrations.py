@@ -184,6 +184,56 @@ def test_audit_plugin_set_accumulator():
     assert metrics["servers_seen"] == 2
 
 
+def test_audit_plugin_server_report_empty_without_accumulator():
+    """With no accumulator and no lazy feed, the report is empty (no 500)."""
+    report = AuditPlugin().server_report()
+    assert report["feed"] == "none"
+    assert report["servers"] == []
+    assert report["totals"] == {}
+
+
+def test_audit_plugin_server_report_per_server_breakdown():
+    """server_report exposes per-server detail that flat metrics omit."""
+
+    class _FakeAcc:
+        total_results = 3
+        total_raw_chars = 1700
+        total_filtered_chars = 1100
+        servers = {"vps": None, "memory": None}
+
+        def get_server_summary(self):
+            return {
+                "vps": {
+                    "call_count": 2,
+                    "raw_chars": 1500,
+                    "share_pct": 88.2,
+                    "savings_pct": 40.0,
+                    "tools": ["mcp__vps__vps_status"],
+                    "waste_findings": [],
+                },
+                "memory": {
+                    "call_count": 1,
+                    "raw_chars": 200,
+                    "share_pct": 11.8,
+                    "savings_pct": 0.0,
+                    "tools": ["mcp__memory__query_structure"],
+                    "waste_findings": [],
+                },
+            }
+
+    p = AuditPlugin()
+    p.set_accumulator(_FakeAcc())
+    report = p.server_report()
+
+    assert report["feed"] == "live"
+    by_server = {s["server"]: s for s in report["servers"]}
+    assert by_server["vps"]["call_count"] == 2
+    assert by_server["vps"]["raw_chars"] == 1500
+    assert by_server["vps"]["savings_pct"] == 40.0
+    assert report["totals"]["total_results"] == 3
+    assert report["totals"]["servers_seen"] == 2
+
+
 async def test_audit_plugin_deactivate_clears_accumulator():
     class _FakeAcc:
         total_results = 1
