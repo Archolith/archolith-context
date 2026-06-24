@@ -33,3 +33,36 @@ jobs:
 
       - name: Test
         run: uv run pytest --tb=short -q
+
+  plugin-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - mode: core
+            extra: ""
+          - mode: filter
+            extra: "--extra filter"
+          - mode: audit
+            extra: "--extra audit"
+          - mode: full
+            extra: "--extra full"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync ${{ matrix.extra }}
+
+      - name: Check plugin mode
+        run: uv run python scripts/check_plugin_mode.py ${{ matrix.mode }}
+
+    # Note: Below-minimum plugin version negative path is covered by
+    # tests/test_plugins/test_registry.py::test_version_below_minimum_marks_error
+    # which runs in the `test` job and monkeypatches MIN_PLUGIN_VERSIONS.
