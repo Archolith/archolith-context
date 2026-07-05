@@ -1,5 +1,10 @@
 # Changelog — archolith-context
 
+## 2026-06-21 — Shared Token Counting Primitive
+
+- **refactor(token-accounting):** Context structural accounting now uses `archolith-maintenance` for primitive text-token counts while preserving context-owned framing, floors, margins, and gate decisions.
+- **packaging:** Declared `archolith-maintenance` as a runtime dependency.
+
 ## 2026-06-20 — Session Budget Uses Structural Gate Tokens
 
 - **Correctness**: Session token-budget accumulation now records `gate_input_tokens` from structural token telemetry instead of the legacy content-only estimate.

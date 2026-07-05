@@ -36,7 +36,7 @@ that wires them together at the proxy boundary.
 | **archolith-context** | Proxy — orchestrates session context, extraction, curation | Orchestrator; imports peers when available |
 
 **Design constraint (applies to all modules):**
-- Each module ships as `pip install archolith-<name>` with no mandatory dependencies on siblings
+- Product modules should not require each other on core startup paths unless the integration is explicit. Shared substrate packages such as `archolith-maintenance` may be mandatory when they own cross-project helper policy.
 - archolith-context treats peers as optional: all peer integration paths are fail-open
 - Peers have zero dependency on archolith-context and are usable standalone
 - MCP servers (when they exist) are thin wrappers around the library — not the primary integration surface
@@ -601,8 +601,9 @@ the gate decided on a large underestimate (e.g. 10 vs ~17,900 tokens on a 20-too
 request). `build_telemetry` computes content / structural (content + tool schemas +
 `tool_calls` + tool-result payloads + framing) / client-reported estimates and a
 gate decision; the gate uses `gate_input_tokens = max(structural, client_reported)`.
-A client may supply `X-Context-Token-Hint`. The estimator uses tiktoken (cl100k_base)
-when present and falls back to `len/3.6`. It runs on the request hot path via
+A client may supply `X-Context-Token-Hint`. Primitive text counts come from
+`archolith-maintenance` token accounting: tiktoken (cl100k_base) when present,
+or the shared shape-aware fallback otherwise. It runs on the request hot path via
 `asyncio.to_thread` — tiktoken releases the GIL, so encoding does not block the
 event loop. The per-turn trace records the breakdown plus the actual upstream
 `prompt_tokens` (`prompt_tokens_actual`) so estimate-vs-actual is inspectable. The

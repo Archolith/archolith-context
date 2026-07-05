@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import structlog
 
+from archolith_maintenance.token_accounting import count_text_tokens
 from archolith_proxy.token_accounting.models import (
     TokenEstimateBreakdown,
     GateSource,
@@ -42,14 +43,8 @@ ESTIMATOR_VERSION = "v2-structural"
 
 def _encode_count(text: str) -> int:
     """Count tokens in a string using cl100k_base with 10% margin, min 1."""
-    try:
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        raw = len(enc.encode(text))
-        return max(int(raw * 1.10), 1)
-    except ImportError:
-        # Fallback: ~3.6 chars per token + 10% margin
-        return max(int(len(text) / 3.6 * 1.10), 1)
+    raw = count_text_tokens(text, minimum=1)
+    return max(int(raw * 1.10), 1)
 
 
 def estimate_content_tokens(messages: list[dict]) -> int:
