@@ -1,5 +1,10 @@
 # Changelog — archolith-context
 
+## 2026-07-07 — Archived superseded review artifacts
+
+- **Docs**: Moved the old June 7 chunk audits and June 9/20 wrapups from `.agent/for-review/` to `.agent/for-review/archive/`.
+- **Artifact hygiene**: Leaves the active context artifact surface at the umbrella consolidated plan plus archived June 20 audit/remediation records.
+
 ## 2026-06-21 — Shared Token Counting Primitive
 
 - **refactor(token-accounting):** Context structural accounting now uses `archolith-maintenance` for primitive text-token counts while preserving context-owned framing, floors, margins, and gate decisions.
