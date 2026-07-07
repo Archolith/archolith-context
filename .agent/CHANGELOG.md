@@ -1,5 +1,10 @@
 # Changelog — archolith-context
 
+## 2026-07-07 — Real-session trace inventory
+
+- **Eval**: Added a read-only `scripts/real_session_inventory.py` helper to classify existing trace JSONL and harness metadata by evaluation arm.
+- **Audit**: Published `.agent/audits/2026-07-07-real-session-trace-inventory.md` with the Phase 0 inventory table for the real-session evaluation plan.
+
 ## 2026-07-07 — Archived superseded review artifacts
 
 - **Docs**: Moved the old June 7 chunk audits and June 9/20 wrapups from `.agent/for-review/` to `.agent/for-review/archive/`.
