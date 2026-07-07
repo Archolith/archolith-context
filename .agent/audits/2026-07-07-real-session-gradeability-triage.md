@@ -10,16 +10,18 @@ Status: Phase 0 candidate triage published; final grading still pending
 
 - Candidate sessions assessed: 35
 - Ready to grade from trace evidence: 21
-- Manual review before grading: 12
+- Harness-blocked before outcome: 7
+- Manual review before grading: 5
 - Evidence gaps: 2
 - Ready by arm: `curated=14`, `mechanical=6`, `passthrough=1`
 
-This narrows the first grading pass. The data is still not balanced enough for a verdict: curated sessions dominate the ready set, passthrough still needs outcome recovery, and several mechanical sessions are research/report tasks rather than implementation tasks.
+This narrows the first grading pass. External harness evidence did not add passthrough-ready outcomes: two passthrough attempts were blocked by model/permission gates before outcome, while the later `20260604-2148` passthrough run remains the only passthrough success with gradeable completion evidence. The data is still not balanced enough for a verdict.
 
 ## Meaning of Status
 
 - `ready-to-grade`: trace contains a recoverable task signal and a final/outcome response signal.
 - Research/report tasks count as ready when the task asks to explore/search/study/understand and the trace contains a summary/findings/report outcome.
+- `harness-blocked`: trace has a task signal, but external harness logs show the run stopped at a model, permission, or interruption gate before completion evidence.
 - `manual-review`: trace has a task signal, but outcome needs confirmation from harness logs, worktree diff, or task file.
 - `evidence-gap`: trace lacks either a non-generic task or final response summary.
 
@@ -55,23 +57,24 @@ This is not the final product grade. It is a queue for the missing `archolith-se
 
 | Trace | Arm | Status | Reason |
 |---|---:|---|---|
-| `ses_14ca01b7affeX5347LQnsl60V2.jsonl` | curated | manual-review | single task signal; needs outcome confirmation |
+| `ses_14ca01b7affeX5347LQnsl60V2.jsonl` | curated | harness-blocked | external harness log shows permission/model gate before outcome (`bench-cmp-proxy-r2`, exit -1) |
 | `ses_12edda170ffe5Y5TCqjELbk7a1.jsonl` | mechanical | manual-review | failure markers present; inspect task outcome before grading |
 | `ses_1276359f7ffe276qY4HayRBI81.jsonl` | mechanical | evidence-gap | no non-generic user task recovered from trace |
-| `ses_16b791224ffeXdmjUDPL4onBdR.jsonl` | passthrough | manual-review | single task signal; needs outcome confirmation |
-| `ses_16b72c0beffeaB7ukrCNHdSxBj.jsonl` | passthrough | manual-review | single task signal; needs outcome confirmation |
+| `ses_16b791224ffeXdmjUDPL4onBdR.jsonl` | passthrough | harness-blocked | external harness log shows permission/model gate before outcome (`cth-agentsmith-shared-backend-20260604-2125`, exit 1) |
+| `ses_16b72c0beffeaB7ukrCNHdSxBj.jsonl` | passthrough | harness-blocked | external harness log shows permission/model gate before outcome (`cth-agentsmith-shared-backend-20260604-2141`, exit -1073741510) |
 | `ses_175674b75ffeMLMNylh2JuSs4y.jsonl` | curated | manual-review | single task signal; needs outcome confirmation |
-| `ses_133631bd2ffeBJmR7z1dcD4bii.jsonl` | curated | manual-review | single task signal; needs outcome confirmation |
+| `ses_133631bd2ffeBJmR7z1dcD4bii.jsonl` | curated | harness-blocked | external harness log shows permission/model gate before outcome (`delegate-server-672401`, exit 1) |
 | `ses_138ca5525ffeczNPtf8qFvDM7t.jsonl` | mechanical | manual-review | single task signal; needs outcome confirmation |
 | `ses_138b6069affewBnO5F5rcVXgfN.jsonl` | curated | manual-review | single task signal; needs outcome confirmation |
 | `ses_13b83f6dfffec7rKLT1RaiVe85.jsonl` | passthrough | evidence-gap | no final response summary recovered |
-| `ses_14dbabfa5ffeePlkLV0CAjc304.jsonl` | curated | manual-review | single task signal; needs outcome confirmation |
+| `ses_14dbabfa5ffeePlkLV0CAjc304.jsonl` | curated | harness-blocked | external harness log shows permission/model gate before outcome (`bench-cmp-proxy-20260610`, exit -1073741510) |
 | `ses_1617fbf5affeltawkC6l5NA14B.jsonl` | curated | manual-review | single task signal; needs outcome confirmation |
-| `ses_161815325ffevks0e9xRpfz4Es.jsonl` | curated | manual-review | single task signal; needs outcome confirmation |
-| `ses_161822cfdffeRJ7s3DuHk5fMrf.jsonl` | curated | manual-review | single task signal; needs outcome confirmation |
+| `ses_161815325ffevks0e9xRpfz4Es.jsonl` | curated | harness-blocked | external harness log shows permission/model gate before outcome (`archolith-filter-deepseek-v4flash-remediation-20260606`, exit 1) |
+| `ses_161822cfdffeRJ7s3DuHk5fMrf.jsonl` | curated | harness-blocked | external harness log shows permission/model gate before outcome (`archolith-filter-deepseek-remediation-20260606`, exit 1) |
 
 ## Next Work
 
 1. Grade the 21 ready sessions first, but do not produce a verdict until passthrough has enough confirmed outcomes.
-2. Recover outcome evidence for the 12 manual-review sessions from harness logs, task files, or worktree diffs.
+2. Recover outcome evidence for the 5 remaining manual-review sessions from harness logs, task files, or worktree diffs.
 3. Drop the 2 evidence-gap sessions unless external evidence can identify the task/outcome.
+4. Treat the 7 harness-blocked sessions as launch-process evidence, not model-quality evidence.

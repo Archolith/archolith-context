@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +66,22 @@ REPORT_OUTCOME_MARKERS = (
     "here is the complete",
 )
 
+COMPLETION_MARKERS = (
+    "definition of done checklist",
+    "validation passed",
+    "commit ",
+    "committed",
+    "wrapup",
+)
+
+HARNESS_BLOCKER_MARKERS = (
+    "permission required",
+    "access external directory",
+    "model deepseek-proxy/deepseek-v4-flash is not valid",
+)
+
+TASK_FILE_RE = re.compile(r"TASK-([A-Za-z0-9_.-]+)\.md")
+
 
 @dataclass(frozen=True)
 class Gradeability:
@@ -75,6 +92,8 @@ class Gradeability:
     input_tokens: int
     savings_tokens: int
     task_seed: str
+    harness_id: str
+    harness_exit: int | None
     last_user: str
     last_response: str
     meaningful_user_messages: int
@@ -115,6 +134,38 @@ def _turn_objects(path: Path) -> list[dict[str, Any]]:
     return turns
 
 
+def _task_refs(messages: list[str]) -> list[str]:
+    refs: list[str] = []
+    for message in messages:
+        for match in TASK_FILE_RE.finditer(message):
+            refs.append(match.group(1))
+    return refs
+
+
+def _harness_meta_for_task_refs(
+    harness_meta: dict[str, dict[str, Any]], task_refs: list[str]
+) -> dict[str, Any] | None:
+    for task_ref in task_refs:
+        meta = harness_meta.get(task_ref)
+        if meta:
+            return meta
+    return None
+
+
+def _harness_log_contains(meta: dict[str, Any], markers: tuple[str, ...]) -> bool:
+    meta_path_text = meta.get("_meta_path")
+    if not meta_path_text:
+        return False
+    clean_log = Path(str(meta_path_text)).with_suffix("").with_suffix(".clean.log")
+    if not clean_log.exists():
+        return False
+    try:
+        text = clean_log.read_text(encoding="utf-8", errors="replace").lower()
+    except OSError:
+        return False
+    return any(marker in text for marker in markers)
+
+
 def _unique_user_messages(turns: list[dict[str, Any]]) -> list[str]:
     seen: set[str] = set()
     messages: list[str] = []
@@ -132,9 +183,13 @@ def _unique_user_messages(turns: list[dict[str, Any]]) -> list[str]:
     return messages
 
 
-def assess_trace(path: Path, summary) -> Gradeability:
+def assess_trace(path: Path, summary, harness_meta: dict[str, dict[str, Any]]) -> Gradeability:
     turns = _turn_objects(path)
     meaningful_users = _unique_user_messages(turns)
+    external_meta = _harness_meta_for_task_refs(harness_meta, _task_refs(meaningful_users))
+    harness_id = str((external_meta or {}).get("id") or summary.harness_id or "")
+    exit_code = (external_meta or {}).get("exitCode", summary.harness_exit)
+    harness_exit = int(exit_code) if isinstance(exit_code, int) else None
     response_candidates = [
         str(turn.get("upstream_response_summary") or "")
         for turn in turns
@@ -151,6 +206,13 @@ def assess_trace(path: Path, summary) -> Gradeability:
     failure_markers = _marker_count(response_blob, FAILURE_MARKERS)
     research_task_markers = _marker_count(task_blob, RESEARCH_TASK_MARKERS)
     report_outcome_markers = _marker_count(response_blob, REPORT_OUTCOME_MARKERS)
+    completion_markers = _marker_count(response_blob, COMPLETION_MARKERS)
+    harness_blocked = bool(
+        external_meta
+        and harness_exit not in (None, 0)
+        and completion_markers == 0
+        and _harness_log_contains(external_meta, HARNESS_BLOCKER_MARKERS)
+    )
 
     if not meaningful_users:
         status = "evidence-gap"
@@ -158,6 +220,9 @@ def assess_trace(path: Path, summary) -> Gradeability:
     elif not last_response:
         status = "evidence-gap"
         reason = "no final response summary recovered"
+    elif harness_blocked:
+        status = "harness-blocked"
+        reason = "external harness log shows permission/model gate before outcome"
     elif failure_markers and not success_markers:
         status = "manual-review"
         reason = "failure markers present; inspect task outcome before grading"
@@ -179,6 +244,8 @@ def assess_trace(path: Path, summary) -> Gradeability:
         input_tokens=summary.input_tokens,
         savings_tokens=summary.savings_tokens,
         task_seed=_shorten(meaningful_users[0] if meaningful_users else ""),
+        harness_id=harness_id,
+        harness_exit=harness_exit,
         last_user=_shorten(meaningful_users[-1] if meaningful_users else ""),
         last_response=_shorten(last_response),
         meaningful_user_messages=len(meaningful_users),
@@ -218,8 +285,11 @@ def markdown_report(items: list[Gradeability]) -> str:
         ]
     )
     for item in [x for x in items if x.status != "ready-to-grade"]:
+        harness_suffix = ""
+        if item.harness_id:
+            harness_suffix = f" ({item.harness_id}, exit {item.harness_exit})"
         lines.append(
-            f"| `{item.trace}` | {item.arm} | {item.status} | {item.reason} | "
+            f"| `{item.trace}` | {item.arm} | {item.status} | {item.reason}{harness_suffix} | "
             f"{item.task_seed} | {item.last_response} |"
         )
     return "\n".join(lines) + "\n"
@@ -244,7 +314,7 @@ def main() -> int:
     for trace_path in sorted(args.trace_dir.glob("*.jsonl")):
         summary, _ = summarize_trace(trace_path, harness_meta)
         if summary.usable_candidate:
-            items.append(assess_trace(trace_path, summary))
+            items.append(assess_trace(trace_path, summary, harness_meta))
 
     items.sort(key=lambda item: (item.status != "ready-to-grade", -item.turns, item.trace))
     print(markdown_report(items))
