@@ -3,9 +3,9 @@
 ## 2026-07-07 — Real-session trace inventory
 
 - **Eval**: Added a read-only `scripts/real_session_inventory.py` helper to classify existing trace JSONL and harness metadata by evaluation arm.
-- **Eval**: Added `scripts/real_session_gradeability.py` to triage candidate sessions into ready-to-grade, manual-review, and evidence-gap buckets.
+- **Eval**: Added `scripts/real_session_gradeability.py` to triage candidate sessions into ready-to-grade, manual-review, and evidence-gap buckets, including research/report outcome detection.
 - **Audit**: Published `.agent/audits/2026-07-07-real-session-trace-inventory.md` with the Phase 0 inventory table for the real-session evaluation plan.
-- **Audit**: Published `.agent/audits/2026-07-07-real-session-gradeability-triage.md`; 17 of 35 candidates are ready for first-pass grading from trace evidence.
+- **Audit**: Published `.agent/audits/2026-07-07-real-session-gradeability-triage.md`; 21 of 35 candidates are ready for first-pass grading from trace evidence.
 
 ## 2026-07-07 — Archived superseded review artifacts
 

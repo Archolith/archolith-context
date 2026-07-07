@@ -44,6 +44,27 @@ FAILURE_MARKERS = (
     "permission denied",
 )
 
+RESEARCH_TASK_MARKERS = (
+    "explore",
+    "search",
+    "understand",
+    "study",
+    "find and return",
+    "return:",
+    "summarize",
+    "summary",
+)
+
+REPORT_OUTCOME_MARKERS = (
+    "comprehensive summary",
+    "summary of my findings",
+    "complete summary",
+    "complete pattern analysis",
+    "search results",
+    "here is a complete summary",
+    "here is the complete",
+)
+
 
 @dataclass(frozen=True)
 class Gradeability:
@@ -124,9 +145,12 @@ def assess_trace(path: Path, summary) -> Gradeability:
         str(turn.get("curator_failure_reason") or "") + " " + str(turn.get("fallback_reason") or "")
         for turn in turns
     )
-    response_blob = f"{last_response} {failure_blob}"
+    response_blob = f"{' '.join(response_candidates)} {failure_blob}"
+    task_blob = " ".join(meaningful_users)
     success_markers = _marker_count(response_blob, SUCCESS_MARKERS)
     failure_markers = _marker_count(response_blob, FAILURE_MARKERS)
+    research_task_markers = _marker_count(task_blob, RESEARCH_TASK_MARKERS)
+    report_outcome_markers = _marker_count(response_blob, REPORT_OUTCOME_MARKERS)
 
     if not meaningful_users:
         status = "evidence-gap"
@@ -137,6 +161,9 @@ def assess_trace(path: Path, summary) -> Gradeability:
     elif failure_markers and not success_markers:
         status = "manual-review"
         reason = "failure markers present; inspect task outcome before grading"
+    elif research_task_markers and report_outcome_markers:
+        status = "ready-to-grade"
+        reason = "research/report task with summary outcome signal"
     elif len(meaningful_users) >= 2 or success_markers:
         status = "ready-to-grade"
         reason = "task and outcome signals present"
