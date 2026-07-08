@@ -36,7 +36,7 @@ archolith-proxy = "archolith_proxy.main:run"
 Homepage = "https://archolith.dev"
 Repository = "https://github.com/Archolith/archolith-context"
 Documentation = "https://github.com/Archolith/archolith-context#readme"
-Benchmarks = "https://github.com/Archolith/archolith-bench"
+Benchmarks = "https://github.com/ctharvey/archolith-bench"
 
 [project.optional-dependencies]
 java = [

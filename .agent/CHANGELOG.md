@@ -1,5 +1,10 @@
 # Changelog — archolith-context
 
+## 2026-07-08 — Fix visible paths for launch readiness
+
+- `README.md` — Replaced broken `pip install archolith-proxy` commands with Docker-first instructions and local editable install; noted package not yet on PyPI.
+- `pyproject.toml` — Fixed benchmarks URL from `Archolith/archolith-bench` (404) to `ctharvey/archolith-bench`.
+
 ## 2026-07-07 — Real-session trace inventory
 
 - **Eval**: Added a read-only `scripts/real_session_inventory.py` helper to classify existing trace JSONL and harness metadata by evaluation arm.

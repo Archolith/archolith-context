@@ -8,21 +8,25 @@ Instead of re-sending stale conversation history on every turn, the proxy extrac
 
 ## Install
 
+**Note:** The `archolith-proxy` package is not yet published on PyPI. The install commands below work from a local checkout. Docker is the fastest path to running:
+
 ```bash
-# Proxy core (passthrough + session tracking + monitoring)
-pip install archolith-proxy
-
-# Proxy + token reduction (archolith-filter)
-pip install archolith-proxy[filter]
-
-# Proxy + waste monitoring (archolith-audit)
-pip install archolith-proxy[audit]
-
-# Full stack (filter + audit)
-pip install archolith-proxy[full]
+git clone https://github.com/Archolith/archolith-context
+cd archolith-context
+cp .env.example .env
+docker compose up -d
 ```
 
-For local development from source:
+Or install from source for local development:
+
+```bash
+git clone https://github.com/Archolith/archolith-context
+cd archolith-context
+pip install -e ".[dev]"           # proxy core + dev deps
+pip install -e ".[filter]"        # + token reduction (archolith-filter)
+pip install -e ".[audit]"         # + waste monitoring (archolith-audit)
+pip install -e ".[full]"          # + filter + audit + compliance
+```
 ```bash
 pip install -e ".[dev]"
 ```
