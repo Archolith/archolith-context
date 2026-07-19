@@ -100,19 +100,32 @@ def score_files(
     files,
     query: str,
     weights: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    drift_turn: int | None = None,
+    drift_penalty: float = 0.30,
 ) -> list[tuple[float, object]]:
     """Score and rank PreFetchedFiles by retrieval score, highest first.
 
     recency is uniform across one briefing (all fetched together), so ranking is
     driven by importance (parsed prepper score) + relevance (turn keyword overlap).
     Stable: ties preserve the original (prepper-provided) order.
+
+    When drift_turn is provided, facts/files from turns before the drift point
+    receive a penalty (basic re-weighting for goal drift).
     """
     scored: list[tuple[float, int, object]] = []
     for idx, f in enumerate(files):
         importance = parse_importance(getattr(f, "relevance", ""))
         relevance = keyword_relevance(query, _file_text(f))
         score = retrieval_score(1.0, importance, relevance, weights)
+
+        # Goal drift re-weighting (Phase 1)
+        if drift_turn is not None:
+            source_turn = getattr(f, "source_turn", None)
+            if source_turn is not None and source_turn < drift_turn:
+                score *= drift_penalty
+
         scored.append((score, idx, f))
+
     # Sort by score desc, then original index asc (stable tie-break).
     scored.sort(key=lambda t: (-t[0], t[1]))
     return [(score, f) for (score, _idx, f) in scored]

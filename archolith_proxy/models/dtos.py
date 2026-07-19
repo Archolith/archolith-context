@@ -154,6 +154,11 @@ class TurnTrace(BaseModel):
     tail_intent: str = ""           # "continue" | "pivot" | "neutral" | ""
     effective_tail_size: int = 0
 
+    # Goal Drift Detection (Phase 1+)
+    goal_drift_detected: bool = False
+    goal_drift_similarity: float = 1.0
+    drift_turn: int | None = None
+
     # Fallback
     fallback_reason: str = ""
 

@@ -156,7 +156,16 @@ def build_deterministic_context(
         ordered_files = order_by_topology(briefing.files)
     elif scored:
         from archolith_proxy.curator.scoring import score_files
-        ordered_files = [f for (_score, f) in score_files(briefing.files, query, weights)]
+
+        # Goal drift re-weighting (Phase 1)
+        drift_turn = getattr(briefing, "drift_turn", None)
+        drift_penalty = getattr(settings, "goal_drift_penalty_multiplier", 0.30)
+
+        ordered_files = [f for (_score, f) in score_files(
+            briefing.files, query, weights,
+            drift_turn=drift_turn,
+            drift_penalty=drift_penalty
+        )]
     else:
         ordered_files = briefing.files
 
