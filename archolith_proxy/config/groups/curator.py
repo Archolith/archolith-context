@@ -53,6 +53,7 @@ class CuratorGroup(BaseModel):
     assembler_exemplar_suffixes: str = ""
     assembler_code_map: bool = False
     assembler_code_map_mode: str = "task"
+    assembler_code_map_budget_fraction: float = 0.12
     curator_list_dir_tool: bool = False
     curator_workingset_enabled: bool = False
     curator_workingset_max_sessions: int = 256
