@@ -9,7 +9,11 @@ import httpx
 import structlog
 
 from archolith_proxy.extractor.budget import (
-    ExtractionBudget, LLMBudgetExceeded, set_budget, reset_budget,
+    ExtractionBudget,
+    LLMBudgetExceeded,
+    reserve_llm_call,
+    reset_budget,
+    set_budget,
 )
 
 from archolith_proxy.config import get_settings
@@ -295,6 +299,21 @@ def _reset_llm_semaphore() -> None:
     _llm_semaphore = None
 
 
+def _budget_fallback(record: ToolCallRecord, reason: str) -> PartialExtractionResult:
+    """Keep a bounded record of a skipped LLM extractor without inventing a fact."""
+    return PartialExtractionResult(
+        source_tool=record.tool_name,
+        facts=[{
+            "content": f"[{record.tool_name}] {record.result[:300]}",
+            "fact_type": "tool_result",
+            "confidence": 0.1,
+            "extraction_note": reason,
+        }] if record.result else [],
+        files_touched=[],
+        used_llm=False,
+    )
+
+
 async def _extract_with_semaphore(
     extractor,
     record: ToolCallRecord,
@@ -322,25 +341,17 @@ async def _extract_with_semaphore(
     if extractor.may_use_llm:
         tokens = getattr(extractor, "llm_requested_tokens", 0)
         if not isinstance(tokens, int) or tokens <= 0:
-            # Safe policy for custom/undeclared LLM extractors: return deterministic fallback
-            # without making an upstream call and without bypassing budget.
-            return PartialExtractionResult(
-                source_tool=getattr(record, "tool_name", "unknown"),
-                facts=[{"content": f"[{record.tool_name}] (budget policy) limited result", "fact_type": "observation", "confidence": 0.1}],
-                files_touched=[],
-                used_llm=False,
+            logger.warning(
+                "per_tool_extractor_missing_llm_budget",
+                tool=record.tool_name,
+                extractor=type(extractor).__name__,
             )
-        from archolith_proxy.extractor.budget import reserve_llm_call
+            return _budget_fallback(record, "missing_llm_budget")
         try:
             reserve_llm_call(tokens)
-        except Exception:
-            # Budget exhausted — return safe deterministic fallback, no HTTP call
-            return PartialExtractionResult(
-                source_tool=record.tool_name,
-                facts=[{"content": f"[{record.tool_name}] (budget exhausted) limited result", "fact_type": "observation", "confidence": 0.1}],
-                files_touched=[],
-                used_llm=False,
-            )
+        except LLMBudgetExceeded:
+            logger.info("per_tool_extractor_budget_exhausted", tool=record.tool_name)
+            return _budget_fallback(record, "llm_budget_exhausted")
         sem = _get_llm_semaphore()
         async with sem:
             return await extractor.extract(record, http_client, turn_number, session_goal)
@@ -394,136 +405,125 @@ async def extract_facts_per_tool(
 
         # Step 2: Merge partial results with exception guard
         all_facts: list[dict] = []
-    all_files: list[str] = []
-    llm_calls_made = 0
-    usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "llm_calls": 0, "cached_tokens": 0}
-    for r in partial_results:
-        if isinstance(r, Exception):
-            logger.warning("per_tool_extractor_failed", error=str(r))
-            continue
-        for fact in (r.facts or []):
-            # Preserve the extractor-level provenance even when an individual
-            # extractor omitted it. This is the single merge point before graph
-            # persistence.
-            if isinstance(fact, dict):
-                fact.setdefault("source_tool", r.source_tool)
-        all_facts.extend(r.facts or [])
-        all_files.extend(r.files_touched or [])
-        if r.used_llm:
-            calls = r.usage.get("llm_calls", 1) or 1
-            llm_calls_made += calls
-            usage["llm_calls"] += calls
-            usage["prompt_tokens"] += r.usage.get("prompt_tokens", 0) or 0
-            usage["completion_tokens"] += r.usage.get("completion_tokens", 0) or 0
-            usage["cached_tokens"] += r.usage.get("cached_tokens", 0) or 0
+        all_files: list[str] = []
+        llm_calls_made = 0
+        usage: dict = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "llm_calls": 0,
+            "cached_tokens": 0,
+        }
+        for result in partial_results:
+            if isinstance(result, Exception):
+                logger.warning("per_tool_extractor_failed", error=str(result))
+                continue
+            for fact in (result.facts or []):
+                if isinstance(fact, dict):
+                    fact.setdefault("source_tool", result.source_tool)
+            all_facts.extend(result.facts or [])
+            all_files.extend(result.files_touched or [])
+            if result.used_llm:
+                calls = result.usage.get("llm_calls", 1) or 1
+                llm_calls_made += calls
+                usage["llm_calls"] += calls
+                usage["prompt_tokens"] += result.usage.get("prompt_tokens", 0) or 0
+                usage["completion_tokens"] += result.usage.get("completion_tokens", 0) or 0
+                usage["cached_tokens"] += result.usage.get("cached_tokens", 0) or 0
 
-    logger.info(
-        "per_tool_extraction_gathered",
-        turn=turn_number,
-        records=len(tool_records),
-        facts=len(all_facts),
-        files=len(all_files),
-        llm_calls=llm_calls_made,
-        failures=sum(1 for r in partial_results if isinstance(r, Exception)),
-    )
-
-    # Step 3: Run turn-level LLM call for decisions, checkpoint, issues, verifications
-    _turn_level_facts_count = 0  # used for logging; avoids fragile "turn_result" in dir() guard
-    settings = get_settings()
-    turn_level_prompt = build_turn_level_extraction_prompt(
-        turn_number=turn_number,
-        user_message=user_message[:4000],
-        assistant_response=assistant_response[:8000],
-        session_goal=session_goal,
-    )
-
-    turn_payload = {
-        "model": settings.extractor_model,
-        "messages": [
-            {"role": "system", "content": TURN_LEVEL_SYSTEM_PROMPT},
-            {"role": "user", "content": turn_level_prompt},
-        ],
-        "temperature": 0.1,
-        "max_tokens": _TURN_LEVEL_MAX_TOKENS,
-    }
-
-    try:
-        if not turn_level_reserved:
-            raise LLMBudgetExceeded("per-turn extractor LLM budget exhausted")
-        resp = await http_client.post(
-            f"{settings.extractor_base_url.rstrip('/')}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.extractor_api_key}",
-                "Content-Type": "application/json",
-            },
-            content=json.dumps(turn_payload).encode(),
+        logger.info(
+            "per_tool_extraction_gathered",
+            turn=turn_number,
+            records=len(tool_records),
+            facts=len(all_facts),
+            files=len(all_files),
+            llm_calls=llm_calls_made,
+            failures=sum(1 for result in partial_results if isinstance(result, Exception)),
         )
-        resp.raise_for_status()
-        data = resp.json()
-        turn_content = data["choices"][0]["message"]["content"]
-        turn_result = _parse_extraction_response(turn_content, turn_number, source="Turn-level")
-        _turn_level_facts_count = len(turn_result.facts)
 
-        # Capture turn-level usage from upstream response
-        turn_usage = data.get("usage", {})
-        if turn_usage:
-            usage["prompt_tokens"] += turn_usage.get("prompt_tokens", 0) or 0
-            usage["completion_tokens"] += turn_usage.get("completion_tokens", 0) or 0
-            usage["cached_tokens"] += (turn_usage.get("prompt_tokens_details", {}) or {}).get("cached_tokens", 0) or 0
-        usage["llm_calls"] += 1
-        turn_result.usage = usage.copy()
+        _turn_level_facts_count = 0
+        turn_level_prompt = build_turn_level_extraction_prompt(
+            turn_number=turn_number,
+            user_message=user_message[:4000],
+            assistant_response=assistant_response[:8000],
+            session_goal=session_goal,
+        )
+        turn_payload = {
+            "model": settings.extractor_model,
+            "messages": [
+                {"role": "system", "content": TURN_LEVEL_SYSTEM_PROMPT},
+                {"role": "user", "content": turn_level_prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": _TURN_LEVEL_MAX_TOKENS,
+        }
+        try:
+            if not turn_level_reserved:
+                raise LLMBudgetExceeded("per-turn extractor LLM budget exhausted")
+            resp = await http_client.post(
+                f"{settings.extractor_base_url.rstrip('/')}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.extractor_api_key}",
+                    "Content-Type": "application/json",
+                },
+                content=json.dumps(turn_payload).encode(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            turn_content = data["choices"][0]["message"]["content"]
+            turn_result = _parse_extraction_response(turn_content, turn_number, source="Turn-level")
+            _turn_level_facts_count = len(turn_result.facts)
 
-        # Step 4: Merge — add turn-level facts that don't duplicate per-tool facts.
-        # Use Jaccard near-duplicate check (not just exact MD5) to catch similar facts.
-        merged_facts = deduplicate_facts(turn_result.facts, all_facts)
-        all_facts.extend(merged_facts)
+            turn_usage = data.get("usage", {})
+            if turn_usage:
+                usage["prompt_tokens"] += turn_usage.get("prompt_tokens", 0) or 0
+                usage["completion_tokens"] += turn_usage.get("completion_tokens", 0) or 0
+                usage["cached_tokens"] += (
+                    (turn_usage.get("prompt_tokens_details", {}) or {}).get("cached_tokens", 0) or 0
+                )
+            usage["llm_calls"] += 1
 
-        # Merge files
-        existing_paths = set(all_files)
-        for p in turn_result.files_touched:
-            if p not in existing_paths:
-                all_files.append(p)
-                existing_paths.add(p)
+            merged_facts = deduplicate_facts(turn_result.facts, all_facts)
+            all_facts.extend(merged_facts)
+            existing_paths = set(all_files)
+            for path in turn_result.files_touched:
+                if path not in existing_paths:
+                    all_files.append(path)
+                    existing_paths.add(path)
+            decisions = turn_result.decisions
+            checkpoint = turn_result.checkpoint
+            issues = turn_result.issues
+            verifications = turn_result.verifications
+            session_goal_result = turn_result.session_goal
+            invalidated = turn_result.invalidated_fact_ids
+        except Exception as exc:
+            logger.warning("turn_level_extraction_failed", turn=turn_number, error=str(exc))
+            decisions = []
+            checkpoint = None
+            issues = []
+            verifications = []
+            session_goal_result = session_goal
+            invalidated = []
 
-        # Turn-level contributes decisions, checkpoint, issues, verifications
-        decisions = turn_result.decisions
-        checkpoint = turn_result.checkpoint
-        issues = turn_result.issues
-        verifications = turn_result.verifications
-        session_goal_result = turn_result.session_goal
-        invalidated = turn_result.invalidated_fact_ids
-
-    except Exception as e:
-        logger.warning("turn_level_extraction_failed", turn=turn_number, error=str(e))
-        # Fall back to whatever per-tool gave us
-        decisions = []
-        checkpoint = None
-        issues = []
-        verifications = []
-        session_goal_result = session_goal
-        invalidated = []
-
-    logger.info(
-        "per_tool_extraction_complete",
-        turn=turn_number,
-        total_facts=len(all_facts),
-        per_tool_facts=len(all_facts) - _turn_level_facts_count,
-        turn_level_facts=_turn_level_facts_count,
-        files=len(all_files),
-        decisions=len(decisions),
-    )
-
-    return ExtractionResult(
-        facts=all_facts,
-        files_touched=all_files,
-        decisions=decisions,
-        invalidated_fact_ids=invalidated,
-        turn_number=turn_number,
-        session_goal=session_goal_result,
-        checkpoint=checkpoint,
-        issues=issues,
-        verifications=verifications,
-        usage=usage,
-    )
+        logger.info(
+            "per_tool_extraction_complete",
+            turn=turn_number,
+            total_facts=len(all_facts),
+            per_tool_facts=len(all_facts) - _turn_level_facts_count,
+            turn_level_facts=_turn_level_facts_count,
+            files=len(all_files),
+            decisions=len(decisions),
+        )
+        return ExtractionResult(
+            facts=all_facts,
+            files_touched=all_files,
+            decisions=decisions,
+            invalidated_fact_ids=invalidated,
+            turn_number=turn_number,
+            session_goal=session_goal_result,
+            checkpoint=checkpoint,
+            issues=issues,
+            verifications=verifications,
+            usage=usage,
+        )
     finally:
         reset_budget(budget_token)

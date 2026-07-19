@@ -49,6 +49,8 @@ base URLs, keys, admin token, storage paths, or the security/behavior toggles
 | `valid_until` | `datetime \| None` | Supersession timestamp; `None` means still active |
 | `confidence` | `float` | Extractor confidence |
 | `source_turn` | `int` | Turn that produced the fact |
+| `source_tool` | `str \| None` | Tool extractor that produced the fact, when available |
+| `structured` | `dict \| None` | Extractor-provided structured payload, stored as JSON by graph backends |
 | `embedding` | `list[float] \| None` | Optional semantic-search vector |
 
 ### FileNode

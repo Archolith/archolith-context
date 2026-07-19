@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord, ToolExtractor
-from archolith_proxy.extractor.budget import ExtractionBudget, LLMBudgetExceeded, reserve_llm_call
+from archolith_proxy.extractor.budget import ExtractionBudget, reset_budget, set_budget
 from archolith_proxy.extractor.registry import ToolExtractorRegistry
 
 
@@ -34,12 +34,9 @@ async def test_turn_level_capacity_is_reserved_before_per_tool_fanout():
     class BoundedLlmExtractor(ToolExtractor):
         tool_names = ("Bounded",)
         may_use_llm = True
+        llm_requested_tokens = 1000
 
         async def extract(self, record, http_client, turn_number, session_goal):
-            try:
-                reserve_llm_call(1000)
-            except LLMBudgetExceeded:
-                return PartialExtractionResult(source_tool="Bounded")
             return PartialExtractionResult(
                 source_tool="Bounded",
                 facts=[{"content": record.tool_call_id, "fact_type": "observation", "confidence": 1.0}],
@@ -78,3 +75,81 @@ async def test_turn_level_capacity_is_reserved_before_per_tool_fanout():
     assert result is not None
     assert len(result.facts) == 3
     client.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_undeclared_llm_extractor_is_not_invoked():
+    from archolith_proxy.extractor.client import _extract_with_semaphore
+
+    class UndeclaredLlmExtractor(ToolExtractor):
+        tool_names = ("Undeclared",)
+        may_use_llm = True
+
+        async def extract(self, *args, **kwargs):
+            raise AssertionError("extract() must not run without an LLM token declaration")
+
+    result = await _extract_with_semaphore(
+        UndeclaredLlmExtractor(),
+        ToolCallRecord("call-1", "Undeclared", {}, "raw tool output"),
+        AsyncMock(),
+        1,
+        None,
+    )
+
+    assert result.used_llm is False
+    assert result.facts[0]["content"] == "[Undeclared] raw tool output"
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_prevents_custom_extractor_http_call():
+    from archolith_proxy.extractor.client import _extract_with_semaphore
+
+    class HttpLlmExtractor(ToolExtractor):
+        tool_names = ("HttpLlm",)
+        may_use_llm = True
+        llm_requested_tokens = 1000
+
+        async def extract(self, record, http_client, turn_number, session_goal):
+            await http_client.post("https://example.test/should-not-run")
+            return PartialExtractionResult(source_tool="HttpLlm", used_llm=True)
+
+    client = AsyncMock()
+    token = set_budget(ExtractionBudget(max_llm_calls=0, max_requested_tokens=0))
+    try:
+        result = await _extract_with_semaphore(
+            HttpLlmExtractor(),
+            ToolCallRecord("call-1", "HttpLlm", {}, "raw tool output"),
+            client,
+            1,
+            None,
+        )
+    finally:
+        reset_budget(token)
+
+    assert result.used_llm is False
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_budget_is_reset_after_unexpected_fanout_failure():
+    from archolith_proxy.extractor.budget import reserve_llm_call
+    from archolith_proxy.extractor.client import extract_facts_per_tool
+
+    settings = MagicMock(
+        extractor_llm_max_calls_per_turn=4,
+        extractor_llm_max_requested_tokens_per_turn=5000,
+    )
+    with (
+        patch("archolith_proxy.extractor.client.get_settings", return_value=settings),
+        patch("archolith_proxy.extractor.client.asyncio.gather", side_effect=RuntimeError("boom")),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        await extract_facts_per_tool(
+            http_client=AsyncMock(),
+            turn_number=1,
+            user_message="test",
+            assistant_response="test",
+            tool_records=[],
+        )
+
+    assert reserve_llm_call(10) is True

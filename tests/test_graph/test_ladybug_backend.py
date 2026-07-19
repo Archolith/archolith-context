@@ -192,6 +192,24 @@ async def test_store_and_get_facts(backend):
 
 
 @pytest.mark.asyncio
+async def test_fact_provenance_and_structured_payload_round_trip(backend):
+    await backend.create_session("sess-structured-1")
+    await backend.store_fact(
+        session_id="sess-structured-1",
+        content="pytest passed",
+        fact_type="tool_result",
+        source_turn=1,
+        source_tool="Bash",
+        structured={"command": "pytest", "status": "pass"},
+    )
+
+    facts = await backend.get_active_facts("sess-structured-1")
+    assert len(facts) == 1
+    assert facts[0]["source_tool"] == "Bash"
+    assert facts[0]["structured"] == {"command": "pytest", "status": "pass"}
+
+
+@pytest.mark.asyncio
 async def test_invalidate_facts(backend):
     """Invalidate facts and verify they disappear from active set."""
     await backend.create_session("sess-005")

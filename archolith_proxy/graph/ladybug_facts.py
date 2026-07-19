@@ -2,19 +2,40 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
+import base64
 import json
+from uuid import uuid4
 
 from archolith_proxy.config import get_settings
 
 
+_STRUCTURED_PREFIX = "b64:"
+
+
+def _encode_structured(structured: dict | None) -> str | None:
+    """Encode JSON for LadybugDB's content-sniffing STRING binder."""
+    if not structured:
+        return None
+    payload = json.dumps(structured, separators=(",", ":"))
+    return _STRUCTURED_PREFIX + base64.b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def _decode_structured(raw: str | None) -> dict | None:
+    """Decode current encoded and legacy plain structured payloads safely."""
+    if not raw:
+        return None
+    try:
+        if raw.startswith(_STRUCTURED_PREFIX):
+            raw = base64.b64decode(raw[len(_STRUCTURED_PREFIX):].encode("ascii")).decode("utf-8")
+        decoded = json.loads(raw)
+    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
 def _decode_fact(fact: dict) -> dict:
     raw = fact.get("structured_json")
-    if raw:
-        try:
-            fact["structured"] = json.loads(raw)
-        except (TypeError, json.JSONDecodeError):
-            fact["structured"] = None
+    fact["structured"] = _decode_structured(raw)
     fact.pop("structured_json", None)
     return fact
 
@@ -40,7 +61,7 @@ async def store_fact(execute, session_id: str, content: str, fact_type: str,
          "fact_type": fact_type, "confidence": confidence,
          "source_turn": source_turn, "embedding": embedding if embedding is not None else None,
          "source_tool": source_tool,
-         "structured_json": json.dumps(structured, separators=(",", ":")) if structured else None},
+         "structured_json": _encode_structured(structured)},
     )
     return fact_id
 
@@ -61,8 +82,7 @@ async def store_facts_batch(execute, session_id: str, facts: list[dict], source_
             "embedding": fact.get("embedding") or [],
             "source_turn": source_turn,
             "source_tool": fact.get("source_tool"),
-            "structured_json": json.dumps(fact.get("structured"), separators=(",", ":"))
-                if isinstance(fact.get("structured"), dict) else None,
+            "structured_json": _encode_structured(fact.get("structured")),
         })
     await execute(
         """

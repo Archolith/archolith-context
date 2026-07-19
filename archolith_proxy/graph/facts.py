@@ -358,14 +358,14 @@ async def get_invalidated_facts(session_id: str) -> list[dict]:
     """
     results = await run_query(cypher, {"session_id": session_id})
     return [
-        {
+        _decode_fact({
             "fact_id": r["fact_id"],
             "content": r["content"],
             "source_turn": r["source_turn"],
             "fact_type": r["fact_type"],
             "invalidated_at": str(r["invalidated_at"]) if r.get("invalidated_at") else None,
             "source_tool": r.get("source_tool"),
-            "structured": json.loads(r["structured_json"]) if r.get("structured_json") else None,
-        }
+            "structured_json": r.get("structured_json"),
+        })
         for r in results
     ]
