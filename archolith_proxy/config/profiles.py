@@ -18,6 +18,9 @@ PROFILES: dict[str, dict[str, object]] = {
         "curator_enabled": True,
         "background_pass_enabled": True,
         "file_cache_enabled": True,
+        "assembler_deterministic": True,
+        "assembler_code_map": True,
+        "assembler_code_map_mode": "task",
     },
     "full": {
         "filter_enabled": True,
@@ -31,5 +34,8 @@ PROFILES: dict[str, dict[str, object]] = {
         "embedding_enabled": True,
         "per_tool_extraction_enabled": True,
         "session_recall_tool_enabled": True,
+        "assembler_deterministic": True,
+        "assembler_code_map": True,
+        "assembler_code_map_mode": "task",
     },
 }

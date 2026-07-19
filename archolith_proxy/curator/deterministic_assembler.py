@@ -71,6 +71,7 @@ def build_deterministic_context(
     exemplar_suffixes: tuple[str, ...] = (),
     query: str = "",
     weights: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    map_budget_fraction: float = 0.12,
 ) -> tuple[str, list[dict]]:
     """Compose the context block from the briefing's typed pools, fit to budget.
 
@@ -110,6 +111,10 @@ def build_deterministic_context(
                 briefing.files, query, exemplar_suffixes=exemplar_suffixes,
             )
         if _map:
+            # Cap map size using the budget fraction so it never starves RELEVANT CODE
+            map_budget_chars = int(budget_chars * map_budget_fraction)
+            if len(_map) > map_budget_chars:
+                _map = _map[:map_budget_chars].rsplit("\n", 1)[0] + "\n... [map truncated by budget]"
             head_parts.append(_map)
     if briefing.session_goal:
         head_parts.append(f"=== SESSION GOAL ===\n{briefing.session_goal}")
@@ -195,11 +200,13 @@ async def run_deterministic_assembler(
         exemplar_suffixes = tuple(
             s.strip() for s in raw_suffixes.split(",") if s.strip()
         )
+        map_budget_fraction = float(getattr(settings, "assembler_code_map_budget_fraction", 0.12) or 0.12)
         context_block, files_selected = build_deterministic_context(
             briefing, token_budget, scored=scored, topological=topological,
             combo=combo, emit_map=emit_map, map_mode=map_mode,
             exemplar_suffixes=exemplar_suffixes,
             query=user_message or "",
+            map_budget_fraction=map_budget_fraction,
         )
 
         if not context_block.strip():
