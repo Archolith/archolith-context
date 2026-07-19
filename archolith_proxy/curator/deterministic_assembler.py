@@ -24,6 +24,11 @@ from __future__ import annotations
 import structlog
 
 from archolith_proxy.curator.briefing import PreFetchedFile, SessionBriefing
+from archolith_proxy.curator.context_cache import (
+    compute_context_signature,
+    get_cached_context,
+    store_context,
+)
 from archolith_proxy.curator.state import CuratorSnapshot, cache_snapshot
 from archolith_proxy.models.dtos import AssembledContext
 
@@ -212,6 +217,47 @@ async def run_deterministic_assembler(
             s.strip() for s in raw_suffixes.split(",") if s.strip()
         )
         map_budget_fraction = float(getattr(settings, "assembler_code_map_budget_fraction", 0.12) or 0.12)
+
+        # === Phase 1: Context Cache Check ===
+        context_cache_enabled = bool(getattr(settings, "context_cache_enabled", False))
+        cached_result = None
+
+        if context_cache_enabled and session_goal:
+            touched_paths = [f.path for f in getattr(briefing, "files", [])]
+            signature = compute_context_signature(
+                session_goal or "",
+                touched_paths,
+                user_message or "",
+            )
+
+            # Try to get from cache
+            db_path = getattr(settings, "curator_state_persist_path", "data/curator_state.db")
+            max_age = getattr(settings, "provider_cache_ttl_seconds", 600)
+
+            cached_result = get_cached_context(db_path, session_id, signature, max_age_seconds=max_age)
+
+            if cached_result:
+                logger.info(
+                    "deterministic_context_cache_hit",
+                    session_id=session_id,
+                    turn=turn_number,
+                    signature=signature[:16],
+                )
+                # Return cached result
+                return AssembledContext(
+                    system_message={"role": "system", "content": cached_result["rendered_block"]},
+                    graph_context=[{"role": "system", "content": cached_result["rendered_block"]}],
+                    coherence_tail=[],
+                    token_estimate=_estimate_tokens(cached_result["rendered_block"]),
+                    facts_retrieved=0,
+                    session_id=session_id,
+                    files_selected=cached_result.get("files_selected", []),
+                    decisions_selected=[],
+                    compression_ratio=1.0,
+                    retained_turn_numbers=briefing.retained_turns,
+                    curator_tool_log=[],
+                )
+
         context_block, files_selected = build_deterministic_context(
             briefing, token_budget, scored=scored, topological=topological,
             combo=combo, emit_map=emit_map, map_mode=map_mode,
@@ -226,6 +272,32 @@ async def run_deterministic_assembler(
                 session_id=session_id, turn=turn_number,
             )
             return None
+
+        # === Phase 1: Store in Context Cache (on miss) ===
+        if context_cache_enabled and session_goal:
+            touched_paths = [f.path for f in getattr(briefing, "files", [])]
+            signature = compute_context_signature(
+                session_goal or "",
+                touched_paths,
+                user_message or "",
+            )
+            db_path = getattr(settings, "curator_state_persist_path", "data/curator_state.db")
+
+            store_context(
+                db_path,
+                session_id,
+                signature,
+                context_block,
+                files_selected,
+                created_turn=turn_number,
+                is_cold_start=(turn_number <= 2),
+            )
+            logger.info(
+                "deterministic_context_cache_stored",
+                session_id=session_id,
+                turn=turn_number,
+                signature=signature[:16],
+            )
 
         retained = briefing.retained_turns
 
