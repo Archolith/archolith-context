@@ -140,6 +140,17 @@ CREATE TABLE IF NOT EXISTS curator_snapshots (
     turn_number INTEGER NOT NULL,
     updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS context_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    rendered_block TEXT NOT NULL,
+    files_selected_json TEXT,
+    created_turn INTEGER,
+    last_used_at REAL NOT NULL,
+    is_cold_start INTEGER DEFAULT 0,
+    UNIQUE(session_id, signature)
+);
 """
 
 
