@@ -317,30 +317,6 @@ async def lifespan(app: FastAPI):
                     "or set FILTER_ENABLED=false."
                 )
 
-    # Loud startup check for deterministic assembler flags (review item #4)
-    # Mirror the filter pattern: if assembler_deterministic or assembler_code_map
-    # are enabled via profile but the deterministic path isn't properly wired,
-    # surface it loudly instead of silently degrading.
-    if settings.assembler_deterministic or settings.assembler_code_map:
-        try:
-            from archolith_proxy.curator.deterministic_assembler import run_deterministic_assembler
-            logger.info("deterministic_assembler_available", note="deterministic path loaded")
-        except ImportError:
-            logger.error(
-                "deterministic_assembler_unavailable",
-                note="ASSEMBLER_DETERMINISTIC or ASSEMBLER_CODE_MAP enabled but deterministic_assembler module not importable",
-            )
-            # Graceful degradation (consistent with filter profile behavior)
-            if "assembler_deterministic" not in getattr(settings, "model_fields_set", set()):
-                settings.assembler_deterministic = False
-                settings.assembler_code_map = False
-            else:
-                raise RuntimeError(
-                    "ASSEMBLER_DETERMINISTIC or ASSEMBLER_CODE_MAP enabled but "
-                    "deterministic_assembler is not importable. "
-                    "This should never happen in a normal install."
-                )
-
     graph_missing = settings.check_required_for_graph()
     if graph_missing:
         logger.info(
