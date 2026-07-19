@@ -159,6 +159,10 @@ class TurnTrace(BaseModel):
     goal_drift_similarity: float = 1.0
     drift_turn: int | None = None
 
+    # Assembled Context Drift Flag (Phase 2)
+    goal_drifted: bool = False
+    drift_turn: int | None = None
+
     # Fallback
     fallback_reason: str = ""
 

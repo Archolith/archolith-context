@@ -393,6 +393,10 @@ async def run_deterministic_assembler(
         except Exception:
             pass
 
+        # Goal drift flag (Phase 2)
+        drift_turn = getattr(briefing, "drift_turn", None)
+        goal_drifted = drift_turn is not None
+
         return AssembledContext(
             system_message={"role": "system", "content": context_block},
             graph_context=[{"role": "system", "content": context_block}],
@@ -405,6 +409,8 @@ async def run_deterministic_assembler(
             compression_ratio=1.0,
             retained_turn_numbers=retained,
             curator_tool_log=[],
+            goal_drifted=goal_drifted,
+            drift_turn=drift_turn,
         )
     except Exception as exc:
         logger.warning(
