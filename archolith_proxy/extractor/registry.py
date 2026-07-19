@@ -63,10 +63,19 @@ def _auto_register_builtins(registry: ToolExtractorRegistry) -> None:
     try:
         from .extractors.read import ReadExtractor
         from .extractors.bash import BashExtractor
+        from .extractors.grep import GrepExtractor
+        from .extractors.write_edit import WriteEditExtractor
+        from .extractors.glob import GlobExtractor
+        from .extractors.ls import LsExtractor
         from .extractors.fallback import FallbackExtractor
 
         registry.register("read", ReadExtractor())
         registry.register("bash", BashExtractor())
+        registry.register("grep", GrepExtractor())
+        registry.register("write", WriteEditExtractor())
+        registry.register("edit", WriteEditExtractor())
+        registry.register("glob", GlobExtractor())
+        registry.register("ls", LsExtractor())
         registry.register("fallback", FallbackExtractor())
     except Exception as e:
         logger.warning("failed_to_auto_register_extractors", error=str(e))
