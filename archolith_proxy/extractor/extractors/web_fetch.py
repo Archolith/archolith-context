@@ -49,9 +49,6 @@ class WebFetchExtractor(ToolExtractor):
         }
 
         try:
-            from archolith_proxy.extractor.budget import reserve_llm_call
-            if not reserve_llm_call(1000):
-                raise RuntimeError("per-turn extractor LLM budget exhausted")
             resp = await http_client.post(
                 f"{settings.extractor_base_url.rstrip('/')}/chat/completions",
                 headers={
