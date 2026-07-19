@@ -455,3 +455,7 @@
 ## 2026-07-19 — Roadmap completion reconciliation
 
 - **`.agent/ROADMAP.md`**: Moved the completed per-tool extraction initiative to Done and recorded deterministic task-ranked code maps. Deferred proposals remain in Plan until their documented designs are implemented.
+
+## 2026-07-19 — Retired redundant curator-output cache proposal
+
+- **`.agent/ROADMAP.md`**: Marked the direct curator-output cache proposal as superseded. Existing briefing, snapshot, deterministic assembly, and agent-solo prefix caches cover the useful reuse paths without a low-hit full-output cache.

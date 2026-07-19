@@ -64,24 +64,6 @@ across turns.
 
 Items that need a design pass or span multiple files in a non-trivial way.
 
-### Curator output caching between turns
-
-**Value:** Medium | **Effort:** Medium
-
-The curator runs on every turn even when the session state hasn't changed materially
-(same files in cache, same facts, no new decisions).  A lightweight "context diff"
-check could detect turn-over-turn staleness and serve the cached curator output when
-the new question doesn't require fresh retrieval.
-
-**Shape:**
-- Add `curator_cache: dict[str, CuratorResult]` in session state (in-memory, TTL 1 turn)
-- Hash key: `sha256(session_goal + user_message[:100] + sorted(touched_files))`
-- If cache hit and hash matches → return cached result, skip LLM call
-- Cache invalidated on: new fact stored, new file cached, new decision recorded
-- Metric: `curator_cache_hits`
-
----
-
 ### Adaptive tail sizing by intent
 
 **Value:** Medium | **Effort:** Low
@@ -164,3 +146,4 @@ assembler to include redundant context.
 | Synthetic tools (`SYNTHETIC_TOOLS_ENABLED`) | Direction change — capturing native tool usage instead; synthetic tooling not pursued |
 | Nous XML fallback curator loop | `_run_curator_nous()` kept as dead code for now; remove if no model requires it by next review |
 | Neo4j file cache stubs | File cache is LadybugDB-only by design in MVP; Neo4j stubs return None/[] and that is intentional |
+| Direct curator-output cache between turns | Superseded by the existing briefing, snapshot, and agent-solo prefix caches; a full-output cache would miss normal user turns and duplicate those paths |
