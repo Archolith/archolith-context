@@ -75,7 +75,7 @@ def get_cached_context(
         if not row:
             return None
 
-        # Optional age check
+        # Optional age check (provider TTL enforcement)
         if max_age_seconds is not None:
             age = time.time() - row["last_used_at"]
             if age > max_age_seconds:
@@ -89,10 +89,14 @@ def get_cached_context(
         conn.commit()
         conn.close()
 
+        rendered_block = row["rendered_block"]
+        estimated_tokens = len(rendered_block) // 4
+
         return {
-            "rendered_block": row["rendered_block"],
+            "rendered_block": rendered_block,
             "files_selected": json.loads(row["files_selected_json"] or "[]"),
             "created_turn": row["created_turn"],
+            "estimated_tokens": estimated_tokens,
         }
 
     except Exception as e:
@@ -144,8 +148,27 @@ def store_context(
         return False
 
 
+def should_use_cached_context(
+    cached_tokens: int,
+    estimated_fresh_tokens: int,
+    max_bloat_ratio: float = 1.6,
+) -> bool:
+    """
+    Decide whether to use a cached context block or force a fresh render.
+
+    Returns False (force refresh) if the cached version is significantly
+    larger than what a fresh render would produce.
+    """
+    if estimated_fresh_tokens <= 0:
+        return True  # Can't compare, prefer cache
+
+    ratio = cached_tokens / estimated_fresh_tokens
+    return ratio <= max_bloat_ratio
+
+
 __all__ = [
     "compute_context_signature",
     "get_cached_context",
     "store_context",
+    "should_use_cached_context",
 ]

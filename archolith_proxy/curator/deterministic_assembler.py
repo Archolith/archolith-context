@@ -237,19 +237,45 @@ async def run_deterministic_assembler(
             cached_result = get_cached_context(db_path, session_id, signature, max_age_seconds=max_age)
 
             if cached_result:
-                logger.info(
-                    "deterministic_context_cache_hit",
-                    session_id=session_id,
-                    turn=turn_number,
-                    signature=signature[:16],
-                )
-                try:
-                    from archolith_proxy.metrics import record_metric
-                    record_metric("context_cache_hits")
-                except Exception:
-                    pass
-                # Return cached result
-                return AssembledContext(
+                # Bloat ratio check
+                max_bloat = float(getattr(settings, "context_cache_max_bloat_ratio", 1.6))
+                cached_tokens = cached_result.get("estimated_tokens", 0)
+                fresh_estimate = len(context_block) // 4 if "context_block" in locals() else cached_tokens
+
+                from archolith_proxy.curator.context_cache import should_use_cached_context
+
+                if should_use_cached_context(cached_tokens, fresh_estimate, max_bloat):
+                    logger.info(
+                        "deterministic_context_cache_hit",
+                        session_id=session_id,
+                        turn=turn_number,
+                        signature=signature[:16],
+                    )
+                    try:
+                        from archolith_proxy.metrics import record_metric
+                        record_metric("context_cache_hits")
+                    except Exception:
+                        pass
+                    return AssembledContext(
+                        system_message={"role": "system", "content": cached_result["rendered_block"]},
+                        graph_context=[{"role": "system", "content": cached_result["rendered_block"]}],
+                        coherence_tail=[],
+                        token_estimate=cached_tokens,
+                        facts_retrieved=0,
+                        session_id=session_id,
+                        files_selected=cached_result.get("files_selected", []),
+                        decisions_selected=[],
+                        compression_ratio=1.0,
+                        retained_turn_numbers=briefing.retained_turns,
+                        curator_tool_log=[],
+                    )
+                else:
+                    try:
+                        from archolith_proxy.metrics import record_metric
+                        record_metric("context_cache_forced_refresh_bloat")
+                    except Exception:
+                        pass
+                    # Fall through to render fresh (bloat too high)
                     system_message={"role": "system", "content": cached_result["rendered_block"]},
                     graph_context=[{"role": "system", "content": cached_result["rendered_block"]}],
                     coherence_tail=[],
