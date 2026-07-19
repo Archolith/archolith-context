@@ -189,7 +189,25 @@ def _build_turn_inventory(
     if not non_system:
         return ""
 
-    tail = smart_tail(non_system, base_size=coherence_tail_size, max_size=max_tail_messages)
+    from archolith_proxy.assembler.tail import smart_tail, classify_turn_intent
+    from archolith_proxy.config import get_settings
+
+    settings = get_settings()
+    last_user_msg = ""
+    for m in reversed(non_system):
+        if m.get("role") == "user":
+            last_user_msg = m.get("content", "") if isinstance(m.get("content"), str) else ""
+            break
+
+    intent = classify_turn_intent(last_user_msg) if settings.tail_intent_enabled else None
+    tail = smart_tail(
+        non_system,
+        base_size=coherence_tail_size,
+        max_size=max_tail_messages,
+        intent=intent,
+        intent_adjustment=settings.tail_intent_adjustment if settings.tail_intent_enabled else 0,
+        min_size=settings.tail_min_size if settings.tail_intent_enabled else 3,
+    )
     tail_start = len(non_system) - len(tail)
     middle = non_system[:tail_start]
 
