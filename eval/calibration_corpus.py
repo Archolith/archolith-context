@@ -283,7 +283,7 @@ LARGE_FILE_READ = (
     "## Overview\n\n"
     "An OpenAI-compatible proxy that transparently replaces linear conversation replay "
     "with graph-assembled context for AI coding agents. Any harness that supports a "
-    "base URL override (Reasonix, Claude Code, Aider, Cursor, etc.) works unchanged.\n\n"
+    "base URL override (Claude Code, Aider, Cursor, Reasonix, etc.) works unchanged.\n\n"
 ) * 20 # ~4000 chars per copy
 
 # For graph-qualifying sessions, we need ~50K+ tokens of content.
