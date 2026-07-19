@@ -204,6 +204,9 @@ class TraceBuilder:
         invalidations_matched: int = 0,
         extraction_latency_ms: float = 0.0,
         extracted_facts: list[dict] | None = None,
+        goal_drift_detected: bool = False,
+        goal_drift_similarity: float = 1.0,
+        drift_turn: int | None = None,
     ) -> None:
         self._data["facts_stored"] = facts_stored
         self._data["duplicates_skipped"] = duplicates_skipped
@@ -211,6 +214,9 @@ class TraceBuilder:
         self._data["invalidations_matched"] = invalidations_matched
         self._data["extraction_latency_ms"] = extraction_latency_ms
         self._data["extracted_facts"] = extracted_facts or []
+        self._data["goal_drift_detected"] = goal_drift_detected
+        self._data["goal_drift_similarity"] = goal_drift_similarity
+        self._data["drift_turn"] = drift_turn
 
     def set_recall(
         self,

@@ -192,6 +192,10 @@ async def _run_extraction(
             )
 
         # === Goal Drift Detection (Phase 0) ===
+        drift_detected = False
+        drift_similarity = 1.0
+        drift_turn = None
+
         if extraction_settings.goal_drift_detection_enabled and session_goal:
             from archolith_proxy.assembler.goal_drift import detect_goal_drift
 
@@ -201,9 +205,8 @@ async def _run_extraction(
                 for m in messages[-extraction_settings.goal_drift_lookback_turns*2:] 
                 if m.get("role") == "user"
             ]
-            recent_text = " ".join(str(c) for c in recent_user_msgs if c)
 
-            drift_detected, similarity = detect_goal_drift(
+            drift_detected, drift_similarity = detect_goal_drift(
                 original_goal=session_goal,
                 recent_messages=recent_user_msgs,
                 threshold=extraction_settings.goal_drift_similarity_threshold,
@@ -211,11 +214,12 @@ async def _run_extraction(
             )
 
             if drift_detected:
+                drift_turn = turn_number
                 logger.info(
                     "goal_drift_detected",
                     session_id=session_id,
                     turn=turn_number,
-                    similarity=round(similarity, 3),
+                    similarity=round(drift_similarity, 3),
                     threshold=extraction_settings.goal_drift_similarity_threshold,
                 )
                 record_metric("goal_drift_detections", 1)
@@ -402,6 +406,9 @@ async def _run_extraction(
                 invalidations_matched=invalidations_matched_count,
                 extraction_latency_ms=extraction_latency_ms,
                 extracted_facts=[{"content": f.get("content", "")[:200], "type": f.get("fact_type", "observation")} for f in unique_facts],
+                goal_drift_detected=drift_detected,
+                goal_drift_similarity=drift_similarity,
+                drift_turn=drift_turn,
             )
             # Record helper-LLM token usage for cost-model telemetry
             usage = result.usage or {}
