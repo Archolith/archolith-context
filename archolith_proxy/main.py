@@ -237,9 +237,9 @@ async def lifespan(app: FastAPI):
         and not settings.i_accept_unrestricted_fs_risk
     ):
         raise RuntimeError(
-            "Refusing to start with CURATOR_ENABLED=true, PREFETCH_RESTRICT_TO_WORKSPACE=false, "
-            "and PREFETCH_ALLOWED_ROOTS empty. Set PREFETCH_ALLOWED_ROOTS, set "
-            "PREFETCH_RESTRICT_TO_WORKSPACE=true, or set I_ACCEPT_UNRESTRICTED_FS_RISK=true."
+            "CURATOR_ENABLED=true with unrestricted filesystem access. "
+            "Set PREFETCH_ALLOWED_ROOTS, enable PREFETCH_RESTRICT_TO_WORKSPACE=true, "
+            "or acknowledge the risk with I_ACCEPT_UNRESTRICTED_FS_RISK=true."
         )
 
     # Log active profile with resolved flag bundle for operator clarity
@@ -315,6 +315,30 @@ async def lifespan(app: FastAPI):
                     "Agent-solo compression and filter would silently do nothing. "
                     "Install it into the active venv (pip install -e ../archolith-filter) "
                     "or set FILTER_ENABLED=false."
+                )
+
+    # Loud startup check for deterministic assembler flags (review item #4)
+    # Mirror the filter pattern: if assembler_deterministic or assembler_code_map
+    # are enabled via profile but the deterministic path isn't properly wired,
+    # surface it loudly instead of silently degrading.
+    if settings.assembler_deterministic or settings.assembler_code_map:
+        try:
+            from archolith_proxy.curator.deterministic_assembler import run_deterministic_assembler
+            logger.info("deterministic_assembler_available", note="deterministic path loaded")
+        except ImportError:
+            logger.error(
+                "deterministic_assembler_unavailable",
+                note="ASSEMBLER_DETERMINISTIC or ASSEMBLER_CODE_MAP enabled but deterministic_assembler module not importable",
+            )
+            # Graceful degradation (consistent with filter profile behavior)
+            if "assembler_deterministic" not in getattr(settings, "model_fields_set", set()):
+                settings.assembler_deterministic = False
+                settings.assembler_code_map = False
+            else:
+                raise RuntimeError(
+                    "ASSEMBLER_DETERMINISTIC or ASSEMBLER_CODE_MAP enabled but "
+                    "deterministic_assembler is not importable. "
+                    "This should never happen in a normal install."
                 )
 
     graph_missing = settings.check_required_for_graph()
