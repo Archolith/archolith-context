@@ -108,6 +108,7 @@ async def chat_completions(
             mode="passthrough", reason="passthrough model", latency_ms=0.0,
             facts_selected=[], files_selected=[], decisions_selected=[],
             rewritten_tokens=0, savings_tokens=0, savings_ratio=0.0, compression_ratio=1.0,
+            tail_intent="", effective_tail_size=0,
         )
         # Count passthrough in the process-level assembly_modes block, exactly
         # like a non-passthrough request — so the A/B passthrough arm is recorded
@@ -345,6 +346,8 @@ async def chat_completions(
         savings_tokens=savings,
         savings_ratio=savings_ratio,
         compression_ratio=_comp_ratio,
+        tail_intent=getattr(assembled, "tail_intent", "") if assembled else "",
+        effective_tail_size=getattr(assembled, "effective_tail_size", 0) if assembled else 0,
     )
     # Count the resolved mode in the process-level assembly_modes block so
     # /metrics reflects real traffic (previously never incremented -> always 0).

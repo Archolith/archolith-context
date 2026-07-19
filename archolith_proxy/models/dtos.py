@@ -150,6 +150,10 @@ class TurnTrace(BaseModel):
     recall_facts_returned: int = 0
     recall_trigger: str = ""  # "proxy_forced:<type>" | "model_invoked" | "" (not used)
 
+    # Adaptive Tail Sizing (Phase 2)
+    tail_intent: str = ""           # "continue" | "pivot" | "neutral" | ""
+    effective_tail_size: int = 0
+
     # Fallback
     fallback_reason: str = ""
 

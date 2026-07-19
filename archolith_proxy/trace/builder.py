@@ -130,6 +130,8 @@ class TraceBuilder:
         savings_tokens: int = 0,
         savings_ratio: float = 0.0,
         compression_ratio: float = 1.0,
+        tail_intent: str = "",
+        effective_tail_size: int = 0,
     ) -> None:
         self._data["assembly_mode"] = mode
         self._data["assembly_reason"] = reason
@@ -141,6 +143,8 @@ class TraceBuilder:
         self._data["savings_tokens"] = savings_tokens
         self._data["savings_ratio"] = savings_ratio
         self._data["compression_ratio"] = compression_ratio
+        self._data["tail_intent"] = tail_intent
+        self._data["effective_tail_size"] = effective_tail_size
 
     def set_response(
         self,

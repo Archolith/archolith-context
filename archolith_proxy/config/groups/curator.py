@@ -67,3 +67,8 @@ class CuratorGroup(BaseModel):
 
     # Per-tool Extraction (Phase 0+)
     per_tool_extraction_enabled: bool = False
+
+    # Goal Drift Detection (Phase 0+)
+    goal_drift_detection_enabled: bool = False
+    goal_drift_similarity_threshold: float = 0.40
+    goal_drift_lookback_turns: int = 5

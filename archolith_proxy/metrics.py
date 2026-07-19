@@ -109,6 +109,8 @@ _metrics: dict = {
     "context_cache_forced_refresh_bloat": 0,
     "context_cache_forced_refresh_stale_file": 0,
     "context_cache_provider_expired": 0,
+    # Adaptive Tail Sizing
+    "tail_intent_adjustments": 0,
     # Plugin metrics — aggregated from PluginRegistry.aggregate_metrics()
     # at each /metrics poll. Stored as a nested dict keyed by plugin ID.
     "plugins": {},

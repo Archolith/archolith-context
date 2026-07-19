@@ -198,6 +198,35 @@ async def _run_extraction(
                 turn=turn_number,
                 tool_count=len(tool_records),
             )
+
+        # === Goal Drift Detection (Phase 0) ===
+        if extraction_settings.goal_drift_detection_enabled and session_goal:
+            from archolith_proxy.assembler.goal_drift import detect_goal_drift
+
+            # Collect recent user messages
+            recent_user_msgs = [
+                m.get("content", "") 
+                for m in messages[-extraction_settings.goal_drift_lookback_turns*2:] 
+                if m.get("role") == "user"
+            ]
+            recent_text = " ".join(str(c) for c in recent_user_msgs if c)
+
+            drift_detected, similarity = detect_goal_drift(
+                original_goal=session_goal,
+                recent_messages=recent_user_msgs,
+                threshold=extraction_settings.goal_drift_similarity_threshold,
+                lookback=extraction_settings.goal_drift_lookback_turns,
+            )
+
+            if drift_detected:
+                logger.info(
+                    "goal_drift_detected",
+                    session_id=session_id,
+                    turn=turn_number,
+                    similarity=round(similarity, 3),
+                    threshold=extraction_settings.goal_drift_similarity_threshold,
+                )
+                record_metric("goal_drift_detections", 1)
         else:
             tool_results = _collect_recent_tool_results(messages, max_chars=4000)
             result = await extract_facts(

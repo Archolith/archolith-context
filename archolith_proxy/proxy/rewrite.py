@@ -197,6 +197,22 @@ def rewrite_messages(
         intent_adjustment=settings.tail_intent_adjustment if settings.tail_intent_enabled else 0,
         min_size=settings.tail_min_size if settings.tail_intent_enabled else 3,
     )
+
+    if settings.tail_intent_enabled and intent != "neutral":
+        try:
+            from archolith_proxy.metrics import record_metric
+            record_metric("tail_intent_adjustments")
+        except Exception:
+            pass
+
+        effective_size = len(tail)
+        logger.info(
+            "adaptive_tail_applied",
+            intent=intent,
+            original_size=coherence_tail_size,
+            effective_size=effective_size,
+            adjustment=settings.tail_intent_adjustment,
+        )
     tail_start = len(rest) - len(tail) if tail else len(rest)
     middle = rest[:tail_start]
 
