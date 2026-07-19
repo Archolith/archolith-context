@@ -21,6 +21,8 @@ are relative to the current system baseline.
 | LadybugDB WAL resilience — four improvements | `5fe067b` | WAL detection logging, auto-rotate on failed probe, 16 MB checkpoint threshold, atexit registration |
 | File structure index on cache ingest | `94e182d` | `FileOutline` table, `_build_outline` (AST + regex), `get_file_outline` as 12th curator tool; rule 3 updated |
 | Semantic search over facts | `c149306` | `search_facts_semantic` (13th tool) — cosine similarity on stored embeddings; falls back to substring; 15 tests |
+| Deterministic task-ranked code maps | `90a3aeb` | Curated and full profiles receive bounded, task-ranked maps derived from selected file metadata |
+| Per-tool structured extraction and LLM budget enforcement | `38bec4f` | Optional registry routing, structured fact provenance, and fail-open per-turn helper-LLM limits |
 
 ---
 
@@ -61,30 +63,6 @@ across turns.
 ## Plan
 
 Items that need a design pass or span multiple files in a non-trivial way.
-
-### Per-tool extraction (structured output per Bash / Read / Grep)
-
-**Value:** High | **Effort:** High
-
-The extractor currently receives a flat concatenation of all tool results and asks the
-model to extract facts, decisions, and files in one shot.  The extraction quality is
-limited because different tools produce fundamentally different output types:
-
-| Tool | Ideal extraction |
-|------|-----------------|
-| Read | File path → content → update FileContent cache; extract symbols defined |
-| Bash | Command → exit code → structured output (detect test pass/fail, build errors) |
-| Grep | Pattern → matches → "symbol X appears in file Y at line Z" facts |
-| Write / Edit | Path → new content → update FileContent cache |
-
-**Shape:**
-- Add per-tool extraction prompts in `extractor/prompts.py`
-- Route in `_collect_recent_tool_results()`: classify by tool name, call appropriate
-  prompt, merge results before storing
-- Structured output (JSON mode) per tool type rather than freeform extraction
-- LadybugDB schema: add `fact_source_tool` field for filtering and attribution
-
----
 
 ### Curator output caching between turns
 

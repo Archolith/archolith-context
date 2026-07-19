@@ -451,3 +451,7 @@
 - **`archolith_proxy/extractor/client.py`**: Moved per-tool helper-LLM reservation into the orchestrator, made its context-scoped budget cleanup unconditional, and retained bounded raw tool evidence when an LLM extractor is undeclared or out of budget.
 - **`archolith_proxy/graph/facts.py`**: Made invalidated-fact structured JSON decoding match active-fact behavior, including safe handling of malformed stored payloads.
 - **Tests/docs**: Added budget-exhaustion, undeclared-plugin, context-reset, Neo4j mapping, provenance, and malformed JSON regressions; documented `FactNode` provenance/structured fields and the extraction budget contract.
+
+## 2026-07-19 — Roadmap completion reconciliation
+
+- **`.agent/ROADMAP.md`**: Moved the completed per-tool extraction initiative to Done and recorded deterministic task-ranked code maps. Deferred proposals remain in Plan until their documented designs are implemented.
