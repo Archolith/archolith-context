@@ -75,7 +75,7 @@ This proposal:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Any Harness (Reasonix, Claude Code, Aider, Cursor, etc.)   │
+│  Any Harness (Claude Code, Aider, Cursor, Reasonix, etc.)   │
 │  Points baseUrl at proxy. No code changes needed.           │
 └─────────────────────────────┬───────────────────────────────┘
                               │ POST /v1/chat/completions

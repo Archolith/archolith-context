@@ -4,7 +4,7 @@
 
 An OpenAI-compatible proxy that transparently replaces linear conversation replay
 with graph-assembled context for AI coding agents. Any harness that supports a
-base URL override (Reasonix, Claude Code, Aider, Cursor, etc.) works unchanged.
+base URL override (Claude Code, Aider, Cursor, Reasonix, etc.) works unchanged.
 
 ## Project Description
 
