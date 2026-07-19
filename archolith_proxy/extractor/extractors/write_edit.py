@@ -1,58 +1,33 @@
-"""WriteEditExtractor — no LLM; file content is already in FileContent cache."""
+"""Write/Edit tool extractor."""
 
 from __future__ import annotations
 
-import httpx
-
-from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord, ToolExtractor
-
-__all__ = ["WriteEditExtractor"]
+from typing import Any
 
 
-def _extract_path(args: dict) -> str:
-    return (
-        args.get("file_path") or args.get("path")
-        or args.get("filePath") or args.get("filename")
-        or args.get("target_file") or ""
-    )
-
-
-class WriteEditExtractor(ToolExtractor):
-    """Handles Write, Edit, and NotebookEdit tool calls.
-
-    File content is already in the FileContent cache.
-    Emits a file_state fact and marks the file as modified.
-    """
-
-    tool_names = (
-        "Write", "Edit", "NotebookEdit",
-        # Aliases
-        "write_file", "edit_file", "notebook_edit",
-    )
+class WriteEditExtractor:
+    may_use_llm = False
 
     async def extract(
         self,
-        record: ToolCallRecord,
-        http_client: httpx.AsyncClient,
+        record: Any,
+        http_client: Any,
         turn_number: int,
-        session_goal: str | None,
-    ) -> PartialExtractionResult:
-        path = _extract_path(record.args)
-        if not path:
-            path = "unknown"
+        session_goal: str | None = None,
+    ) -> Any:
+        args = getattr(record, "args", {}) or {}
+        path = args.get("file_path") or args.get("path", "")
 
-        verb = "written" if record.tool_name in ("Write",) else "edited"
-        fact_content = f"[{record.tool_name}] {path} {verb} at turn {turn_number}"
-
-        return PartialExtractionResult(
-            source_tool=record.tool_name,
-            facts=[
+        return type("PartialExtractionResult", (), {
+            "facts": [
                 {
-                    "content": fact_content,
+                    "content": f"Modified file: {path}",
                     "fact_type": "file_state",
-                    "confidence": 1.0,
+                    "confidence": 0.75,
+                    "structured": {"path": path, "action": "write_or_edit"},
                 }
             ],
-            files_touched=[path] if path and path != "unknown" else [],
-            used_llm=False,
-        )
+            "files_touched": [path] if path else [],
+            "used_llm": False,
+            "usage": {},
+        })()
