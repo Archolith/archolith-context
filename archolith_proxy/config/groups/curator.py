@@ -63,3 +63,7 @@ class CuratorGroup(BaseModel):
     context_cache_max_bloat_ratio: float = 1.6
     context_cache_force_refresh_threshold_tokens: int = 12000
     provider_cache_ttl_seconds: int = 600  # 10 minutes default (tunable per provider)
+    context_cache_mode: str = "cost_optimized"  # off | conservative | aggressive | cost_optimized
+
+    # Per-tool Extraction (Phase 0+)
+    per_tool_extraction_enabled: bool = False

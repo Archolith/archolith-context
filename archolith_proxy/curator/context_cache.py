@@ -165,18 +165,36 @@ def should_use_cached_context(
     cached_tokens: int,
     estimated_fresh_tokens: int,
     max_bloat_ratio: float = 1.6,
-) -> bool:
+    mode: str = "cost_optimized",
+) -> tuple[bool, str]:
     """
-    Decide whether to use a cached context block or force a fresh render.
+    Decide whether to use a cached context block.
 
-    Returns False (force refresh) if the cached version is significantly
-    larger than what a fresh render would produce.
+    Returns:
+        (use_cached: bool, reason: str)
     """
+    if mode == "off":
+        return False, "mode_off"
+
     if estimated_fresh_tokens <= 0:
-        return True  # Can't compare, prefer cache
+        return True, "no_fresh_estimate"
 
     ratio = cached_tokens / estimated_fresh_tokens
-    return ratio <= max_bloat_ratio
+
+    if mode == "aggressive":
+        # Be very lenient with bloat
+        return ratio <= 2.5, "aggressive"
+
+    if mode == "conservative":
+        # Very strict
+        if ratio > 1.3:
+            return False, "conservative_bloat"
+        return True, "conservative_ok"
+
+    # cost_optimized (default)
+    if ratio > max_bloat_ratio:
+        return False, "bloat_exceeded"
+    return True, "within_bloat_limit"
 
 
 def has_file_supersession(
