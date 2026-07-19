@@ -23,7 +23,8 @@ class DefaultExtractor(ToolExtractor):
     """
 
     tool_names = ()  # registered via set_default, not by name
-    may_use_llm = True  # always makes one LLM call
+    may_use_llm = True
+    llm_requested_tokens = 2000
 
     async def extract(
         self,

@@ -309,6 +309,8 @@ async def _extract_with_semaphore(
     exhaust API quota in parallel. Pure no-LLM extractors (Grep, Glob, LS, Find,
     Read, WriteEdit, WebSearch, MemoryRecall) run without the semaphore and can
     proceed fully concurrently.
+    Budget reservation happens here (orchestrator level) using the extractor's
+    declared llm_requested_tokens.
     """
     if extractor is None:
         # A custom registry must not be able to discard a tool result. The
@@ -318,6 +320,27 @@ async def _extract_with_semaphore(
         if extractor is None:
             raise LookupError(f"No extractor available for {record.tool_name!r}")
     if extractor.may_use_llm:
+        tokens = getattr(extractor, "llm_requested_tokens", 0)
+        if not isinstance(tokens, int) or tokens <= 0:
+            # Safe policy for custom/undeclared LLM extractors: return deterministic fallback
+            # without making an upstream call and without bypassing budget.
+            return PartialExtractionResult(
+                source_tool=getattr(record, "tool_name", "unknown"),
+                facts=[{"content": f"[{record.tool_name}] (budget policy) limited result", "fact_type": "observation", "confidence": 0.1}],
+                files_touched=[],
+                used_llm=False,
+            )
+        from archolith_proxy.extractor.budget import reserve_llm_call
+        try:
+            reserve_llm_call(tokens)
+        except Exception:
+            # Budget exhausted — return safe deterministic fallback, no HTTP call
+            return PartialExtractionResult(
+                source_tool=record.tool_name,
+                facts=[{"content": f"[{record.tool_name}] (budget exhausted) limited result", "fact_type": "observation", "confidence": 0.1}],
+                files_touched=[],
+                used_llm=False,
+            )
         sem = _get_llm_semaphore()
         async with sem:
             return await extractor.extract(record, http_client, turn_number, session_goal)
@@ -354,22 +377,23 @@ async def extract_facts_per_tool(
         )),
     )
     budget_token = set_budget(budget)
-    # The turn-level pass is responsible for decisions, checkpoints, issues,
-    # and verifications. Reserve its capacity before concurrent tool fallbacks
-    # compete for the shared budget, so a tool-heavy turn cannot starve it.
-    turn_level_reserved = budget.reserve(_TURN_LEVEL_MAX_TOKENS)
-    partial_results = await asyncio.gather(
-        *[
-            _extract_with_semaphore(
-                registry.get(r.tool_name), r, http_client, turn_number, session_goal
-            )
-            for r in tool_records
-        ],
-        return_exceptions=True,
-    )
+    try:
+        # The turn-level pass is responsible for decisions, checkpoints, issues,
+        # and verifications. Reserve its capacity before concurrent tool fallbacks
+        # compete for the shared budget, so a tool-heavy turn cannot starve it.
+        turn_level_reserved = budget.reserve(_TURN_LEVEL_MAX_TOKENS)
+        partial_results = await asyncio.gather(
+            *[
+                _extract_with_semaphore(
+                    registry.get(r.tool_name), r, http_client, turn_number, session_goal
+                )
+                for r in tool_records
+            ],
+            return_exceptions=True,
+        )
 
-    # Step 2: Merge partial results with exception guard
-    all_facts: list[dict] = []
+        # Step 2: Merge partial results with exception guard
+        all_facts: list[dict] = []
     all_files: list[str] = []
     llm_calls_made = 0
     usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "llm_calls": 0, "cached_tokens": 0}
@@ -489,7 +513,6 @@ async def extract_facts_per_tool(
         decisions=len(decisions),
     )
 
-    reset_budget(budget_token)
     return ExtractionResult(
         facts=all_facts,
         files_touched=all_files,
@@ -502,3 +525,5 @@ async def extract_facts_per_tool(
         verifications=verifications,
         usage=usage,
     )
+    finally:
+        reset_budget(budget_token)
