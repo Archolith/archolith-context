@@ -59,3 +59,9 @@ class CuratorGroup(BaseModel):
     curator_list_dir_tool: bool = False
     curator_workingset_enabled: bool = False
     curator_workingset_max_sessions: int = 256
+
+    # Prompt Cache Stability (Phase 0+)
+    context_cache_enabled: bool = False
+    context_cache_max_bloat_ratio: float = 1.6
+    context_cache_force_refresh_threshold_tokens: int = 12000
+    provider_cache_ttl_seconds: int = 600  # 10 minutes default (tunable per provider)
