@@ -178,8 +178,25 @@ def rewrite_messages(
             rest.append(msg)
 
     # Identify the coherence tail
-    from archolith_proxy.assembler.tail import smart_tail
-    tail = smart_tail(rest, base_size=coherence_tail_size, max_size=max_tail_messages)
+    from archolith_proxy.assembler.tail import smart_tail, classify_turn_intent
+    from archolith_proxy.config import get_settings
+
+    settings = get_settings()
+    last_user_msg = ""
+    for m in reversed(rest):
+        if m.get("role") == "user":
+            last_user_msg = m.get("content", "") if isinstance(m.get("content"), str) else ""
+            break
+
+    intent = classify_turn_intent(last_user_msg) if settings.tail_intent_enabled else None
+    tail = smart_tail(
+        rest,
+        base_size=coherence_tail_size,
+        max_size=max_tail_messages,
+        intent=intent,
+        intent_adjustment=settings.tail_intent_adjustment if settings.tail_intent_enabled else 0,
+        min_size=settings.tail_min_size if settings.tail_intent_enabled else 3,
+    )
     tail_start = len(rest) - len(tail) if tail else len(rest)
     middle = rest[:tail_start]
 
