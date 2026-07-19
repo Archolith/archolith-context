@@ -19,6 +19,9 @@ class ProxyBehaviorGroup(BaseModel):
     tail_intent_enabled: bool = False
     tail_intent_adjustment: int = 4
     tail_min_size: int = 3
+    tail_intent_enabled: bool = False
+    tail_intent_adjustment: int = 4
+    tail_min_size: int = 3
     context_token_budget: int = 15000
     max_rewritten_tokens: int = 24000
     session_ttl_hours: int = 24

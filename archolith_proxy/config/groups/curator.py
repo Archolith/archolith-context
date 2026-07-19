@@ -56,3 +56,7 @@ class CuratorGroup(BaseModel):
     curator_list_dir_tool: bool = False
     curator_workingset_enabled: bool = False
     curator_workingset_max_sessions: int = 256
+    # Goal Drift Detection (Phase 0+)
+    goal_drift_detection_enabled: bool = False
+    goal_drift_similarity_threshold: float = 0.40
+    goal_drift_lookback_turns: int = 5
