@@ -92,11 +92,15 @@ def get_cached_context(
         rendered_block = row["rendered_block"]
         estimated_tokens = len(rendered_block) // 4
 
+        payload = json.loads(row["files_selected_json"] or "{}")
+        file_versions = payload.get("file_versions", {}) if isinstance(payload, dict) else {}
+
         return {
             "rendered_block": rendered_block,
-            "files_selected": json.loads(row["files_selected_json"] or "[]"),
+            "files_selected": payload.get("files_selected", []) if isinstance(payload, dict) else [],
             "created_turn": row["created_turn"],
             "estimated_tokens": estimated_tokens,
+            "file_versions": file_versions,
         }
 
     except Exception as e:
@@ -112,11 +116,20 @@ def store_context(
     files_selected: list[dict],
     created_turn: int,
     is_cold_start: bool = False,
+    file_versions: dict[str, dict] | None = None,
 ) -> bool:
-    """Store a rendered context block in the append-only cache."""
+    """Store a rendered context block in the append-only cache.
+
+    file_versions: Optional dict of {path: {"last_read_turn": int, "content_hash": str}}
+    """
     try:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(db_path, check_same_thread=False)
+
+        payload = {
+            "files_selected": files_selected,
+            "file_versions": file_versions or {},
+        }
 
         conn.execute(
             """
@@ -133,7 +146,7 @@ def store_context(
                 session_id,
                 signature,
                 rendered_block,
-                json.dumps(files_selected),
+                json.dumps(payload),
                 created_turn,
                 time.time(),
                 1 if is_cold_start else 0,
@@ -166,9 +179,30 @@ def should_use_cached_context(
     return ratio <= max_bloat_ratio
 
 
+def has_file_supersession(
+    cached_file_versions: dict[str, dict],
+    current_file_versions: dict[str, dict],
+) -> bool:
+    """
+    Check if any file in the cached context has been superseded by a newer read.
+
+    cached_file_versions and current_file_versions are dicts of:
+        {path: {"last_read_turn": int, "content_hash": str}}
+    """
+    for path, cached_info in cached_file_versions.items():
+        current_info = current_file_versions.get(path)
+        if current_info:
+            if current_info.get("last_read_turn", 0) > cached_info.get("last_read_turn", 0):
+                return True
+            if current_info.get("content_hash") and current_info["content_hash"] != cached_info.get("content_hash"):
+                return True
+    return False
+
+
 __all__ = [
     "compute_context_signature",
     "get_cached_context",
     "store_context",
     "should_use_cached_context",
+    "has_file_supersession",
 ]
