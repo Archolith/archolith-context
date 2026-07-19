@@ -23,8 +23,8 @@ class FindExtractor(ToolExtractor):
         turn_number: int,
         session_goal: str | None,
     ) -> PartialExtractionResult:
-        lines = [l.strip() for l in record.result.splitlines() if l.strip()]
-        paths = [l for l in lines if not l.startswith("Found") and len(l) > 1]
+        lines = [line.strip() for line in record.result.splitlines() if line.strip()]
+        paths = [line for line in lines if not line.startswith("Found") and len(line) > 1]
 
         count = len(paths)
         display = paths[:_MAX_DISPLAY_PATHS]

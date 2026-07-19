@@ -1,6 +1,5 @@
 """Unit tests for context-overflow compaction."""
 
-import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

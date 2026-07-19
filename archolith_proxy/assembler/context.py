@@ -343,8 +343,6 @@ def _budget_facts(
             selected.append(fact)
             used_tokens += fact_tokens
 
-    remaining_budget = token_budget - used_tokens
-
     # Step 2: Score and select remaining facts
     scored = []
     for fact in candidates:

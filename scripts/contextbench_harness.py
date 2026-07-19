@@ -396,7 +396,7 @@ def main():
 
     # Evaluate
     print(f"\n{'#'*70}")
-    print(f"  Phase 3: EVALUATION")
+    print("  Phase 3: EVALUATION")
     print(f"{'#'*70}")
 
     for traj_path in direct_trajs:
@@ -407,7 +407,7 @@ def main():
 
     # Compare
     print(f"\n{'#'*70}")
-    print(f"  Phase 4: COMPARISON")
+    print("  Phase 4: COMPARISON")
     print(f"{'#'*70}")
 
     direct_results = load_results(direct_eval)

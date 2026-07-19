@@ -253,7 +253,7 @@ def main() -> None:
     db_path = Path(db_raw) if Path(db_raw).is_absolute() else root / db_raw
 
     print(f"\n{'='*55}")
-    print(f"  Archolith Proxy Restart")
+    print("  Archolith Proxy Restart")
     print(f"{'='*55}")
     print(f"  Port:    {port}")
     print(f"  DB:      {db_path}")
@@ -270,9 +270,9 @@ def main() -> None:
         use_db = fresh_db_path(db_path)
         print(f"\n[2] --fresh flag: using new DB -> {use_db.name}")
     elif args.no_check:
-        print(f"\n[2] --no-check: using existing DB as-is")
+        print("\n[2] --no-check: using existing DB as-is")
     else:
-        print(f"\n[2] Checking DB health...")
+        print("\n[2] Checking DB health...")
         health = check_db_health(db_path)
         status = "[OK]  healthy" if health["healthy"] else "[!!] CORRUPTED"
         print(f"  {status}: {health['reason']}")
@@ -283,9 +283,9 @@ def main() -> None:
             print(f"  -> Switching to fresh DB: {use_db.name}")
             # Update .env so subsequent restarts use the same DB
             write_dotenv_key(dotenv_path, "LADYBUG_DB_PATH", f"./{use_db.relative_to(root).as_posix()}")
-            print(f"  -> Updated .env LADYBUG_DB_PATH")
+            print("  -> Updated .env LADYBUG_DB_PATH")
         else:
-            print(f"  -> Using existing DB")
+            print("  -> Using existing DB")
 
     # ── Step 3: Start proxy ──────────────────────────────────────────────────
     print(f"\n[3] Starting proxy on port {port}...")
@@ -296,14 +296,14 @@ def main() -> None:
     ready = wait_for_graph_ready(port, timeout=args.timeout)
 
     if not ready:
-        print(f"\n  Proxy may have started without graph support.")
+        print("\n  Proxy may have started without graph support.")
         print(f"  Check logs: {root / 'data' / 'proxy_latest_err.log'}")
         sys.exit(1)
 
     # ── Step 5: Print final status ───────────────────────────────────────────
-    print(f"\n[5] Proxy ready.")
-    print(f"  Run: python scripts/proxy_status.py metrics")
-    print(f"  Run: python scripts/live_monitor.py")
+    print("\n[5] Proxy ready.")
+    print("  Run: python scripts/proxy_status.py metrics")
+    print("  Run: python scripts/live_monitor.py")
 
 
 if __name__ == "__main__":

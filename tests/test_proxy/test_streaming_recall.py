@@ -16,17 +16,13 @@ import pytest
 from httpx import ASGITransport
 
 from archolith_proxy.main import create_app
-from archolith_proxy.metrics import get_metrics
 from archolith_proxy.proxy.streaming import (
-    ResponseCapture,
     StreamingToolCallAccumulator,
-    StreamingRecallResult,
     stream_with_recall_detection,
     _parse_sse_line,
     _assemble_streaming_response,
     _non_streaming_to_sse,
 )
-from archolith_proxy.proxy.tool_injection import RECALL_TOOL_NAME
 
 
 # --- StreamingToolCallAccumulator tests ---
@@ -520,7 +516,6 @@ class TestStreamingRecallInterception:
         because get_full_text() returns empty for non-streaming format).
         """
         import os
-        from unittest.mock import AsyncMock, patch, MagicMock
 
         # Enable session recall tool via env override
         env_patch = patch.dict(os.environ, {"SESSION_RECALL_TOOL_ENABLED": "true"})

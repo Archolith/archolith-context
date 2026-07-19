@@ -1,8 +1,6 @@
 """Unit tests for session recall tool injection and interception."""
 
-import json
 
-import pytest
 
 from archolith_proxy.proxy.tool_injection import (
     RECALL_TOOL_DEFINITION,

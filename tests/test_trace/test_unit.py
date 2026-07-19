@@ -9,7 +9,7 @@ import pytest
 
 from archolith_proxy.models.dtos import TurnTrace, SessionTraceSummary, AssembledContext, TRACE_VERSION
 from archolith_proxy.trace.builder import TraceBuilder
-from archolith_proxy.trace.store import TraceStore, reset_trace_store, get_trace_store
+from archolith_proxy.trace.store import TraceStore, reset_trace_store
 
 
 class TestTurnTraceDTO:

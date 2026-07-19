@@ -95,8 +95,8 @@ def cmd_metrics() -> None:
     d = _get("/metrics")
 
     print(_c(BOLD, f"Archolith Proxy  {d.get('version', '?')}  uptime={d.get('uptime_s', '?')}s"))
-    print(_c(CYAN, f"  graph_ready    ") + str(d.get("graph_ready")))
-    print(_c(CYAN, f"  total_requests ") + str(d.get("total_requests")))
+    print(_c(CYAN, "  graph_ready    ") + str(d.get("graph_ready")))
+    print(_c(CYAN, "  total_requests ") + str(d.get("total_requests")))
 
     modes = d.get("assembly_modes", {})
     # Show every non-zero mode (not just the first 4) so passthrough / agent_solo /
@@ -110,14 +110,14 @@ def cmd_metrics() -> None:
         mode_str = "  ".join(parts)
     else:
         mode_str = "(all zero)"
-    print(_c(CYAN, f"  assembly_modes ") + mode_str)
+    print(_c(CYAN, "  assembly_modes ") + mode_str)
 
     curator_calls = d.get("curator_calls", 0)
     curator_timeouts = d.get("curator_timeouts", 0)
     curator_fallbacks = d.get("curator_fallbacks", 0)
     if curator_calls or curator_timeouts or curator_fallbacks:
         cur_str = f"calls={curator_calls}  timeouts={_c(RED, str(curator_timeouts)) if curator_timeouts else str(curator_timeouts)}  fallbacks={curator_fallbacks}"
-        print(_c(CYAN, f"  curator        ") + cur_str)
+        print(_c(CYAN, "  curator        ") + cur_str)
 
     # Curator-worker diagnosis (event-driven worker + deterministic read + top-up).
     diag = d.get("curator_worker_diag")
@@ -161,25 +161,25 @@ def cmd_metrics() -> None:
         line = "  ".join(f"{sid[:8]}={v}" for sid, v in shown)
         if rest:
             line += f"  (+{len(rest)} more)"
-        print(_c(CYAN, f"  user_turns     ") + line)
+        print(_c(CYAN, "  user_turns     ") + line)
     else:
-        print(_c(CYAN, f"  user_turns     ") + "(no sessions)")
+        print(_c(CYAN, "  user_turns     ") + "(no sessions)")
 
     errs = d.get("upstream_errors", 0)
     err_str = _c(RED, str(errs)) if errs else str(errs)
-    print(_c(CYAN, f"  upstream_errors") + f" {err_str}")
+    print(_c(CYAN, "  upstream_errors") + f" {err_str}")
 
     successes = d.get("extraction_successes", 0)
     empties = d.get("extraction_empties", 0)
     failures = d.get("extraction_failures", 0)
     extraction_str = f"stored={successes}  empty={empties}  failed={failures}"
-    print(_c(CYAN, f"  extractions    ") + extraction_str)
+    print(_c(CYAN, "  extractions    ") + extraction_str)
 
     savings_rate = d.get("token_savings_rate", 0)
     savings_str = f"{savings_rate*100:.1f}%  ({d.get('token_savings_estimated', 0):,} tokens saved)"
-    print(_c(CYAN, f"  token_savings  ") + savings_str)
+    print(_c(CYAN, "  token_savings  ") + savings_str)
 
-    print(_c(CYAN, f"  trace_sessions ") + str(d.get("trace_sessions")))
+    print(_c(CYAN, "  trace_sessions ") + str(d.get("trace_sessions")))
 
 
 def cmd_sessions() -> None:

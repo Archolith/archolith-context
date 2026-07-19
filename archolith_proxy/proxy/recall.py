@@ -143,7 +143,6 @@ async def resend_with_recall(
         Tuple of (final response data or None, recall questions asked, facts returned per question).
     """
     from archolith_proxy.proxy.tool_injection import (
-        RECALL_TOOL_NAME,
         find_recall_tool_call,
         handle_recall_tool_call,
         strip_recall_from_response,

@@ -4,7 +4,6 @@ import httpx
 import json
 import os
 import time
-import sys
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -77,7 +76,7 @@ def main():
             print(f"  Goal:          {summary.get('goal', '(none)')}")
             turns = sd.get("turns", [])
             if turns:
-                print(f"\n  Per-turn:")
+                print("\n  Per-turn:")
                 for t in turns:
                     mode = t.get("assembly_mode", "?")
                     uturn = t.get("user_turn_count", "?")

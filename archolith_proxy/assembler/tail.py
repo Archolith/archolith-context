@@ -42,8 +42,6 @@ def smart_tail(
 
     # Start with the last base_size messages
     tail_start = max(0, len(messages) - base_size)
-    tail = messages[tail_start:]
-
     # Find orphaned tool messages and expand to include their matching assistant
     expanded_start = tail_start
     needs_expansion = True

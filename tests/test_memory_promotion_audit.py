@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from archolith_proxy.memory.models import PromotionOutcome, PromotionResult
 from archolith_proxy.memory.promotion import PromotionService

@@ -1,6 +1,5 @@
 """Unit tests for Phase 3 — context assembly, message rewriting, fact budgeting."""
 
-import math
 
 import pytest
 

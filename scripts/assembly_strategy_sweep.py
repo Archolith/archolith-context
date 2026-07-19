@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from archolith_proxy.curator.briefing import PreFetchedFile, SessionBriefing
-from archolith_proxy.curator.deterministic_assembler import build_deterministic_context, _format_file_block
+from archolith_proxy.curator.deterministic_assembler import build_deterministic_context
 from archolith_proxy.curator.scoring import score_files
 
 _SEED = Path(

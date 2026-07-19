@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import structlog
 
-from archolith_proxy.shared.text_utils import jaccard_similarity, _normalize
+from archolith_proxy.shared.text_utils import jaccard_similarity
 from archolith_proxy.config import get_settings
 from archolith_proxy.graph.repository import CONTEXT_SESSION_LABEL, run_query, run_write
 from archolith_proxy.models.graph_nodes import FactType

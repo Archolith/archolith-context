@@ -14,15 +14,14 @@ All tests use mocked upstream and graph backends — no live services needed.
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from httpx import ASGITransport
 
-from archolith_proxy.config import get_settings, reset_settings
+from archolith_proxy.config import get_settings
 from archolith_proxy.main import create_app
-from archolith_proxy.metrics import get_metrics
 from archolith_proxy.models.dtos import AssembledContext
 from archolith_proxy.proxy.circuit_breaker import reset_all, reset_circuit
 from archolith_proxy.proxy.rewrite import estimate_input_tokens
@@ -272,7 +271,6 @@ class TestLongSessionPipeline:
                 return httpx.Response(200, json={"object": "list", "data": []})
             return httpx.Response(200, json=_NORMAL_RESPONSE)
 
-        settings = get_settings()
         mock_backend = _make_mock_backend(facts=[
             {"content": "Review model has rating field (1-5)", "fact_type": "observation", "confidence": 0.9, "source_turn": 1},
             {"content": "Order model has status transitions: pending→confirmed→shipped→delivered", "fact_type": "observation", "confidence": 0.95, "source_turn": 3},
@@ -323,10 +321,6 @@ class TestLongSessionPipeline:
             nonlocal request_count
             if "/models" in str(request.url):
                 return httpx.Response(200, json={"object": "list", "data": []})
-            body = json.loads(request.content)
-            msg_list = body.get("messages", [])
-            has_tool_result = any(m.get("role") == "tool" for m in msg_list)
-
             request_count[0] += 1
             if request_count[0] == 1:
                 # First request: model calls recall
@@ -473,8 +467,6 @@ class TestLongSessionPipeline:
         reset_all()
 
         messages = build_coding_session_short()
-        m = get_metrics()
-
         settings = get_settings()
         orig_synthetic = settings.synthetic_tools_enabled
         orig_max_consec = settings.synthetic_circuit_max_consecutive
@@ -534,7 +526,6 @@ class TestLongSessionPipeline:
             settings.synthetic_circuit_max_consecutive = orig_max_consec
 
         # Circuit should have opened by now (fallback_used increments failure count)
-        from archolith_proxy.proxy.circuit_breaker import is_synthetic_allowed
         # After 2 consecutive failures, should be blocked
         # (exact behavior depends on whether failures registered correctly)
 

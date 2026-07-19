@@ -416,7 +416,7 @@ def run_interactive(
             if set_budget(client, proxy_url, budget):
                 print(f"  Budget set to {budget}")
             else:
-                print(f"  WARNING: Could not set budget")
+                print("  WARNING: Could not set budget")
 
         # System message
         system_prompt = ""
@@ -495,7 +495,7 @@ def run_interactive(
                     if set_budget(client, proxy_url, new_budget):
                         print(f"  Budget changed to {new_budget}")
                     else:
-                        print(f"  Failed to set budget")
+                        print("  Failed to set budget")
                 except (ValueError, IndexError):
                     print("  Usage: b <number>")
                 continue
@@ -590,7 +590,7 @@ def run_interactive(
             # Warn on collapse
             if isinstance(p_out, int) and p_out < COLLAPSE_THRESHOLD:
                 print(f"  !! WARNING: Proxy output collapsed to {p_out} tokens")
-                print(f"  !! Type 'c' to inspect assembled context, 't' for trace detail")
+                print("  !! Type 'c' to inspect assembled context, 't' for trace detail")
 
     # Save on exit
     if transcript:

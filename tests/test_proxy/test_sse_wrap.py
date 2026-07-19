@@ -13,7 +13,6 @@ Covers:
 import asyncio
 import json
 
-import pytest
 from starlette.responses import Response
 
 from archolith_proxy.proxy.streaming import _wrap_response_as_sse

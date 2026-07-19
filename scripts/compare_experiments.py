@@ -53,7 +53,7 @@ def diff_configs(configs: list[tuple[str, dict]]) -> None:
             diffs.append((key, values))
 
     if diffs:
-        print(f"\n  CONFIG DIFFERENCES:")
+        print("\n  CONFIG DIFFERENCES:")
         header = f"  {'Setting':<35}" + "".join(f" {name:>15}" for name, _ in configs)
         print(header)
         print("  " + "-" * (35 + 16 * len(configs)))
@@ -85,7 +85,7 @@ def compare(experiments: list[dict]) -> None:
     all_keys = sorted(all_keys)
 
     # Side-by-side results
-    print(f"\n  RESULTS COMPARISON")
+    print("\n  RESULTS COMPARISON")
     print(f"  {'Scenario':<18} {'Budget':>7}", end="")
     for name in names:
         print(f"  | {'Savings':>8} {'Recall':>8} {'Tokens':>8}", end="")

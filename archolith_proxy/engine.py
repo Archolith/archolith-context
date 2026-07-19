@@ -24,3 +24,14 @@ from archolith_proxy.memory.registry import (
     get_registry as get_memory_registry,
     register_memory_adapter as register_memory_adapter,
 )
+
+__all__ = [
+    "PartialExtractionResult",
+    "ToolCallRecord",
+    "ToolExtractor",
+    "extract_facts_per_tool",
+    "get_registry",
+    "register_extractor",
+    "get_memory_registry",
+    "register_memory_adapter",
+]

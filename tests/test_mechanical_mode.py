@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
 
 from archolith_proxy.config import PROFILES, Settings, _apply_profile, reset_settings, snapshot_config
 

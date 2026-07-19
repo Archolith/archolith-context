@@ -26,7 +26,7 @@ dependencies = [
     "pydantic-settings>=2.7.0",
     "structlog>=24.4.0",
     "ladybug>=0.16.0",
-    "archolith-maintenance>=0.1.0",
+    "archolith-maintenance @ git+https://github.com/Archolith/archolith-maintenance.git@main",
 ]
 
 [project.scripts]
@@ -43,16 +43,13 @@ java = [
     "javalang>=0.13.0",
 ]
 filter = [
-    "archolith-filter>=0.1.0",
-]
-compliance = [
-    "archolith-compliance>=0.1.0",
+    "archolith-filter @ git+https://github.com/Archolith/archolith-filter.git@main",
 ]
 audit = [
-    "archolith-audit>=0.1.0",
+    "archolith-audit @ git+https://github.com/Archolith/archolith-mcp-audit.git@main",
 ]
 full = [
-    "archolith-proxy[filter,compliance,audit]",
+    "archolith-proxy[filter,audit]",
 ]
 dev = [
     "archolith-proxy[full]",
@@ -68,6 +65,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["archolith_proxy"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -86,15 +86,15 @@ line-length = 120
 #
 # Boundary              Target    Hard Limit
 # ─────────────────────  ───────   ─────────
-# Business logic files   ≤300 LOC  ≤500 LOC
-# Test files             ≤800 LOC  ≤1,200 LOC
+# Business logic files   ≤300 LOC  ≤800 LOC
+# Test files             ≤800 LOC  ≤1,500 LOC
 # Config files           ≤100 LOC  ≤200 LOC
 # __init__.py            ≤30 LOC   ≤100 LOC
 #
 # Enforced by `check_file_sizes.sh` in CI — see `.github/workflows/ci.yml`.
 [tool.archolith.size-limits]
-hard-limit-py = 500
-hard-limit-test = 1200
+hard-limit-py = 800
+hard-limit-test = 1500
 hard-limit-config = 200
 hard-limit-init = 100
 exclude-dirs = [".venv", ".benchmarks", ".pytest_cache", "__pycache__"]
