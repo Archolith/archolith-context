@@ -199,10 +199,64 @@ def has_file_supersession(
     return False
 
 
+# =============================================================================
+# Partial / Incremental Refresh Helpers
+# =============================================================================
+
+def extract_relevant_code_section(rendered_block: str) -> tuple[str, str, str]:
+    """
+    Split a rendered context block into (head, relevant_code, tail).
+
+    Returns:
+        (head_before_relevant_code, relevant_code_section, tail_after)
+    """
+    marker = "=== RELEVANT CODE ==="
+    if marker not in rendered_block:
+        return rendered_block, "", ""
+
+    parts = rendered_block.split(marker, 1)
+    head = parts[0].rstrip()
+    rest = parts[1] if len(parts) > 1 else ""
+
+    # Try to find the end of the relevant code section
+    next_section_markers = ["=== KEY FACTS ===", "=== DECISIONS ===", "=== SESSION GOAL ==="]
+    end_idx = len(rest)
+    for m in next_section_markers:
+        if m in rest:
+            idx = rest.find(m)
+            if idx < end_idx:
+                end_idx = idx
+
+    relevant_code = marker + "\n" + rest[:end_idx].strip()
+    tail = rest[end_idx:].strip()
+
+    return head, relevant_code, tail
+
+
+def replace_relevant_code_section(
+    original_block: str,
+    new_relevant_code: str,
+) -> str:
+    """
+    Replace the RELEVANT CODE section in a cached block with a new one.
+    """
+    head, _, tail = extract_relevant_code_section(original_block)
+
+    if not new_relevant_code.startswith("=== RELEVANT CODE ==="):
+        new_relevant_code = "=== RELEVANT CODE ===\n" + new_relevant_code
+
+    if tail:
+        return f"{head}\n\n{new_relevant_code}\n\n{tail}"
+    else:
+        return f"{head}\n\n{new_relevant_code}"
+
+
 __all__ = [
     "compute_context_signature",
     "get_cached_context",
     "store_context",
     "should_use_cached_context",
     "has_file_supersession",
+    "extract_relevant_code_section",
+    "replace_relevant_code_section",
 ]

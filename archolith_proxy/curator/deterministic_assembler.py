@@ -28,6 +28,8 @@ from archolith_proxy.curator.context_cache import (
     compute_context_signature,
     get_cached_context,
     store_context,
+    extract_relevant_code_section,
+    replace_relevant_code_section,
 )
 from archolith_proxy.curator.state import CuratorSnapshot, cache_snapshot
 from archolith_proxy.models.dtos import AssembledContext
@@ -257,7 +259,8 @@ async def run_deterministic_assembler(
                         record_metric("context_cache_forced_refresh_stale_file")
                     except Exception:
                         pass
-                    # Fall through to render fresh
+                    # For now we fall through to full render on supersession.
+                    # True partial refresh would require more sophisticated diffing.
                 else:
                     # Bloat ratio check
                     max_bloat = float(getattr(settings, "context_cache_max_bloat_ratio", 1.6))
