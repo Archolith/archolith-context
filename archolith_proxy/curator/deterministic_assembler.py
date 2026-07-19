@@ -138,6 +138,11 @@ def build_deterministic_context(
 
     if combo:
         from archolith_proxy.curator.dependency_graph import order_by_combo
+        if not exemplar_suffixes:
+            logger.warning(
+                "deterministic_assembler_combo_without_exemplar_suffixes",
+                note="combo fill without exemplar_suffixes degenerates to scored+topo interleave",
+            )
         ordered_files = order_by_combo(briefing.files, query, exemplar_suffixes)
     elif topological:
         from archolith_proxy.curator.dependency_graph import order_by_topology
