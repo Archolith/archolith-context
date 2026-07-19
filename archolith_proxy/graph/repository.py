@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import re
 
-import neo4j
 import structlog
 
 from archolith_proxy.graph.driver import get_driver, get_database
@@ -71,7 +70,7 @@ def _validate_cypher(cypher: str) -> None:
 
     # Check for other session labels (Session, Fact, File, Decision without ContextSession)
     other_session_pattern = re.compile(
-        rf":\s*(?:Session|Fact|File|Decision)\b", re.IGNORECASE
+        r":\s*(?:Session|Fact|File|Decision)\b", re.IGNORECASE
     )
     has_other_session_label = other_session_pattern.search(cypher) is not None
 

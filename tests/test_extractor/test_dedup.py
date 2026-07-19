@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from archolith_proxy.extractor.dedup import (
     DEFAULT_SIMILARITY_THRESHOLD,

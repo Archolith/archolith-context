@@ -24,16 +24,16 @@ class LsExtractor(ToolExtractor):
         session_goal: str | None,
     ) -> PartialExtractionResult:
         path = record.args.get("path", "") or record.args.get("dir", "") or ""
-        lines = [l.strip() for l in record.result.splitlines() if l.strip()]
+        lines = [line.strip() for line in record.result.splitlines() if line.strip()]
         # Classify entries: trailing / means directory
-        files = [l for l in lines if not l.endswith("/")]
-        dirs = [l for l in lines if l.endswith("/")]
+        files = [line for line in lines if not line.endswith("/")]
+        dirs = [line for line in lines if line.endswith("/")]
 
         total = len(files) + len(dirs)
         names = lines[:_MAX_DISPLAY_NAMES]
         names_str = ", ".join(names)
         if total > _MAX_DISPLAY_NAMES:
-            names_str += f", ..."
+            names_str += ", ..."
 
         fact_content = f"[ls] {path}: {total} entries ({len(files)} files, {len(dirs)} dirs) — {names_str}"
 

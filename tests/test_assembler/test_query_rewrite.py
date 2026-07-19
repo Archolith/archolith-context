@@ -9,7 +9,6 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -303,7 +302,7 @@ class TestRewriteQuery:
 
         with patch.dict("os.environ", {"EXTRACTOR_API_KEY": "test-key"}):
             reset_settings()
-            result = await rewrite_query(mock_client, "fix it", recent)
+            await rewrite_query(mock_client, "fix it", recent)
             # Verify the post was called (long content was truncated, not rejected)
             assert mock_client.post.called
             reset_settings()

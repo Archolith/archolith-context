@@ -37,7 +37,7 @@ __all__ = [
 ]
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -190,7 +190,7 @@ async def _generate_recall_session_work(session_id: str, turn_number: int) -> st
     from archolith_proxy.trace.store import get_trace_store
 
     lines: list[str] = []
-    lines.append(f"## Session Work Summary")
+    lines.append("## Session Work Summary")
 
     # ── Trace store: turn metrics ────────────────────────────────────────
     trace_store = get_trace_store()

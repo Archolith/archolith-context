@@ -174,9 +174,9 @@ class Adapter(MemoryAdapterBase):
         # YAML frontmatter
         lines.append("---")
         lines.append(f"title: {self._escape_yaml(promotion.content[:80])}")
-        lines.append(f"type: note")
+        lines.append("type: note")
         lines.append(f"permalink: {slugify(promotion.content[:60])}")
-        lines.append(f"tags:")
+        lines.append("tags:")
         for tag in (promotion.tags or []):
             lines.append(f"  - {tag}")
         if promotion.fact_type:
@@ -220,7 +220,7 @@ class Adapter(MemoryAdapterBase):
         # Provenance
         lines.append("## Provenance")
         lines.append("")
-        lines.append(f"- [source] archolith-proxy promotion")
+        lines.append("- [source] archolith-proxy promotion")
         lines.append(f"- [session] {promotion.session_id}")
         lines.append(f"- [turn] {promotion.source_turn}")
         if promotion.promotion_reason:

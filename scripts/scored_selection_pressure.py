@@ -16,18 +16,17 @@ No server, no LLM, no cost — pure call into build_deterministic_context.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
+
+from archolith_proxy.curator.briefing import PreFetchedFile, SessionBriefing
+from archolith_proxy.curator.deterministic_assembler import build_deterministic_context
+from archolith_proxy.curator.scoring import score_files, parse_importance, keyword_relevance
 
 # Real seed files live in the bench repo.
 _SEED = Path(
     r"C:\Users\thron\IdeaProjects\projects\archolith\archolith-bench"
     r"\experiments\context-quality\seeded\_seed"
 )
-
-from archolith_proxy.curator.briefing import PreFetchedFile, SessionBriefing
-from archolith_proxy.curator.deterministic_assembler import build_deterministic_context
-from archolith_proxy.curator.scoring import score_files, parse_importance, keyword_relevance
 
 # The under-specified page intent the agent is asked on the comparison turn.
 QUERY = (

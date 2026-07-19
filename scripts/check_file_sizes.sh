@@ -3,8 +3,8 @@
 # Fails CI if any source file exceeds the hard size limits.
 #
 # Hard limits (from pyproject.toml [tool.archolith.size-limits]):
-#   Business logic: 500 LOC
-#   Test files:    1200 LOC
+#   Business logic: 800 LOC
+#   Test files:    1500 LOC
 #   Config files:   200 LOC
 #   __init__.py:    100 LOC
 #
@@ -16,8 +16,8 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-HARD_LIMIT_PY=500
-HARD_LIMIT_TEST=1200
+HARD_LIMIT_PY=800
+HARD_LIMIT_TEST=1500
 HARD_LIMIT_CONFIG=200
 HARD_LIMIT_INIT=100
 

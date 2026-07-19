@@ -21,7 +21,7 @@ from pathlib import Path
 import httpx
 
 from archolith_proxy.config import get_settings
-from archolith_proxy.extractor.client import extract_facts, _parse_extraction_response
+from archolith_proxy.extractor.client import _parse_extraction_response
 from archolith_proxy.extractor.prompts import SYSTEM_PROMPT, build_extraction_prompt
 from archolith_proxy.models.dtos import ExtractionResult
 
@@ -165,7 +165,7 @@ def score_extraction(result: dict) -> dict:
         text = raw.strip()
         if text.startswith("```"):
             lines = text.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
+            lines = [line for line in lines if not line.strip().startswith("```")]
             text = "\n".join(lines)
         json.loads(text)
     except json.JSONDecodeError:
@@ -278,7 +278,7 @@ async def run_audit():
                 all_scores.append(score)
 
                 # Print raw extraction output
-                print(f"\nRaw model output:")
+                print("\nRaw model output:")
                 print(result["raw_content"][:500])
                 print(f"\nParsed facts: {score['total_facts_extracted']}")
                 for f in result["parsed"].facts:
@@ -287,7 +287,7 @@ async def run_audit():
                     else:
                         print(f"  - [string] {str(f)[:80]}")
 
-                print(f"\nScore:")
+                print("\nScore:")
                 print(f"  JSON parsed: {score['json_parsed']}")
                 print(f"  Accuracy: {score['accuracy']:.1%} ({score['matched_gt']}/{score['ground_truth_count']} ground truth matched)")
                 print(f"  Noise ratio: {score['noise_ratio']:.1%} ({score['noise_facts']}/{score['total_facts_extracted']} noise facts)")
@@ -301,7 +301,7 @@ async def run_audit():
                 print(f"  Decisions: {score['decisions']}, Files: {score['files_touched']}, Invalidated: {score['invalidated']}")
 
                 if score['unmatched_gt']:
-                    print(f"  MISSED ground truth:")
+                    print("  MISSED ground truth:")
                     for gt, sim in score['unmatched_gt']:
                         print(f"    - '{gt}' (best similarity: {sim:.2f})")
 
@@ -363,7 +363,7 @@ async def run_audit():
 
     print(f"\nTurns audited: {len(valid_scores)}/{len(TURNS)}")
     print(f"JSON parse rate: {json_parse_rate:.1%}")
-    print(f"\n--- FACT QUALITY ---")
+    print("\n--- FACT QUALITY ---")
     print(f"Total facts extracted: {total_facts}")
     print(f"Total ground truth items: {total_gt}")
     print(f"Ground truth matched: {total_matched}/{total_gt} ({overall_accuracy:.1%})")
@@ -371,7 +371,7 @@ async def run_audit():
     print(f"Non-atomic facts: {total_non_atomic}/{total_facts} ({1-overall_atomicity:.1%})")
     print(f"Avg confidence: {sum(s['avg_confidence'] for s in valid_scores)/len(valid_scores):.2f}")
 
-    print(f"\n--- EXTRACTION METADATA ---")
+    print("\n--- EXTRACTION METADATA ---")
     total_decisions = sum(s["decisions"] for s in valid_scores)
     total_files = sum(s["files_touched"] for s in valid_scores)
     total_invalidated = sum(s["invalidated"] for s in valid_scores)
@@ -379,7 +379,7 @@ async def run_audit():
     print(f"Files touched: {total_files}")
     print(f"Invalidated facts: {total_invalidated}")
 
-    print(f"\n--- COST ESTIMATE ---")
+    print("\n--- COST ESTIMATE ---")
     print(f"Total prompt tokens: {total_prompt_tokens}")
     print(f"Total completion tokens: {total_completion_tokens}")
     # gpt-4.1-mini pricing: $0.40/1M input, $1.60/1M output
@@ -387,7 +387,7 @@ async def run_audit():
     print(f"Estimated cost: ${cost:.4f} for {len(valid_scores)} turns")
     print(f"Cost per turn: ${cost/len(valid_scores):.4f}")
 
-    print(f"\n--- GATE DECISION ---")
+    print("\n--- GATE DECISION ---")
     gate_pass = True
     reasons = []
 

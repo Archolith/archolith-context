@@ -377,9 +377,9 @@ def format_calibration_report(report: CalibrationReport) -> str:
     lines.append("=" * 72)
     lines.append("THRESHOLD RECOMMENDATIONS")
     lines.append("=" * 72)
-    lines.append(f"  Current min_input_tokens:    55,000")
+    lines.append("  Current min_input_tokens:    55,000")
     lines.append(f"  Recommended min_input_tokens: {report.recommended_min_input_tokens:,}")
-    lines.append(f"  Current min_savings_ratio:   0.25 (25%)")
+    lines.append("  Current min_savings_ratio:   0.25 (25%)")
     lines.append(f"  Recommended min_savings_ratio: {report.recommended_min_savings_ratio:.2f} ({report.recommended_min_savings_ratio:.0%})")
     lines.append("")
 

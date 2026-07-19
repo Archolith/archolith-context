@@ -148,7 +148,6 @@ def send_chat(
 
     total_start = time.monotonic()
     for attempt in range(max_retries + 1):
-        start = time.monotonic()
         try:
             resp = client.post(url, json=body, headers=headers, timeout=300)
         except httpx.TimeoutException:
@@ -484,7 +483,7 @@ def run_benchmark(
             if set_proxy_budget(client, proxy_url, budget):
                 print(f"  Budget set to {budget} tokens")
             else:
-                print(f"  WARNING: Could not set budget via admin API, using proxy default")
+                print("  WARNING: Could not set budget via admin API, using proxy default")
 
         for i, user_msg in enumerate(turns, 1):
             if i <= start_turn:
@@ -841,7 +840,7 @@ def print_summary(data: dict) -> None:
 
     if data.get("quality"):
         q = data["quality"]
-        print(f"\n  Fact Probe Quality:")
+        print("\n  Fact Probe Quality:")
         print(f"    Probes run:              {q['total_probes']}")
         print(f"    Avg direct recall:       {q['avg_direct_recall']:.1%}")
         print(f"    Avg proxy recall:        {q['avg_proxy_recall']:.1%}")

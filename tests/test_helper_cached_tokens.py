@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
-from archolith_proxy.models.dtos import AssembledContext, TurnTrace
+from archolith_proxy.models.dtos import TurnTrace
 from archolith_proxy.trace.builder import TraceBuilder
 
 

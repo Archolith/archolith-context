@@ -12,7 +12,7 @@ These tests verify the proxy's behavior under adverse conditions:
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -698,10 +698,6 @@ class TestRequestLoggingMiddleware:
             return httpx.Response(200, json=MOCK_RESPONSE)
 
         mock_transport = httpx.MockTransport(mock_handler)
-
-        captured_context = {}
-
-        import structlog
 
         async with app.router.lifespan_context(app):
             app.state.http_client = httpx.AsyncClient(transport=mock_transport)

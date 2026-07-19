@@ -28,13 +28,11 @@ Environment:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import httpx
 
@@ -193,7 +191,7 @@ def test_recall_interception(client: httpx.Client, verbose: bool = False) -> Sui
     session_id = f"syntest-recall-{int(time.time())}"
 
     print(f"\n{'='*60}")
-    print(f"  RECALL INTERCEPTION TEST")
+    print("  RECALL INTERCEPTION TEST")
     print(f"  Session: {session_id}")
     print(f"{'='*60}")
 
@@ -286,7 +284,7 @@ def test_recall_interception(client: httpx.Client, verbose: bool = False) -> Sui
         print(f"  ✓ Recall confirmed via trace ({len(recall_traces)} turn(s))")
     else:
         result.notes.append("No recall detected in traces (model may have answered from context window)")
-        print(f"  ○ No recall in traces — model answered from context window")
+        print("  ○ No recall in traces — model answered from context window")
 
     # Tally
     result.total_prompt_tokens = sum(t.prompt_tokens for t in result.turns)
@@ -311,7 +309,7 @@ def test_synthetic_session_work(client: httpx.Client, verbose: bool = False) -> 
     session_id = f"syntest-work-{int(time.time())}"
 
     print(f"\n{'='*60}")
-    print(f"  SYNTHETIC SESSION WORK TEST")
+    print("  SYNTHETIC SESSION WORK TEST")
     print(f"  Session: {session_id}")
     print(f"{'='*60}")
 
@@ -383,10 +381,10 @@ def test_synthetic_session_work(client: httpx.Client, verbose: bool = False) -> 
     synthetic_traces = [t for t in traces if t.get("synthetic_tool_used")]
     if synthetic_traces:
         result.notes.append(f"Synthetic tool used in {len(synthetic_traces)} turn(s)")
-        print(f"  ✓ Synthetic tool confirmed via trace")
+        print("  ✓ Synthetic tool confirmed via trace")
     else:
         result.notes.append("No synthetic tool detected in traces")
-        print(f"  ○ No synthetic tool in traces — may not be enabled or model didn't call it")
+        print("  ○ No synthetic tool in traces — may not be enabled or model didn't call it")
 
     result.total_prompt_tokens = sum(t.prompt_tokens for t in result.turns)
     result.total_completion_tokens = sum(t.completion_tokens for t in result.turns)
@@ -410,7 +408,7 @@ def test_read_cache_interception(client: httpx.Client, verbose: bool = False) ->
     session_id = f"syntest-cache-{int(time.time())}"
 
     print(f"\n{'='*60}")
-    print(f"  READ CACHE INTERCEPTION TEST")
+    print("  READ CACHE INTERCEPTION TEST")
     print(f"  Session: {session_id}")
     print(f"{'='*60}")
 
@@ -465,7 +463,7 @@ def test_read_cache_interception(client: httpx.Client, verbose: bool = False) ->
         print(f"  ✓ Cache hits: +{new_hits}")
     else:
         result.notes.append("No cache hits detected (file may not have been cached, or interception not enabled)")
-        print(f"  ○ No cache hits — interception may not be enabled or file not cached")
+        print("  ○ No cache hits — interception may not be enabled or file not cached")
 
     # Compare latencies
     if tr1.latency_ms > 0 and tr2.latency_ms > 0:
@@ -493,7 +491,7 @@ def test_long_session_token_savings(client: httpx.Client, verbose: bool = False)
     session_id = f"syntest-savings-{int(time.time())}"
 
     print(f"\n{'='*60}")
-    print(f"  LONG SESSION TOKEN SAVINGS TEST")
+    print("  LONG SESSION TOKEN SAVINGS TEST")
     print(f"  Session: {session_id}")
     print(f"{'='*60}")
 
@@ -591,7 +589,7 @@ def test_long_session_token_savings(client: httpx.Client, verbose: bool = False)
 def print_summary(results: list[SuiteResult]):
     """Print a summary of all test results."""
     print(f"\n{'='*60}")
-    print(f"  SUMMARY")
+    print("  SUMMARY")
     print(f"{'='*60}")
 
     total_prompt = 0
@@ -619,7 +617,7 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true", help="Show full responses")
     args = parser.parse_args()
 
-    print(f"archolith-context synthetic tool tester")
+    print("archolith-context synthetic tool tester")
     print(f"Proxy: {PROXY_BASE}")
     print(f"Model: {MODEL}")
 
@@ -628,7 +626,7 @@ def main():
         if not check_proxy_health(client):
             print(f"\n✗ Proxy at {PROXY_BASE} is not healthy. Is it running?")
             sys.exit(1)
-        print(f"✓ Proxy healthy")
+        print("✓ Proxy healthy")
 
         # Run selected suites
         results: list[SuiteResult] = []

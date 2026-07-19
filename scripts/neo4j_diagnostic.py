@@ -33,7 +33,7 @@ async def check():
             "LIMIT 20",
             {},
         )
-        print(f"\nAll facts (first 20):")
+        print("\nAll facts (first 20):")
         for f in all_facts:
             content = f.get("content", "?")[:80]
             print(f"  [{f.get('sid','?')[:20]}] {f.get('type','?')}: {content}")

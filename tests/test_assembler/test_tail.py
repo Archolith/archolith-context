@@ -1,6 +1,5 @@
 """Unit tests for Smart Tail — structural integrity for coherence tails."""
 
-import pytest
 
 from archolith_proxy.assembler.tail import smart_tail, _find_assistant_with_tool_call
 

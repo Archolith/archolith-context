@@ -1,6 +1,5 @@
 """Tests for fact-level compression at assembly time."""
 
-import pytest
 
 from archolith_proxy.assembler.compress import (
     compress_fact,

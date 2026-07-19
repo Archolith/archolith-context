@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -140,7 +139,6 @@ def test_engine_api_surface_importable():
 def test_registry_clear_removes_custom_extractors():
     """Registry.clear() removes all registered extractors."""
     from archolith_proxy.extractor import register_extractor
-    from archolith_proxy.extractor.registry import ToolExtractorRegistry
 
     # Register a custom extractor
     register_extractor(_CustomExtractor())

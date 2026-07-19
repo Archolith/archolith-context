@@ -11,7 +11,7 @@ from __future__ import annotations
 import hmac
 import ipaddress
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import HTTPException, Request
 
 from archolith_proxy.config import get_settings
 

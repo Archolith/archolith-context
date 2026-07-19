@@ -21,7 +21,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from archolith_proxy.config import get_settings, reset_settings
+from archolith_proxy.config import get_settings
 from archolith_proxy.main import create_app
 from archolith_proxy.metrics import get_metrics
 from archolith_proxy.proxy.circuit_breaker import reset_circuit
@@ -724,8 +724,6 @@ class TestNativeReadIntercept:
 
         m = get_metrics()
         hits_before = m["native_read_cache_hits"]
-        misses_before = m["native_read_cache_misses"]
-
         call_count = 0
 
         async def mock_handler(request: httpx.Request) -> httpx.Response:

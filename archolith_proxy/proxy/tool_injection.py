@@ -37,7 +37,6 @@ __all__ = [
     "handle_recall_tool_call",
 ]
 
-import json
 from typing import Any
 
 import structlog
@@ -237,7 +236,7 @@ async def handle_recall_tool_call(
         _format_relevant_facts,
         _get_query_embedding,
     )
-    from archolith_proxy.assembler.query_rewrite import needs_rewrite, rewrite_query, extract_recent_exchanges
+    from archolith_proxy.assembler.query_rewrite import needs_rewrite, rewrite_query
     from archolith_proxy.config import get_settings
     from archolith_proxy.graph.backend import get_backend
 
