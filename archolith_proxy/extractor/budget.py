@@ -6,11 +6,11 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 
 
-@dataclass
 class LLMBudgetExceeded(RuntimeError):
     """Raised before an upstream call when the per-turn budget is exhausted."""
 
 
+@dataclass
 class ExtractionBudget:
     max_llm_calls: int
     max_requested_tokens: int

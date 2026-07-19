@@ -9,7 +9,7 @@ import httpx
 import structlog
 
 from archolith_proxy.extractor.budget import (
-    ExtractionBudget, LLMBudgetExceeded, set_budget, reset_budget, reserve_llm_call,
+    ExtractionBudget, LLMBudgetExceeded, set_budget, reset_budget,
 )
 
 from archolith_proxy.config import get_settings
@@ -258,6 +258,7 @@ def _parse_extraction_response(
 # ---------------------------------------------------------------------------
 
 _llm_semaphore: asyncio.Semaphore | None = None
+_TURN_LEVEL_MAX_TOKENS = 2000
 
 
 def _int_setting(settings, name: str, default: int) -> int:
@@ -353,6 +354,10 @@ async def extract_facts_per_tool(
         )),
     )
     budget_token = set_budget(budget)
+    # The turn-level pass is responsible for decisions, checkpoints, issues,
+    # and verifications. Reserve its capacity before concurrent tool fallbacks
+    # compete for the shared budget, so a tool-heavy turn cannot starve it.
+    turn_level_reserved = budget.reserve(_TURN_LEVEL_MAX_TOKENS)
     partial_results = await asyncio.gather(
         *[
             _extract_with_semaphore(
@@ -415,11 +420,11 @@ async def extract_facts_per_tool(
             {"role": "user", "content": turn_level_prompt},
         ],
         "temperature": 0.1,
-        "max_tokens": 2000,
+        "max_tokens": _TURN_LEVEL_MAX_TOKENS,
     }
 
     try:
-        if not reserve_llm_call(2000):
+        if not turn_level_reserved:
             raise LLMBudgetExceeded("per-turn extractor LLM budget exhausted")
         resp = await http_client.post(
             f"{settings.extractor_base_url.rstrip('/')}/chat/completions",
