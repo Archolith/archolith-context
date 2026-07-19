@@ -12,15 +12,59 @@ it falls back to a fixed tail (current behavior) and logs a warning.
 
 from __future__ import annotations
 
+import re
+from typing import Literal
+
 import structlog
 
 logger = structlog.get_logger()
+
+
+def classify_turn_intent(user_message: str) -> Literal["continue", "pivot", "neutral"]:
+    """
+    Lightweight rule-based classifier for turn intent.
+
+    Returns:
+        "continue" - user wants to continue previous work
+        "pivot"    - user is starting something new or resetting
+        "neutral"  - unclear or no strong signal
+    """
+    if not user_message:
+        return "neutral"
+
+    msg = user_message.lower()
+
+    # Strong pivot signals
+    pivot_patterns = [
+        r"\b(start fresh|start over|new feature|different approach)\b",
+        r"\b(ignore|forget|reset|start again)\b",
+        r"\blet'?s (start|begin|do something new)\b",
+    ]
+    for pattern in pivot_patterns:
+        if re.search(pattern, msg):
+            return "pivot"
+
+    # Strong continue signals
+    continue_patterns = [
+        r"\b(continue|keep going|do the same|now do|also|next)\b",
+        r"\bfix the (failing|broken|error)\b",
+        r"\bwhat we were doing\b",
+        r"\b(the other file|that file|same thing)\b",
+    ]
+    for pattern in continue_patterns:
+        if re.search(pattern, msg):
+            return "continue"
+
+    return "neutral"
 
 
 def smart_tail(
     messages: list[dict],
     base_size: int,
     max_size: int = 20,
+    intent: Literal["continue", "pivot", "neutral"] | None = None,
+    intent_adjustment: int = 0,
+    min_size: int = 3,
 ) -> list[dict]:
     """Select a coherence tail that preserves tool-call structural integrity.
 
@@ -40,8 +84,15 @@ def smart_tail(
     if not messages:
         return []
 
-    # Start with the last base_size messages
-    tail_start = max(0, len(messages) - base_size)
+    # Apply intent-based adjustment
+    adjusted_base = base_size
+    if intent == "continue":
+        adjusted_base = base_size + intent_adjustment
+    elif intent == "pivot":
+        adjusted_base = max(min_size, base_size - intent_adjustment)
+
+    # Start with the last adjusted_base messages
+    tail_start = max(0, len(messages) - adjusted_base)
     tail = messages[tail_start:]
 
     # Find orphaned tool messages and expand to include their matching assistant
