@@ -1,4 +1,4 @@
-"""Bash tool extractor (class-based)."""
+"""Bash tool extractor with structured output."""
 
 from __future__ import annotations
 
@@ -15,14 +15,27 @@ class BashExtractor:
         turn_number: int,
         session_goal: str | None = None,
     ) -> Any:
-        """Extract structured info from a Bash tool result."""
         args = getattr(record, "args", {}) or {}
         command = args.get("command", "")
 
-        # For Phase 1 we return a minimal result.
-        # A real version would analyze exit_code + output.
+        # Structured output
+        structured = {
+            "command": command,
+            "exit_code": None,
+            "success": None,
+            "errors": [],
+            "summary": f"Executed: {command[:60]}",
+        }
+
         return type("PartialExtractionResult", (), {
-            "facts": [{"content": f"Ran command: {command[:80]}", "fact_type": "observation", "confidence": 0.6}],
+            "facts": [
+                {
+                    "content": f"Ran bash command: {command[:100]}",
+                    "fact_type": "observation",
+                    "confidence": 0.7,
+                    "structured": structured,
+                }
+            ],
             "files_touched": [],
             "used_llm": False,
             "usage": {},
