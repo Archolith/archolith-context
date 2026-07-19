@@ -77,7 +77,11 @@ def retrieval_score(
     relevance: float,
     weights: tuple[float, float, float] = (1.0, 1.0, 1.0),
 ) -> float:
-    """Generative-agents weighted sum of normalized components (each ~0..1)."""
+    """Generative-agents weighted sum of normalized components (each ~0..1).
+
+    Note: recency is currently ~uniform (1.0) within a single prepper pass.
+    Future work could thread source_turn from PreFetchedFile for decay.
+    """
     wr, wi, wrel = weights
     return wr * recency + wi * importance + wrel * relevance
 

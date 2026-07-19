@@ -358,7 +358,11 @@ def render_task_map(
     foundations = [p for p, n in sorted(indeg.items(), key=lambda kv: (-kv[1], kv[0]))
                    if n > 0][:max_foundations]
     if foundations:
-        lines.append("Shared foundations: " + ", ".join(foundations))
+        # Show in-degree counts for consistency with render_code_map
+        foundations_with_counts = [
+            f"{p} (<-{indeg.get(p, 0)})" for p in foundations
+        ]
+        lines.append("Shared foundations: " + ", ".join(foundations_with_counts))
 
     block = "\n".join(lines)
     if len(block) > max_chars:
