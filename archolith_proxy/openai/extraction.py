@@ -248,10 +248,17 @@ async def _run_extraction(
                 fact_type = FactType(fact_type_str)
             except ValueError:
                 fact_type = FactType.OBSERVATION
+            # Preserve provenance and structured fields all the way to the graph.
+            # Older extractors and generic LLM output may omit either field.
+            structured = fact.get("structured")
+            if not isinstance(structured, dict):
+                structured = None
             enriched_facts.append({
                 "content": fact.get("content", ""),
                 "fact_type": fact_type.value,
                 "confidence": fact.get("confidence", 0.5),
+                "source_tool": str(fact.get("source_tool") or "") or None,
+                "structured": structured,
                 "embedding": embeddings[i] if i < len(embeddings) else None,
             })
         new_fact_ids = await get_backend().store_facts_batch(
@@ -372,7 +379,12 @@ async def _run_extraction(
                 invalidations_attempted=len(result.invalidated_fact_ids) if result.invalidated_fact_ids else 0,
                 invalidations_matched=invalidations_matched_count,
                 extraction_latency_ms=extraction_latency_ms,
-                extracted_facts=[{"content": f.get("content", "")[:200], "type": f.get("fact_type", "observation")} for f in unique_facts],
+                extracted_facts=[{
+                    "content": f.get("content", "")[:200],
+                    "type": f.get("fact_type", "observation"),
+                    "source_tool": f.get("source_tool"),
+                    "structured": f.get("structured"),
+                } for f in unique_facts],
             )
             # Record helper-LLM token usage for cost-model telemetry
             usage = result.usage or {}

@@ -3,11 +3,19 @@ to match extraction-model description strings to actual fact IDs."""
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from archolith_proxy.graph.facts import find_matching_fact_ids, _INVALIDATION_MATCH_THRESHOLD
+from archolith_proxy.graph.facts import (
+    _INVALIDATION_MATCH_THRESHOLD,
+    _decode_fact,
+    find_matching_fact_ids,
+    get_active_facts,
+    get_invalidated_facts,
+    store_facts_batch,
+)
 
 
 def _make_active_facts(facts: list[tuple[str, str]]) -> list[dict]:
@@ -16,6 +24,71 @@ def _make_active_facts(facts: list[tuple[str, str]]) -> list[dict]:
     Args: list of (fact_id, content) tuples.
     """
     return [{"fact_id": fid, "content": content} for fid, content in facts]
+
+
+def test_decode_fact_handles_malformed_structured_json():
+    fact = _decode_fact({"content": "bad metadata", "structured_json": "{not-json"})
+    assert fact["structured"] is None
+    assert "structured_json" not in fact
+
+
+@pytest.mark.asyncio
+async def test_active_facts_convert_node_mappings_before_decoding():
+    node_like_fact = MappingProxyType({
+        "content": "fact from graph",
+        "source_tool": "Bash",
+        "structured_json": '{"command":"pytest"}',
+    })
+    with patch("archolith_proxy.graph.facts.run_query", new_callable=AsyncMock, return_value=[{"f": node_like_fact}]):
+        facts = await get_active_facts("session-1")
+
+    assert facts == [{
+        "content": "fact from graph",
+        "source_tool": "Bash",
+        "structured": {"command": "pytest"},
+    }]
+
+
+@pytest.mark.asyncio
+async def test_batch_store_preserves_provenance_and_structured_payload():
+    with patch(
+        "archolith_proxy.graph.facts.run_write",
+        new_callable=AsyncMock,
+        return_value=[{"fact_id": "fact-1"}],
+    ) as run_write:
+        fact_ids = await store_facts_batch(
+            "session-1",
+            [{
+                "content": "tests passed",
+                "fact_type": "tool_result",
+                "source_tool": "Bash",
+                "structured": {"command": "pytest", "status": "pass"},
+            }],
+            source_turn=3,
+        )
+
+    assert fact_ids == ["fact-1"]
+    row = run_write.await_args.args[1]["rows"][0]
+    assert row["source_tool"] == "Bash"
+    assert row["structured_json"] == '{"command":"pytest","status":"pass"}'
+
+
+@pytest.mark.asyncio
+async def test_invalidated_facts_tolerate_malformed_structured_json():
+    rows = [{
+        "fact_id": "fact-1",
+        "content": "old fact",
+        "source_turn": 1,
+        "fact_type": "observation",
+        "invalidated_at": None,
+        "source_tool": "Bash",
+        "structured_json": "{not-json",
+    }]
+    with patch("archolith_proxy.graph.facts.run_query", new_callable=AsyncMock, return_value=rows):
+        facts = await get_invalidated_facts("session-1")
+
+    assert facts[0]["structured"] is None
+    assert "structured_json" not in facts[0]
 
 
 @pytest.mark.asyncio

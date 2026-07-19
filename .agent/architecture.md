@@ -534,6 +534,7 @@ Cache methods on `LadybugBackend`: `upsert_file_content`, `get_file_content`,
 - Current optional mode: per-tool extraction dispatch via `extract_facts_per_tool()`
 - Registry-based routing maps tool names to specialized extractor classes (`bash`, `grep`, `glob`, `ls`, `find`, `web_search`, `web_fetch`, `memory_recall`, fallback)
 - LLM-backed extractors are semaphore-limited by `extractor_llm_concurrency`; non-LLM extractors run fully concurrently
+- LLM-backed extractors declare a requested-token cap. The orchestrator reserves that cap from a per-turn budget before issuing an upstream call; undeclared or exhausted extractors return a bounded no-LLM fallback.
 - Produces structured facts, decisions, issues, verifications, and checkpoint state
 - Runs async (off critical path, concurrent with user think time)
 

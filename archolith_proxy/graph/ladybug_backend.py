@@ -107,7 +107,9 @@ CREATE NODE TABLE Fact(
     invalidated_at TIMESTAMP,
     confidence DOUBLE,
     source_turn INT64,
-    embedding DOUBLE[]
+    embedding DOUBLE[],
+    source_tool STRING,
+    structured_json STRING
 );
 
 CREATE NODE TABLE File(
@@ -300,6 +302,8 @@ class LadybugBackend:
         """
         migrations = [
             "ALTER TABLE Session ADD config_overrides STRING",
+            "ALTER TABLE Fact ADD source_tool STRING",
+            "ALTER TABLE Fact ADD structured_json STRING",
         ]
         for stmt in migrations:
             try:
@@ -447,8 +451,13 @@ class LadybugBackend:
 
     async def store_fact(self, session_id: str, content: str, fact_type: str,
                          source_turn: int, confidence: float = 0.5,
-                         embedding: list[float] | None = None) -> str:
-        return await store_fact(self._execute, session_id, content, fact_type, source_turn, confidence, embedding)
+                         embedding: list[float] | None = None,
+                         source_tool: str | None = None,
+                         structured: dict | None = None) -> str:
+        return await store_fact(
+            self._execute, session_id, content, fact_type, source_turn, confidence,
+            embedding, source_tool, structured,
+        )
 
     async def store_facts_batch(self, session_id: str, facts: list[dict], source_turn: int) -> list[str]:
         return await store_facts_batch(self._execute, session_id, facts, source_turn)

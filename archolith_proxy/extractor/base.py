@@ -55,9 +55,10 @@ class ToolExtractor(ABC):
     """
 
     tool_names: tuple[str, ...] = ()
-    may_use_llm: bool = False  # True for extractors that make API calls (BashExtractor,
-    # WebFetchExtractor, DefaultExtractor). The orchestrator uses this to decide
-    # whether to gate the extractor behind the LLM concurrency semaphore.
+    may_use_llm: bool = False
+    llm_requested_tokens: int = 0  # Per-call token budget declared by LLM-capable extractors.
+    # The orchestrator reserves this amount before invoking the extractor.
+    # Built-ins: Bash=1000, WebFetch=1000, Default=2000. Turn-level uses 2000 separately.
 
     @abstractmethod
     async def extract(

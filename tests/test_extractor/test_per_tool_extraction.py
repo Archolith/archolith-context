@@ -1038,6 +1038,7 @@ class TestExtractFactsPerTool:
         class LlmExtractor(ToolExtractor):
             tool_names = ("LlmTool",)
             may_use_llm = True
+            llm_requested_tokens = 2000
 
             async def extract(self, record, http_client, turn_number, session_goal):
                 return PartialExtractionResult(

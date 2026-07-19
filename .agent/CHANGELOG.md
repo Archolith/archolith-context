@@ -446,3 +446,8 @@
 - **Test lifecycle fix**: Integration tests now use `httpx.MockTransport()` for upstream mock and `client.stream()` context manager to ensure the response body is consumed before the lifespan context closes the http_client.
 - **21 new tests**: TestStreamingToolCallAccumulator (6), TestParseSSELine (5), TestAssembleStreamingResponse (2), TestNonStreamingToSSE (2), TestStreamWithRecallDetection (4), TestStreamingRecallInterception (2).
 - **236 tests passing** (up from 215).
+## 2026-07-19 — Per-tool extraction budget enforcement
+
+- **`archolith_proxy/extractor/client.py`**: Moved per-tool helper-LLM reservation into the orchestrator, made its context-scoped budget cleanup unconditional, and retained bounded raw tool evidence when an LLM extractor is undeclared or out of budget.
+- **`archolith_proxy/graph/facts.py`**: Made invalidated-fact structured JSON decoding match active-fact behavior, including safe handling of malformed stored payloads.
+- **Tests/docs**: Added budget-exhaustion, undeclared-plugin, context-reset, Neo4j mapping, provenance, and malformed JSON regressions; documented `FactNode` provenance/structured fields and the extraction budget contract.

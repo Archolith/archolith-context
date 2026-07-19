@@ -133,7 +133,8 @@ class BashExtractor(ToolExtractor):
     """Handles Bash tool calls — regex first, LLM fallback."""
 
     tool_names = ("Bash",)
-    may_use_llm = True  # LLM path taken when regex yields no facts
+    may_use_llm = True
+    llm_requested_tokens = 1000
 
     async def extract(
         self,
@@ -323,6 +324,7 @@ class BashExtractor(ToolExtractor):
                 usage=usage,
             )
         except Exception as e:
+            from archolith_proxy.extractor.budget import LLMBudgetExceeded
             logger.warning("bash_extractor_llm_failed", error=str(e))
             return PartialExtractionResult(
                 source_tool="Bash",
@@ -332,5 +334,5 @@ class BashExtractor(ToolExtractor):
                     "confidence": 0.4,
                 }],
                 files_touched=[],
-                used_llm=True,
+                used_llm=not isinstance(e, LLMBudgetExceeded),
             )

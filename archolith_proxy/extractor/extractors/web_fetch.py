@@ -23,7 +23,8 @@ class WebFetchExtractor(ToolExtractor):
     """Handles WebFetch tool calls — LLM extracts technical observations."""
 
     tool_names = ("WebFetch", "web_fetch", "webfetch", "fetch")
-    may_use_llm = True  # always makes one LLM call
+    may_use_llm = True
+    llm_requested_tokens = 1000
 
     async def extract(
         self,
@@ -91,6 +92,7 @@ class WebFetchExtractor(ToolExtractor):
                 usage=usage,
             )
         except Exception as e:
+            from archolith_proxy.extractor.budget import LLMBudgetExceeded
             logger.warning("web_fetch_extractor_llm_failed", error=str(e))
             return PartialExtractionResult(
                 source_tool="web_fetch",
@@ -100,5 +102,5 @@ class WebFetchExtractor(ToolExtractor):
                     "confidence": 0.4,
                 }],
                 files_touched=[],
-                used_llm=True,
+                used_llm=not isinstance(e, LLMBudgetExceeded),
             )

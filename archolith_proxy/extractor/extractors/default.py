@@ -23,7 +23,8 @@ class DefaultExtractor(ToolExtractor):
     """
 
     tool_names = ()  # registered via set_default, not by name
-    may_use_llm = True  # always makes one LLM call
+    may_use_llm = True
+    llm_requested_tokens = 2000
 
     async def extract(
         self,
@@ -55,6 +56,7 @@ class DefaultExtractor(ToolExtractor):
         }
 
         try:
+
             resp = await http_client.post(
                 f"{settings.extractor_base_url.rstrip('/')}/chat/completions",
                 headers={
@@ -105,6 +107,7 @@ class DefaultExtractor(ToolExtractor):
                 usage=usage,
             )
         except Exception as e:
+            from archolith_proxy.extractor.budget import LLMBudgetExceeded
             logger.warning("default_extractor_llm_failed", tool=tool_name, error=str(e))
             return PartialExtractionResult(
                 source_tool=tool_name,
@@ -114,5 +117,5 @@ class DefaultExtractor(ToolExtractor):
                     "confidence": 0.4,
                 }],
                 files_touched=[],
-                used_llm=True,
+                used_llm=not isinstance(e, LLMBudgetExceeded),
             )

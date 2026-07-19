@@ -2,14 +2,49 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from uuid import uuid4
 
 from archolith_proxy.config import get_settings
 
 
+_STRUCTURED_PREFIX = "b64:"
+
+
+def _encode_structured(structured: dict | None) -> str | None:
+    """Encode JSON for LadybugDB's content-sniffing STRING binder."""
+    if not structured:
+        return None
+    payload = json.dumps(structured, separators=(",", ":"))
+    return _STRUCTURED_PREFIX + base64.b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def _decode_structured(raw: str | None) -> dict | None:
+    """Decode current encoded and legacy plain structured payloads safely."""
+    if not raw:
+        return None
+    try:
+        if raw.startswith(_STRUCTURED_PREFIX):
+            raw = base64.b64decode(raw[len(_STRUCTURED_PREFIX):].encode("ascii")).decode("utf-8")
+        decoded = json.loads(raw)
+    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def _decode_fact(fact: dict) -> dict:
+    raw = fact.get("structured_json")
+    fact["structured"] = _decode_structured(raw)
+    fact.pop("structured_json", None)
+    return fact
+
+
 async def store_fact(execute, session_id: str, content: str, fact_type: str,
                      source_turn: int, confidence: float = 0.5,
-                     embedding: list[float] | None = None) -> str:
+                     embedding: list[float] | None = None,
+                     source_tool: str | None = None,
+                     structured: dict | None = None) -> str:
     fact_id = "f" + uuid4().hex[:15]
     await execute(
         """
@@ -18,12 +53,15 @@ async def store_fact(execute, session_id: str, content: str, fact_type: str,
             content: $content, fact_type: $fact_type,
             valid_from: current_timestamp(), valid_until: NULL,
             invalidated_at: NULL, confidence: $confidence,
-            source_turn: $source_turn, embedding: $embedding
+            source_turn: $source_turn, embedding: $embedding,
+            source_tool: $source_tool, structured_json: $structured_json
         })
         """,
         {"fact_id": fact_id, "session_id": session_id, "content": content,
          "fact_type": fact_type, "confidence": confidence,
-         "source_turn": source_turn, "embedding": embedding if embedding is not None else None},
+         "source_turn": source_turn, "embedding": embedding if embedding is not None else None,
+         "source_tool": source_tool,
+         "structured_json": _encode_structured(structured)},
     )
     return fact_id
 
@@ -43,6 +81,8 @@ async def store_facts_batch(execute, session_id: str, facts: list[dict], source_
             "confidence": fact.get("confidence", 0.5),
             "embedding": fact.get("embedding") or [],
             "source_turn": source_turn,
+            "source_tool": fact.get("source_tool"),
+            "structured_json": _encode_structured(fact.get("structured")),
         })
     await execute(
         """
@@ -52,7 +92,8 @@ async def store_facts_batch(execute, session_id: str, facts: list[dict], source_
             content: p.content, fact_type: p.fact_type,
             valid_from: current_timestamp(), valid_until: NULL,
             invalidated_at: NULL, confidence: p.confidence,
-            source_turn: p.source_turn, embedding: p.embedding
+            source_turn: p.source_turn, embedding: p.embedding,
+            source_tool: p.source_tool, structured_json: p.structured_json
         })
         """,
         {"params": params_list},
@@ -101,10 +142,11 @@ async def find_matching_fact_ids(execute, session_id: str, descriptions: list[st
 
 
 async def get_active_facts(execute, session_id: str, limit: int = 50) -> list[dict]:
-    return await execute(
+    rows = await execute(
         "MATCH (f:Fact {session_id: $session_id}) WHERE f.valid_until IS NULL RETURN f ORDER BY f.source_turn DESC LIMIT $limit",
         {"session_id": session_id, "limit": limit},
     )
+    return [_decode_fact(fact) for fact in rows]
 
 
 async def get_active_fact_count(execute, session_id: str) -> int:
@@ -142,23 +184,27 @@ async def get_facts_filtered(execute, session_id: str, fact_type: str | None = N
     if to_turn is not None:
         params["to_turn"] = to_turn
 
-    return await execute(
+    rows = await execute(
         f"MATCH (f:Fact {{session_id: $session_id}}) {where_clause} RETURN f ORDER BY f.source_turn ASC LIMIT $limit",
         params,
     )
+    return [_decode_fact(fact) for fact in rows]
 
 
 async def get_invalidated_facts(execute, session_id: str) -> list[dict]:
-    return await execute(
+    rows = await execute(
         """
         MATCH (f:Fact {session_id: $session_id}) WHERE f.valid_until IS NOT NULL
         RETURN f.fact_id AS fact_id, f.content AS content,
                f.source_turn AS source_turn, f.fact_type AS fact_type,
-               f.invalidated_at AS invalidated_at
+               f.invalidated_at AS invalidated_at,
+               f.source_tool AS source_tool,
+               f.structured_json AS structured_json
         ORDER BY f.source_turn ASC
         """,
         {"session_id": session_id},
     )
+    return [_decode_fact(fact) for fact in rows]
 
 
 async def get_supersession_chain(execute, session_id: str) -> list[dict]:
