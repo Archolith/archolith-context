@@ -102,6 +102,13 @@ _metrics: dict = {
     "native_read_intercept_errors": 0,
     "file_cache_invalidations": 0,
     "reconciled_set_size": 0,
+    # Context Cache (Prompt Cache Stability)
+    "context_cache_hits": 0,
+    "context_cache_misses": 0,
+    "context_cache_stores": 0,
+    "context_cache_forced_refresh_bloat": 0,
+    "context_cache_forced_refresh_stale_file": 0,
+    "context_cache_provider_expired": 0,
     # Plugin metrics — aggregated from PluginRegistry.aggregate_metrics()
     # at each /metrics poll. Stored as a nested dict keyed by plugin ID.
     "plugins": {},
