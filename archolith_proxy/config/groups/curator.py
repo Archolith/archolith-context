@@ -1,6 +1,6 @@
 """Curator and agent-solo settings."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CuratorGroup(BaseModel):
@@ -53,6 +53,9 @@ class CuratorGroup(BaseModel):
     assembler_exemplar_suffixes: str = ""
     assembler_code_map: bool = False
     assembler_code_map_mode: str = "task"
+    # Reserve at least half the assembler budget for the typed briefing and code.
+    # Disable the map with assembler_code_map rather than assigning a zero budget.
+    assembler_code_map_budget_fraction: float = Field(default=0.12, gt=0.0, le=0.5)
     curator_list_dir_tool: bool = False
     curator_workingset_enabled: bool = False
     curator_workingset_max_sessions: int = 256

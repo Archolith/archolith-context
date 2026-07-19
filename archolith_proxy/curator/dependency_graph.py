@@ -32,6 +32,10 @@ from __future__ import annotations
 import posixpath
 import re
 
+# Top-level import of score_files to avoid repeated inner imports.
+# Safe because scoring.py has no dependency on this module.
+from archolith_proxy.curator.scoring import score_files
+
 # Quoted-spec references: JS `from '...'` / `import '...'`, CommonJS `require('...')`,
 # HTML `href="..."` / `src="..."`, CSS `@import "..."` and `url(...)`.
 _QUOTED_REF_PATTERNS = (
@@ -225,8 +229,6 @@ def order_by_combo(files, query: str = "", exemplar_suffixes: tuple[str, ...] = 
     """
     from itertools import zip_longest
 
-    from archolith_proxy.curator.scoring import score_files
-
     scored = [f for _s, f in score_files(files, query)]
     topo = order_by_topology(files)
     out: list = []
@@ -339,8 +341,6 @@ def render_task_map(
     Ranks/annotates, does NOT filter — the agent still sees foundations and can read
     anything. Pure function; reuses the scored relevance signal. "" if no files.
     """
-    from archolith_proxy.curator.scoring import score_files
-
     ranked = score_files(files, query)  # [(score, file)] desc
     if not ranked:
         return ""
@@ -358,7 +358,11 @@ def render_task_map(
     foundations = [p for p, n in sorted(indeg.items(), key=lambda kv: (-kv[1], kv[0]))
                    if n > 0][:max_foundations]
     if foundations:
-        lines.append("Shared foundations: " + ", ".join(foundations))
+        # Show in-degree counts for consistency with render_code_map
+        foundations_with_counts = [
+            f"{p} (<-{indeg.get(p, 0)})" for p in foundations
+        ]
+        lines.append("Shared foundations: " + ", ".join(foundations_with_counts))
 
     block = "\n".join(lines)
     if len(block) > max_chars:

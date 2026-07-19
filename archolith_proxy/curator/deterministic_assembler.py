@@ -59,6 +59,21 @@ def _truncate_with_closed_fence(text: str, max_chars: int) -> str:
     return truncated + "\n... [code truncated to fit budget]"
 
 
+def _truncate_map_to_budget(text: str, max_chars: int) -> str:
+    """Keep a map within its explicit character allocation, or omit it."""
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+
+    marker = "\n... [map truncated by budget]"
+    content_chars = max_chars - len(marker)
+    if content_chars <= 0:
+        return ""
+    prefix = text[:content_chars].rsplit("\n", 1)[0].rstrip()
+    return f"{prefix}{marker}" if prefix else ""
+
+
 def build_deterministic_context(
     briefing: SessionBriefing,
     token_budget: int,
@@ -71,6 +86,7 @@ def build_deterministic_context(
     exemplar_suffixes: tuple[str, ...] = (),
     query: str = "",
     weights: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    map_budget_fraction: float = 0.12,
 ) -> tuple[str, list[dict]]:
     """Compose the context block from the briefing's typed pools, fit to budget.
 
@@ -110,7 +126,11 @@ def build_deterministic_context(
                 briefing.files, query, exemplar_suffixes=exemplar_suffixes,
             )
         if _map:
-            head_parts.append(_map)
+            # Cap map size using the budget fraction so it never starves RELEVANT CODE
+            map_budget_chars = int(budget_chars * map_budget_fraction)
+            _map = _truncate_map_to_budget(_map, map_budget_chars)
+            if _map:
+                head_parts.append(_map)
     if briefing.session_goal:
         head_parts.append(f"=== SESSION GOAL ===\n{briefing.session_goal}")
     if briefing.checkpoint_text:
@@ -133,6 +153,11 @@ def build_deterministic_context(
 
     if combo:
         from archolith_proxy.curator.dependency_graph import order_by_combo
+        if not exemplar_suffixes:
+            logger.warning(
+                "deterministic_assembler_combo_without_exemplar_suffixes",
+                note="combo fill without exemplar_suffixes degenerates to scored+topo interleave",
+            )
         ordered_files = order_by_combo(briefing.files, query, exemplar_suffixes)
     elif topological:
         from archolith_proxy.curator.dependency_graph import order_by_topology
@@ -150,12 +175,18 @@ def build_deterministic_context(
         cost = len(block) + 1  # +1 for the join newline
         if cost <= remaining:
             code_blocks.append(block)
-            files_selected.append({"path": f.path})
+            files_selected.append({
+                "path": f.path,
+                "relevance": getattr(f, "relevance", ""),
+            })
             remaining -= cost
         elif remaining > 200:
             # Partially include this file's block, then stop.
             code_blocks.append(_truncate_with_closed_fence(block, remaining))
-            files_selected.append({"path": f.path})
+            files_selected.append({
+                "path": f.path,
+                "relevance": getattr(f, "relevance", ""),
+            })
             remaining = 0
             break
         else:
@@ -195,11 +226,18 @@ async def run_deterministic_assembler(
         exemplar_suffixes = tuple(
             s.strip() for s in raw_suffixes.split(",") if s.strip()
         )
+        raw_map_budget_fraction = getattr(
+            settings, "assembler_code_map_budget_fraction", 0.12,
+        )
+        map_budget_fraction = (
+            0.12 if raw_map_budget_fraction is None else float(raw_map_budget_fraction)
+        )
         context_block, files_selected = build_deterministic_context(
             briefing, token_budget, scored=scored, topological=topological,
             combo=combo, emit_map=emit_map, map_mode=map_mode,
             exemplar_suffixes=exemplar_suffixes,
             query=user_message or "",
+            map_budget_fraction=map_budget_fraction,
         )
 
         if not context_block.strip():

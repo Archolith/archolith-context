@@ -72,7 +72,7 @@ def test_relevant_code_included_when_budget_allows():
     text, files = build_deterministic_context(b, token_budget=6000)
     assert "=== RELEVANT CODE ===" in text
     assert "api.js lines 1-10:" in text
-    assert files == [{"path": "api.js"}]
+    assert files == [{"path": "api.js", "relevance": "r"}]
 
 
 def test_code_truncated_and_fence_closed_when_over_budget():
@@ -98,7 +98,7 @@ def test_outline_used_when_no_sections():
     b = _briefing(files=[f])
     text, files = build_deterministic_context(b, token_budget=6000)
     assert "m.css outline:" in text
-    assert files == [{"path": "m.css"}]
+    assert files == [{"path": "m.css", "relevance": "r"}]
 
 
 def test_empty_briefing_yields_empty_context():
@@ -126,7 +126,7 @@ async def test_run_returns_assembled_context_without_llm():
     assert result is not None
     assert result.system_message["role"] == "system"
     assert "=== SESSION GOAL ===" in result.system_message["content"]
-    assert result.files_selected == [{"path": "api.js"}]
+    assert result.files_selected == [{"path": "api.js", "relevance": "r"}]
     assert result.retained_turn_numbers == [2, 3]
     assert result.curator_tool_log == []
     assert result.token_estimate > 0
@@ -316,3 +316,17 @@ def test_code_map_cost_is_deducted_from_budget():
     code_no = no_map.split("=== RELEVANT CODE ===", 1)[-1]
     code_with = with_map.split("=== RELEVANT CODE ===", 1)[-1]
     assert len(code_with) <= len(code_no)
+
+
+def test_code_map_respects_its_fractional_budget_cap():
+    token_budget = 100
+    fraction = 0.20
+    text, _ = build_deterministic_context(
+        _map_briefing(),
+        token_budget,
+        emit_map=True,
+        map_budget_fraction=fraction,
+    )
+    map_block = text.split("=== SESSION GOAL ===", 1)[0].strip()
+    assert map_block
+    assert len(map_block) <= int(token_budget * 4 * fraction)
