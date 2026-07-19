@@ -1,4 +1,4 @@
-"""Fallback extractor for unknown tools."""
+"""Fallback extractor with structured output."""
 
 from __future__ import annotations
 
@@ -16,8 +16,15 @@ class FallbackExtractor:
         session_goal: str | None = None,
     ) -> Any:
         tool_name = getattr(record, "tool_name", "unknown")
+
         return type("PartialExtractionResult", (), {
-            "facts": [{"content": f"Tool {tool_name} executed", "fact_type": "observation", "confidence": 0.4}],
+            "facts": [
+                {
+                    "content": f"Executed tool: {tool_name}",
+                    "fact_type": "observation",
+                    "confidence": 0.5,
+                }
+            ],
             "files_touched": [],
             "used_llm": False,
             "usage": {},

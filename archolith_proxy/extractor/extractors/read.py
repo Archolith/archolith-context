@@ -1,4 +1,4 @@
-"""Read tool extractor (class-based)."""
+"""Read tool extractor with structured output."""
 
 from __future__ import annotations
 
@@ -15,14 +15,26 @@ class ReadExtractor:
         turn_number: int,
         session_goal: str | None = None,
     ) -> Any:
-        """Extract structured info from a Read tool result."""
         args = getattr(record, "args", {}) or {}
         path = args.get("file_path") or args.get("path", "")
 
-        # In a real implementation we would use the file content from the tool result.
-        # For Phase 1 we return a minimal structured result.
+        # Structured output
+        structured = {
+            "path": path,
+            "symbols": [],
+            "outline": f"File {path}",
+            "key_sections": [],
+        }
+
         return type("PartialExtractionResult", (), {
-            "facts": [{"content": f"Read file: {path}", "fact_type": "file_state", "confidence": 0.7}],
+            "facts": [
+                {
+                    "content": f"Read file: {path}",
+                    "fact_type": "file_state",
+                    "confidence": 0.8,
+                    "structured": structured,
+                }
+            ],
             "files_touched": [path] if path else [],
             "used_llm": False,
             "usage": {},
