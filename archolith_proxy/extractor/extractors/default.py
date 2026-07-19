@@ -55,6 +55,9 @@ class DefaultExtractor(ToolExtractor):
         }
 
         try:
+            from archolith_proxy.extractor.budget import reserve_llm_call
+            if not reserve_llm_call(2000):
+                raise RuntimeError("per-turn extractor LLM budget exhausted")
             resp = await http_client.post(
                 f"{settings.extractor_base_url.rstrip('/')}/chat/completions",
                 headers={
@@ -105,6 +108,7 @@ class DefaultExtractor(ToolExtractor):
                 usage=usage,
             )
         except Exception as e:
+            from archolith_proxy.extractor.budget import LLMBudgetExceeded
             logger.warning("default_extractor_llm_failed", tool=tool_name, error=str(e))
             return PartialExtractionResult(
                 source_tool=tool_name,
@@ -114,5 +118,5 @@ class DefaultExtractor(ToolExtractor):
                     "confidence": 0.4,
                 }],
                 files_touched=[],
-                used_llm=True,
+                used_llm=not isinstance(e, LLMBudgetExceeded),
             )

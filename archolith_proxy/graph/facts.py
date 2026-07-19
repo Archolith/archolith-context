@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from uuid import uuid4
+import json
 
 import structlog
 
@@ -30,6 +31,18 @@ __all__ = [
 _INVALIDATION_MATCH_THRESHOLD = 0.60
 
 
+def _decode_fact(fact: dict) -> dict:
+    """Expose nullable structured JSON as a dict while keeping old facts valid."""
+    raw = fact.get("structured_json")
+    if raw:
+        try:
+            fact["structured"] = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            fact["structured"] = None
+    fact.pop("structured_json", None)
+    return fact
+
+
 async def store_fact(
     session_id: str,
     content: str,
@@ -37,6 +50,8 @@ async def store_fact(
     source_turn: int,
     confidence: float = 0.5,
     embedding: list[float] | None = None,
+    source_tool: str | None = None,
+    structured: dict | None = None,
 ) -> str:
     """Store a single fact in the session graph."""
     fact_id = uuid4().hex[:16]
@@ -51,6 +66,8 @@ async def store_fact(
         "valid_from": now,
         "confidence": confidence,
         "source_turn": source_turn,
+        "source_tool": source_tool,
+        "structured_json": json.dumps(structured, separators=(",", ":")) if structured else None,
     }
     if embedding is not None:
         params["embedding"] = embedding
@@ -66,7 +83,9 @@ async def store_fact(
         invalidated_at: null,
         confidence: $confidence,
         source_turn: $source_turn,
-        embedding: {embedding_prop}
+        embedding: {embedding_prop},
+        source_tool: $source_tool,
+        structured_json: $structured_json
         }})
         RETURN f.fact_id
         """
@@ -100,6 +119,9 @@ async def store_facts_batch(
             "fact_type": fact.get("fact_type", "observation"),
             "confidence": fact.get("confidence", 0.5),
             "embedding": embedding,
+            "source_tool": fact.get("source_tool"),
+            "structured_json": json.dumps(fact.get("structured"), separators=(",", ":"))
+                if isinstance(fact.get("structured"), dict) else None,
         })
 
     cypher = f"""
@@ -114,7 +136,9 @@ async def store_facts_batch(
         invalidated_at: null,
         confidence: row.confidence,
         source_turn: $source_turn,
-        embedding: row.embedding
+        embedding: row.embedding,
+        source_tool: row.source_tool,
+        structured_json: row.structured_json
     }})
     RETURN f.fact_id AS fact_id
     """
@@ -215,7 +239,8 @@ async def get_active_facts(session_id: str, limit: int = 50) -> list[dict]:
     RETURN f ORDER BY f.source_turn DESC LIMIT $limit
     """
     results = await run_query(cypher, {"session_id": session_id, "limit": limit})
-    return [r["f"] for r in results]
+    facts = [r["f"] for r in results]
+    return [_decode_fact(fact) for fact in facts]
 
 
 async def get_active_fact_count(session_id: str) -> int:
@@ -282,7 +307,7 @@ async def get_facts_filtered(
         params["to_turn"] = to_turn
 
     results = await run_query(cypher, params)
-    return [r["f"] for r in results]
+    return [_decode_fact(r["f"]) for r in results]
 
 
 async def get_supersession_chain(session_id: str) -> list[dict]:
@@ -327,7 +352,8 @@ async def get_invalidated_facts(session_id: str) -> list[dict]:
         WHERE f.valid_until IS NOT NULL
         RETURN f.fact_id AS fact_id, f.content AS content,
                f.source_turn AS source_turn, f.fact_type AS fact_type,
-               f.invalidated_at AS invalidated_at
+               f.invalidated_at AS invalidated_at,
+               f.source_tool AS source_tool, f.structured_json AS structured_json
         ORDER BY f.source_turn ASC
     """
     results = await run_query(cypher, {"session_id": session_id})
@@ -338,6 +364,8 @@ async def get_invalidated_facts(session_id: str) -> list[dict]:
             "source_turn": r["source_turn"],
             "fact_type": r["fact_type"],
             "invalidated_at": str(r["invalidated_at"]) if r.get("invalidated_at") else None,
+            "source_tool": r.get("source_tool"),
+            "structured": json.loads(r["structured_json"]) if r.get("structured_json") else None,
         }
         for r in results
     ]

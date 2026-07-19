@@ -40,6 +40,10 @@ class FeatureRuntimeGroup(BaseModel):
     extraction_mode: str = "turn_boundary"
     per_tool_extraction_enabled: bool = False
     extractor_llm_concurrency: int = 3
+    # Aggregate budget for one per-tool extraction operation, including the
+    # turn-level call. Deterministic extractors do not consume this budget.
+    extractor_llm_max_calls_per_turn: int = 4
+    extractor_llm_max_requested_tokens_per_turn: int = 5000
 
 
 class ProfileFilterRetryGroup(BaseModel):

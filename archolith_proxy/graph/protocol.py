@@ -133,6 +133,8 @@ class GraphBackend(Protocol):
         source_turn: int,
         confidence: float = 0.5,
         embedding: list[float] | None = None,
+        source_tool: str | None = None,
+        structured: dict | None = None,
     ) -> str:
         """Store a single fact in the session graph.
 

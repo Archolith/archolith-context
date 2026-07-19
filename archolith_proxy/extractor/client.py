@@ -8,6 +8,10 @@ import json
 import httpx
 import structlog
 
+from archolith_proxy.extractor.budget import (
+    ExtractionBudget, LLMBudgetExceeded, set_budget, reset_budget, reserve_llm_call,
+)
+
 from archolith_proxy.config import get_settings
 from archolith_proxy.compliance import redact_for_log
 from archolith_proxy.extractor.base import PartialExtractionResult, ToolCallRecord
@@ -256,6 +260,17 @@ def _parse_extraction_response(
 _llm_semaphore: asyncio.Semaphore | None = None
 
 
+def _int_setting(settings, name: str, default: int) -> int:
+    """Read additive settings without breaking lightweight test/embedded settings."""
+    try:
+        value = getattr(settings, name, default)
+        if not isinstance(value, int):
+            return default
+        return value
+    except (TypeError, ValueError):
+        return default
+
+
 def _get_llm_semaphore() -> asyncio.Semaphore:
     """Lazy-init semaphore for LLM-backed extractor concurrency control.
 
@@ -294,6 +309,13 @@ async def _extract_with_semaphore(
     Read, WriteEdit, WebSearch, MemoryRecall) run without the semaphore and can
     proceed fully concurrently.
     """
+    if extractor is None:
+        # A custom registry must not be able to discard a tool result. The
+        # built-in registry always has a default extractor; this guard protects
+        # embedded callers that supply a partial registry.
+        extractor = get_registry().get(record.tool_name)
+        if extractor is None:
+            raise LookupError(f"No extractor available for {record.tool_name!r}")
     if extractor.may_use_llm:
         sem = _get_llm_semaphore()
         async with sem:
@@ -321,7 +343,16 @@ async def extract_facts_per_tool(
     if registry is None:
         registry = get_registry()
 
-    # Step 1: Fan out per-tool extractors concurrently
+    # Step 1: Fan out per-tool extractors concurrently under one shared
+    # per-turn budget. This bounds cost without limiting deterministic parsing.
+    settings = get_settings()
+    budget = ExtractionBudget(
+        max_llm_calls=max(0, _int_setting(settings, "extractor_llm_max_calls_per_turn", 4)),
+        max_requested_tokens=max(0, _int_setting(
+            settings, "extractor_llm_max_requested_tokens_per_turn", 5000,
+        )),
+    )
+    budget_token = set_budget(budget)
     partial_results = await asyncio.gather(
         *[
             _extract_with_semaphore(
@@ -341,6 +372,12 @@ async def extract_facts_per_tool(
         if isinstance(r, Exception):
             logger.warning("per_tool_extractor_failed", error=str(r))
             continue
+        for fact in (r.facts or []):
+            # Preserve the extractor-level provenance even when an individual
+            # extractor omitted it. This is the single merge point before graph
+            # persistence.
+            if isinstance(fact, dict):
+                fact.setdefault("source_tool", r.source_tool)
         all_facts.extend(r.facts or [])
         all_files.extend(r.files_touched or [])
         if r.used_llm:
@@ -382,6 +419,8 @@ async def extract_facts_per_tool(
     }
 
     try:
+        if not reserve_llm_call(2000):
+            raise LLMBudgetExceeded("per-turn extractor LLM budget exhausted")
         resp = await http_client.post(
             f"{settings.extractor_base_url.rstrip('/')}/chat/completions",
             headers={
@@ -445,6 +484,7 @@ async def extract_facts_per_tool(
         decisions=len(decisions),
     )
 
+    reset_budget(budget_token)
     return ExtractionResult(
         facts=all_facts,
         files_touched=all_files,

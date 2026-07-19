@@ -141,6 +141,8 @@ class Neo4jBackend:
         source_turn: int,
         confidence: float = 0.5,
         embedding: list[float] | None = None,
+        source_tool: str | None = None,
+        structured: dict | None = None,
     ) -> str:
         # Convert str to FactType if needed
         if isinstance(fact_type, str):
@@ -152,6 +154,8 @@ class Neo4jBackend:
             source_turn=source_turn,
             confidence=confidence,
             embedding=embedding,
+            source_tool=source_tool,
+            structured=structured,
         )
 
     async def store_facts_batch(
