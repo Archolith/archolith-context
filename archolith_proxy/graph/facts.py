@@ -239,7 +239,7 @@ async def get_active_facts(session_id: str, limit: int = 50) -> list[dict]:
     RETURN f ORDER BY f.source_turn DESC LIMIT $limit
     """
     results = await run_query(cypher, {"session_id": session_id, "limit": limit})
-    facts = [r["f"] for r in results]
+    facts = [dict(r["f"]) for r in results]
     return [_decode_fact(fact) for fact in facts]
 
 
@@ -307,7 +307,7 @@ async def get_facts_filtered(
         params["to_turn"] = to_turn
 
     results = await run_query(cypher, params)
-    return [_decode_fact(r["f"]) for r in results]
+    return [_decode_fact(dict(r["f"])) for r in results]
 
 
 async def get_supersession_chain(session_id: str) -> list[dict]:
