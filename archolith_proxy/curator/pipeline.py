@@ -501,6 +501,8 @@ async def curate_context(
         curator_prompt_tokens=result.prompt_tokens_used,
         curator_completion_tokens=result.completion_tokens_used,
         curator_cached_tokens=result.cached_tokens_used,
+        goal_drifted=goal_drifted,
+        drift_turn=drift_turn,
     )
 
 
