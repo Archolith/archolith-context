@@ -178,9 +178,10 @@ async def _run_extraction(
         extraction_start = time.monotonic()
 
         if extraction_settings.per_tool_extraction_enabled:
-            from archolith_proxy.extractor.registry import get_registry as _get_extractor_registry
+            from archolith_proxy.extractor.registry import get_registry
 
             tool_records = _collect_tool_call_records(messages)
+            registry = get_registry()
             result = await extract_facts_per_tool(
                 http_client=client,
                 turn_number=turn_number,
@@ -188,7 +189,14 @@ async def _run_extraction(
                 assistant_response=response_text[:8000],
                 tool_records=tool_records,
                 session_goal=session_goal,
-                registry=_get_extractor_registry(),
+                registry=registry,
+            )
+            record_metric("per_tool_extraction_calls", 1)
+            logger.info(
+                "per_tool_extraction_path_used",
+                session_id=session_id,
+                turn=turn_number,
+                tool_count=len(tool_records),
             )
         else:
             tool_results = _collect_recent_tool_results(messages, max_chars=4000)
