@@ -59,6 +59,21 @@ def _truncate_with_closed_fence(text: str, max_chars: int) -> str:
     return truncated + "\n... [code truncated to fit budget]"
 
 
+def _truncate_map_to_budget(text: str, max_chars: int) -> str:
+    """Keep a map within its explicit character allocation, or omit it."""
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+
+    marker = "\n... [map truncated by budget]"
+    content_chars = max_chars - len(marker)
+    if content_chars <= 0:
+        return ""
+    prefix = text[:content_chars].rsplit("\n", 1)[0].rstrip()
+    return f"{prefix}{marker}" if prefix else ""
+
+
 def build_deterministic_context(
     briefing: SessionBriefing,
     token_budget: int,
@@ -113,9 +128,9 @@ def build_deterministic_context(
         if _map:
             # Cap map size using the budget fraction so it never starves RELEVANT CODE
             map_budget_chars = int(budget_chars * map_budget_fraction)
-            if len(_map) > map_budget_chars:
-                _map = _map[:map_budget_chars].rsplit("\n", 1)[0] + "\n... [map truncated by budget]"
-            head_parts.append(_map)
+            _map = _truncate_map_to_budget(_map, map_budget_chars)
+            if _map:
+                head_parts.append(_map)
     if briefing.session_goal:
         head_parts.append(f"=== SESSION GOAL ===\n{briefing.session_goal}")
     if briefing.checkpoint_text:
@@ -211,7 +226,12 @@ async def run_deterministic_assembler(
         exemplar_suffixes = tuple(
             s.strip() for s in raw_suffixes.split(",") if s.strip()
         )
-        map_budget_fraction = float(getattr(settings, "assembler_code_map_budget_fraction", 0.12) or 0.12)
+        raw_map_budget_fraction = getattr(
+            settings, "assembler_code_map_budget_fraction", 0.12,
+        )
+        map_budget_fraction = (
+            0.12 if raw_map_budget_fraction is None else float(raw_map_budget_fraction)
+        )
         context_block, files_selected = build_deterministic_context(
             briefing, token_budget, scored=scored, topological=topological,
             combo=combo, emit_map=emit_map, map_mode=map_mode,

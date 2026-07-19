@@ -316,3 +316,17 @@ def test_code_map_cost_is_deducted_from_budget():
     code_no = no_map.split("=== RELEVANT CODE ===", 1)[-1]
     code_with = with_map.split("=== RELEVANT CODE ===", 1)[-1]
     assert len(code_with) <= len(code_no)
+
+
+def test_code_map_respects_its_fractional_budget_cap():
+    token_budget = 100
+    fraction = 0.20
+    text, _ = build_deterministic_context(
+        _map_briefing(),
+        token_budget,
+        emit_map=True,
+        map_budget_fraction=fraction,
+    )
+    map_block = text.split("=== SESSION GOAL ===", 1)[0].strip()
+    assert map_block
+    assert len(map_block) <= int(token_budget * 4 * fraction)

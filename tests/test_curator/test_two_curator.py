@@ -152,6 +152,23 @@ def test_configure_two_curator_deterministic_registers_deterministic_assembler(m
     assert _get_inline_fn().__name__ == "run_deterministic_assembler"
 
 
+@pytest.mark.parametrize("profile", ("curated", "full"))
+@patch("archolith_proxy.curator.get_settings")
+def test_profile_registers_deterministic_assembler(mock_settings, profile):
+    """A profile that advertises code maps must activate their curation path."""
+    from archolith_proxy.config import Settings, _apply_profile
+    from archolith_proxy.curator import configure_curation_mode
+
+    settings = Settings(archolith_profile=profile)
+    _apply_profile(settings)
+    mock_settings.return_value = settings
+
+    configure_curation_mode()
+
+    assert _get_bg_fn().__name__ == "run_prepper"
+    assert _get_inline_fn().__name__ == "run_deterministic_assembler"
+
+
 @patch("archolith_proxy.curator.get_settings")
 def test_configure_two_pass_unregisters(mock_settings):
     """configure_curation_mode() with curation_mode='two_pass' clears registration."""

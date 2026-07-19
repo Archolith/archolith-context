@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 
+import pytest
+from pydantic import ValidationError
+
 from archolith_proxy.config import PROFILES, Settings, _apply_profile, reset_settings, snapshot_config
 
 
@@ -68,6 +71,9 @@ def test_curated_profile() -> None:
     assert bundle.get("curator_enabled") is True
     assert bundle.get("background_pass_enabled") is True
     assert bundle.get("file_cache_enabled") is True
+    assert bundle.get("curation_mode") == "two_curator"
+    assert bundle.get("assembler_deterministic") is True
+    assert bundle.get("assembler_code_map") is True
     # Full-only features should not be in curated
     assert bundle.get("embedding_enabled") is None
     assert bundle.get("per_tool_extraction_enabled") is None
@@ -79,6 +85,15 @@ def test_full_profile() -> None:
     assert bundle.get("embedding_enabled") is True
     assert bundle.get("per_tool_extraction_enabled") is True
     assert bundle.get("session_recall_tool_enabled") is True
+    assert bundle.get("curation_mode") == "two_curator"
+    assert bundle.get("assembler_deterministic") is True
+    assert bundle.get("assembler_code_map") is True
+
+
+@pytest.mark.parametrize("fraction", (0, -0.01, 0.51))
+def test_code_map_budget_fraction_is_validated(fraction: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings(assembler_code_map_budget_fraction=fraction)
 
 
 def test_unknown_profile_falls_back() -> None:
