@@ -111,6 +111,8 @@ _metrics: dict = {
     "context_cache_provider_expired": 0,
     # Adaptive Tail Sizing
     "tail_intent_adjustments": 0,
+    # Goal Drift Detection (Phase 0+)
+    "goal_drift_detections": 0,
     # Plugin metrics — aggregated from PluginRegistry.aggregate_metrics()
     # at each /metrics poll. Stored as a nested dict keyed by plugin ID.
     "plugins": {},
