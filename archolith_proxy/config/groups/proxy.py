@@ -16,6 +16,9 @@ class ProxyBehaviorGroup(BaseModel):
     cors_allowed_origins: list[str] = []
     coherence_tail_size: int = 10
     max_tail_messages: int = 20
+    tail_intent_enabled: bool = False
+    tail_intent_adjustment: int = 4
+    tail_min_size: int = 3
     context_token_budget: int = 15000
     max_rewritten_tokens: int = 24000
     session_ttl_hours: int = 24
