@@ -243,6 +243,11 @@ async def run_deterministic_assembler(
                     turn=turn_number,
                     signature=signature[:16],
                 )
+                try:
+                    from archolith_proxy.metrics import record_metric
+                    record_metric("context_cache_hits")
+                except Exception:
+                    pass
                 # Return cached result
                 return AssembledContext(
                     system_message={"role": "system", "content": cached_result["rendered_block"]},
@@ -298,6 +303,12 @@ async def run_deterministic_assembler(
                 turn=turn_number,
                 signature=signature[:16],
             )
+            try:
+                from archolith_proxy.metrics import record_metric
+                record_metric("context_cache_stores")
+                record_metric("context_cache_misses")
+            except Exception:
+                pass
 
         retained = briefing.retained_turns
 
