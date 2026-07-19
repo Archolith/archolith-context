@@ -15,6 +15,11 @@ from archolith_proxy.config import get_settings
 from archolith_proxy.curator.briefing import (
     SessionBriefing, format_briefing_for_prompt, build_briefing_from_result,
 )
+from archolith_proxy.curator.context_cache import (
+    compute_context_signature,
+    get_cached_context,
+    store_context,
+)
 from archolith_proxy.curator.prompts import CURATOR_SYSTEM_PROMPT, build_curator_user_prompt
 from archolith_proxy.curator.state import (
     CuratorSnapshot,
@@ -321,6 +326,47 @@ async def curate_context(
     if not settings.curator_enabled or not settings.file_cache_enabled:
         return None
 
+    # === Phase 2: Context Cache Check (Full Curator Path) ===
+    context_cache_enabled = bool(getattr(settings, "context_cache_enabled", False))
+    if context_cache_enabled and session_goal:
+        touched_paths = []
+        try:
+            from archolith_proxy.curator.state import get_briefing
+            b = get_briefing(session_id)
+            if b:
+                touched_paths = [f.path for f in getattr(b, "files", [])]
+        except Exception:
+            pass
+
+        signature = compute_context_signature(
+            session_goal or "",
+            touched_paths,
+            user_message or "",
+        )
+        db_path = getattr(settings, "curator_state_persist_path", "data/curator_state.db")
+        max_age = getattr(settings, "provider_cache_ttl_seconds", 600)
+
+        cached = get_cached_context(db_path, session_id, signature, max_age_seconds=max_age)
+        if cached:
+            try:
+                from archolith_proxy.metrics import record_metric
+                record_metric("context_cache_hits")
+            except Exception:
+                pass
+            return AssembledContext(
+                system_message={"role": "system", "content": cached["rendered_block"]},
+                graph_context=[{"role": "system", "content": cached["rendered_block"]}],
+                coherence_tail=[],
+                token_estimate=len(cached["rendered_block"]) // 4,
+                facts_retrieved=0,
+                session_id=session_id,
+                files_selected=cached.get("files_selected", []),
+                decisions_selected=[],
+                compression_ratio=1.0,
+                retained_turn_numbers=None,
+                curator_tool_log=[],
+            )
+
     user_turns = sum(1 for m in messages if m.get("role") == "user")
     if user_turns < settings.cold_start_turns:
         return None
@@ -488,6 +534,39 @@ async def curate_context(
         tool_calls_used=result.tool_calls_used,
         turn_number=turn_number,
     ))
+
+    # === Phase 2: Store in Context Cache (Full Curator Path) ===
+    if context_cache_enabled and session_goal:
+        touched_paths = []
+        try:
+            from archolith_proxy.curator.state import get_briefing
+            b = get_briefing(session_id)
+            if b:
+                touched_paths = [f.path for f in getattr(b, "files", [])]
+        except Exception:
+            pass
+
+        signature = compute_context_signature(
+            session_goal or "",
+            touched_paths,
+            user_message or "",
+        )
+        db_path = getattr(settings, "curator_state_persist_path", "data/curator_state.db")
+
+        store_context(
+            db_path,
+            session_id,
+            signature,
+            result.context_text,
+            [{"path": p} for p in result.curated_paths],
+            created_turn=turn_number,
+        )
+        try:
+            from archolith_proxy.metrics import record_metric
+            record_metric("context_cache_stores")
+            record_metric("context_cache_misses")
+        except Exception:
+            pass
 
     return AssembledContext(
         system_message={"role": "system", "content": result.context_text},
