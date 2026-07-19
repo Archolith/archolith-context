@@ -1,15 +1,24 @@
-"""Generic fallback extractor for unknown tools."""
+"""Fallback extractor for unknown tools."""
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 
-def extract_fallback_tool_result(tool_result: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Generic extraction for tools without a specialized handler.
-    """
-    return {
-        "raw_preview": str(tool_result)[:300],
-        "note": "Extracted with fallback handler",
-    }
+class FallbackExtractor:
+    may_use_llm = False
+
+    async def extract(
+        self,
+        record: Any,
+        http_client: Any,
+        turn_number: int,
+        session_goal: str | None = None,
+    ) -> Any:
+        tool_name = getattr(record, "tool_name", "unknown")
+        return type("PartialExtractionResult", (), {
+            "facts": [{"content": f"Tool {tool_name} executed", "fact_type": "observation", "confidence": 0.4}],
+            "files_touched": [],
+            "used_llm": False,
+            "usage": {},
+        })()
