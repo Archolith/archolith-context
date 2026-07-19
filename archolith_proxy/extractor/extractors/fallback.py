@@ -23,6 +23,8 @@ class FallbackExtractor:
                     "content": f"Executed tool: {tool_name}",
                     "fact_type": "observation",
                     "confidence": 0.5,
+                    "structured": {"tool_name": str(tool_name)},
+                    "used_llm": False,
                 }
             ],
             "files_touched": [],

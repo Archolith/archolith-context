@@ -67,6 +67,9 @@ def _auto_register_builtins(registry: ToolExtractorRegistry) -> None:
         from .extractors.write_edit import WriteEditExtractor
         from .extractors.glob import GlobExtractor
         from .extractors.ls import LsExtractor
+        from .extractors.find import FindExtractor
+        from .extractors.web_search import WebSearchExtractor
+        from .extractors.memory_recall import MemoryRecallExtractor
         from .extractors.fallback import FallbackExtractor
 
         registry.register("read", ReadExtractor())
@@ -76,6 +79,9 @@ def _auto_register_builtins(registry: ToolExtractorRegistry) -> None:
         registry.register("edit", WriteEditExtractor())
         registry.register("glob", GlobExtractor())
         registry.register("ls", LsExtractor())
+        registry.register("find", FindExtractor())
+        registry.register("web_search", WebSearchExtractor())
+        registry.register("memory_recall", MemoryRecallExtractor())
         registry.register("fallback", FallbackExtractor())
     except Exception as e:
         logger.warning("failed_to_auto_register_extractors", error=str(e))

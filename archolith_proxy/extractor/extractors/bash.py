@@ -51,6 +51,7 @@ class BashExtractor:
                                 "fact_type": "observation",
                                 "confidence": 0.8,
                                 "structured": structured,
+                                "used_llm": True,
                             }
                         ],
                         "files_touched": [],
@@ -76,6 +77,7 @@ class BashExtractor:
                     "fact_type": "observation",
                     "confidence": 0.7,
                     "structured": structured,
+                    "used_llm": False,
                 }
             ],
             "files_touched": [],
