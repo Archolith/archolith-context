@@ -56,3 +56,5 @@ class CuratorGroup(BaseModel):
     curator_list_dir_tool: bool = False
     curator_workingset_enabled: bool = False
     curator_workingset_max_sessions: int = 256
+    # Per-tool Extraction (Phase 0+)
+    per_tool_extraction_enabled: bool = False
