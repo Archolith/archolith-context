@@ -160,12 +160,18 @@ def build_deterministic_context(
         cost = len(block) + 1  # +1 for the join newline
         if cost <= remaining:
             code_blocks.append(block)
-            files_selected.append({"path": f.path})
+            files_selected.append({
+                "path": f.path,
+                "relevance": getattr(f, "relevance", ""),
+            })
             remaining -= cost
         elif remaining > 200:
             # Partially include this file's block, then stop.
             code_blocks.append(_truncate_with_closed_fence(block, remaining))
-            files_selected.append({"path": f.path})
+            files_selected.append({
+                "path": f.path,
+                "relevance": getattr(f, "relevance", ""),
+            })
             remaining = 0
             break
         else:
