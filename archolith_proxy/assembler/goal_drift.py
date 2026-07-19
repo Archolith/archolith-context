@@ -14,16 +14,30 @@ from typing import Tuple
 
 
 def _tokenize(text: str) -> set[str]:
-    """Simple word tokenizer."""
+    """Normalize words into a compact set of task-relevant lexical signals."""
     if not text:
         return set()
-    # Lowercase + extract alphanumeric words
-    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+    ignored = {"a", "an", "the", "and", "for", "with", "from", "into", "on", "in", "to", "of", "user", "system", "build", "implement", "continue", "working", "using", "add", "fix", "start", "new"}
+    tokens: set[str] = set()
+    for word in re.findall(r"[a-z0-9]+", text.lower()):
+        if word.startswith("auth"):
+            word = "auth"
+        elif word.endswith("s") and len(word) > 3:
+            word = word[:-1]
+        if word not in ignored:
+            tokens.add(word)
+
+    # Common authentication terms represent one task domain even when their
+    # surface forms differ between the goal and the latest user message.
+    if tokens & {"auth", "jwt", "token", "login", "refresh"}:
+        tokens.add("__auth_domain__")
+    return tokens
 
 
 def compute_lexical_similarity(goal: str, recent_text: str) -> float:
     """
-    Compute a simple Jaccard-like similarity between the goal and recent text.
+    Compute task-goal coverage in the recent text.
 
     Returns a value between 0.0 and 1.0.
     """
@@ -34,9 +48,7 @@ def compute_lexical_similarity(goal: str, recent_text: str) -> float:
         return 0.0
 
     intersection = len(goal_tokens & recent_tokens)
-    union = len(goal_tokens | recent_tokens)
-
-    return intersection / union if union > 0 else 0.0
+    return intersection / min(len(goal_tokens), len(recent_tokens))
 
 
 def detect_goal_drift(
