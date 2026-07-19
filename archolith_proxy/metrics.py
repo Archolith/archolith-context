@@ -102,6 +102,8 @@ _metrics: dict = {
     "native_read_intercept_errors": 0,
     "file_cache_invalidations": 0,
     "reconciled_set_size": 0,
+    # Goal Drift Detection (Phase 0+)
+    "goal_drift_detections": 0,
     # Plugin metrics — aggregated from PluginRegistry.aggregate_metrics()
     # at each /metrics poll. Stored as a nested dict keyed by plugin ID.
     "plugins": {},
