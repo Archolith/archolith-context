@@ -237,7 +237,7 @@ async def lifespan(app: FastAPI):
         and not settings.i_accept_unrestricted_fs_risk
     ):
         raise RuntimeError(
-            "CURATOR_ENABLED=true with unrestricted filesystem access. "
+            "Refusing to start: CURATOR_ENABLED=true with unrestricted filesystem access. "
             "Set PREFETCH_ALLOWED_ROOTS, enable PREFETCH_RESTRICT_TO_WORKSPACE=true, "
             "or acknowledge the risk with I_ACCEPT_UNRESTRICTED_FS_RISK=true."
         )
