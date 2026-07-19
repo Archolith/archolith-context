@@ -23,6 +23,25 @@ import structlog
 logger = structlog.get_logger()
 
 
+def _ensure_context_cache_schema(conn: sqlite3.Connection) -> None:
+    """Create the standalone cache table when persistence has not started."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS context_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            rendered_block TEXT NOT NULL,
+            files_selected_json TEXT,
+            created_turn INTEGER,
+            last_used_at REAL NOT NULL,
+            is_cold_start INTEGER DEFAULT 0,
+            UNIQUE(session_id, signature)
+        )
+        """
+    )
+
+
 def compute_context_signature(
     session_goal: str,
     touched_files: list[str],
@@ -62,6 +81,7 @@ def get_cached_context(
     try:
         conn = sqlite3.connect(db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        _ensure_context_cache_schema(conn)
 
         row = conn.execute(
             """
@@ -125,6 +145,7 @@ def store_context(
     try:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(db_path, check_same_thread=False)
+        _ensure_context_cache_schema(conn)
 
         payload = {
             "files_selected": files_selected,
@@ -165,18 +186,30 @@ def should_use_cached_context(
     cached_tokens: int,
     estimated_fresh_tokens: int,
     max_bloat_ratio: float = 1.6,
-) -> bool:
+    mode: str = "cost_optimized",
+) -> tuple[bool, str]:
     """
     Decide whether to use a cached context block or force a fresh render.
 
-    Returns False (force refresh) if the cached version is significantly
-    larger than what a fresh render would produce.
+    Returns a decision and operator-readable reason. Modes adjust the bloat
+    tolerance without changing the configured baseline for normal operation.
     """
+    if mode == "off":
+        return False, "context cache mode is off"
+
     if estimated_fresh_tokens <= 0:
-        return True  # Can't compare, prefer cache
+        return True, "no fresh token estimate; using cache"
 
     ratio = cached_tokens / estimated_fresh_tokens
-    return ratio <= max_bloat_ratio
+    threshold = max_bloat_ratio
+    if mode == "conservative":
+        threshold = min(threshold, 1.3)
+    elif mode == "aggressive":
+        threshold = max(threshold, 3.0)
+
+    if ratio <= threshold:
+        return True, f"within {mode} bloat limit ({ratio:.2f}x <= {threshold:.2f}x)"
+    return False, f"cached context exceeds bloat limit ({ratio:.2f}x > {threshold:.2f}x)"
 
 
 def has_file_supersession(
@@ -219,7 +252,7 @@ def extract_relevant_code_section(rendered_block: str) -> tuple[str, str, str]:
     rest = parts[1] if len(parts) > 1 else ""
 
     # Try to find the end of the relevant code section
-    next_section_markers = ["=== KEY FACTS ===", "=== DECISIONS ===", "=== SESSION GOAL ==="]
+    next_section_markers = ["=== KEY FACTS ===", "=== FACTS ===", "=== DECISIONS ===", "=== SESSION GOAL ==="]
     end_idx = len(rest)
     for m in next_section_markers:
         if m in rest:
