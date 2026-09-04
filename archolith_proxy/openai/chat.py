@@ -371,6 +371,9 @@ async def chat_completions(
     # ── Filtering ──
     from archolith_proxy.filter_adapter import filter_request_body, is_available as filter_is_available
     _filter_chars_before = sum(len(json.dumps(m)) for m in body.get("messages", []))
+    # Snapshot pre-filter messages: the repeated-file-read trigger keys on the
+    # first line of a raw tool result, and the filter rewrites tool content.
+    _prefilter_messages = list(body.get("messages", []))
     body = filter_request_body(body, enabled=settings.filter_enabled)
     _filter_chars_after = sum(len(json.dumps(m)) for m in body.get("messages", []))
     trace_builder.set_filter_stats(
@@ -385,12 +388,26 @@ async def chat_completions(
     # already in the system message — the model does not need to invoke the
     # recall tool explicitly.  The model-invoked recall path is kept as a
     # fallback for queries the proxy triggers don't cover.
-    if session_id and graph_ready and not session_over_budget and is_user_turn:
-        from archolith_proxy.proxy.recall import detect_recall_trigger, inject_proxy_recall_into_body
+    # The repeated_file_read trigger is a continuation-turn signal, so this block
+    # runs on agent-solo turns too; detect_recall_trigger keeps the user_phrase
+    # trigger user-turn-only.
+    if session_id and graph_ready and not session_over_budget:
+        from archolith_proxy.proxy.recall import (
+            detect_recall_trigger,
+            inject_proxy_recall_into_body,
+            mark_files_recalled,
+            new_repeated_files,
+        )
         from archolith_proxy.proxy.tool_injection import handle_recall_tool_call
-        _recall_trigger = detect_recall_trigger(body.get("messages", []), is_user_turn=is_user_turn)
+        _recall_trigger = detect_recall_trigger(_prefilter_messages, is_user_turn=is_user_turn)
+        if _recall_trigger is not None and _recall_trigger.files:
+            # Debounce: the sticky 20-message window would otherwise re-fire this
+            # trigger every turn for the same file.
+            if not new_repeated_files(session_id, _recall_trigger.files):
+                _recall_trigger = None
         if _recall_trigger:
-            _trigger_type, _trigger_query = _recall_trigger
+            _trigger_type = _recall_trigger.trigger_type
+            _trigger_query = _recall_trigger.query
             try:
                 _recall_text = await handle_recall_tool_call(
                     http_client=request.app.state.http_client,
@@ -415,12 +432,16 @@ async def chat_completions(
                         trigger=f"proxy_forced:{_trigger_type}",
                     )
                     record_metric("proxy_recall_injections", 1)
+                    # Mark only after a successful injection, so an empty or
+                    # failed recall does not suppress the next turn's attempt.
+                    mark_files_recalled(session_id, _recall_trigger.files)
                     logger.info(
                         "proxy_recall_injected",
                         session_id=session_id,
                         trigger=_trigger_type,
                         query=_trigger_query[:80],
                         facts=_recall_fact_count,
+                        is_user_turn=is_user_turn,
                     )
             except Exception as _exc:
                 logger.warning("proxy_recall_failed", session_id=session_id, error=str(_exc))

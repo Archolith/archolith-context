@@ -1,5 +1,27 @@
 # Changelog
 
+## [unreleased] — 2026-09-03 — Fix: repeated-file-read recall trigger was unreachable
+
+`detect_recall_trigger`'s `repeated_file_read` trigger detects the model re-reading a file because
+context was lost — a continuation-turn symptom — but both it and its call site were gated behind
+`is_user_turn`, so it could never run in an agent loop. A 91-turn baseline replay fired proxy recall
+0 times.
+
+- **`proxy/recall.py`**: `repeated_file_read` now evaluates on any turn; `user_phrase` stays
+  user-turn-only (it reads the latest user message). Return type is now `RecallTrigger`
+  (`trigger_type`, `query`, `files`) instead of a 2-tuple. Repeated files sort by
+  `(-count, name)` so ties don't reorder between turns.
+- **`proxy/recall.py`**: new per-session repeated-read ledger — `new_repeated_files`,
+  `mark_files_recalled`, `reset_recall_ledger`. The trigger is sticky for as long as both reads sit
+  in the 20-message window (up to 20 turns) and each firing costs an embedding call plus a graph
+  query, so a file triggers recall at most once per session. Bounded LRU (10k sessions × 500 files)
+  under an RLock, mirroring `circuit_breaker.py`.
+- **`openai/chat.py`**: recall block no longer gated on `is_user_turn`. Detection runs on a
+  pre-filter snapshot of the messages, because the trigger keys on the first line of a raw tool
+  result and `filter_request_body` rewrites tool content. Files are marked recalled only after a
+  recall returns facts and is injected, so an empty or failed recall doesn't suppress the next turn.
+- **tests**: +19 (`test_proxy_recall_trigger.py`). Full suite **1231 passed**.
+
 ## [unreleased] — 2026-06-16 — Port the MAP win: task-ranked emit mode + list_dir tool
 
 Productionizes the B2b/B2c navigation findings (research done; this is engineering). Both flag-gated,

@@ -17,6 +17,8 @@ A recall interception workflow:
 from __future__ import annotations
 
 import json
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,7 +35,11 @@ __all__ = [
     "execute_recall",
     "build_resend_messages",
     "resend_with_recall",
+    "RecallTrigger",
     "detect_recall_trigger",
+    "new_repeated_files",
+    "mark_files_recalled",
+    "reset_recall_ledger",
     "inject_proxy_recall_into_body",
     "handle_non_streaming_recall",
 ]
@@ -296,27 +302,51 @@ _RECALL_PHRASES: tuple[str, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class RecallTrigger:
+    """A decision that proxy-forced recall should fire this turn.
+
+    `files` is populated only for "repeated_file_read" and carries the file
+    identities that caused the trigger, so the caller can debounce against a
+    per-session ledger (see new_repeated_files/mark_files_recalled).
+    """
+
+    trigger_type: str
+    query: str
+    files: tuple[str, ...] = ()
+
+
 def detect_recall_trigger(
     messages: list[dict[str, Any]],
     is_user_turn: bool,
-) -> tuple[str, str] | None:
-    """Return (trigger_type, query) if a proxy-recall should fire, else None.
+) -> RecallTrigger | None:
+    """Return a RecallTrigger if a proxy-recall should fire, else None.
 
     Trigger types:
     - "user_phrase"        — last user message contains explicit recall language.
-    - "repeated_file_read" — the same file path appears in ≥2 tool results in
+                             User turns only: it reads the latest user message.
+    - "repeated_file_read" — the same file path appears in >=2 tool results in
                              the last 20 messages, suggesting the model is reading
                              the same file again because context was lost.
+                             Fires on ANY turn, including agent-solo continuation
+                             turns: re-reading a file after context loss is a
+                             continuation-turn symptom, so gating this on user
+                             turns made it unreachable in agent loops.
 
-    Only fires on user turns; agent-solo turns are never auto-recalled because
-    they are continuation turns where the model already has recent context.
+    This function is pure. The repeated-read trigger stays true for as long as
+    the two reads sit inside the 20-message window, so callers MUST debounce
+    with new_repeated_files() or it fires on every subsequent turn.
     """
-    if not is_user_turn or not messages:
+    if not messages:
         return None
 
     # ── Trigger 1: recall phrase in last user message ──────────────────────
     last_user_text = ""
-    for m in reversed(messages):
+    if not is_user_turn:
+        messages_for_phrase: list[dict[str, Any]] = []
+    else:
+        messages_for_phrase = messages
+    for m in reversed(messages_for_phrase):
         if m.get("role") == "user":
             content = m.get("content", "")
             if isinstance(content, str):
@@ -332,7 +362,7 @@ def detect_recall_trigger(
             if phrase in last_user_text:
                 # Use the raw user text (truncated) as the recall query so the
                 # graph retrieval is anchored to what the user is asking about.
-                return ("user_phrase", last_user_text[:200])
+                return RecallTrigger("user_phrase", last_user_text[:200])
 
     # ── Trigger 2: repeated file reads in recent tool messages ─────────────
     # Extract filenames from tool messages named "read_file" or "Read".
@@ -354,15 +384,91 @@ def detect_recall_trigger(
                 file_hit_counts[line] = file_hit_counts.get(line, 0) + 1
                 break  # Only use first identifying line per message
 
+    # Sort by hit count, then by name: ties must break deterministically or the
+    # ledger key changes between turns for an unchanged file set.
     repeated = sorted(
         (f for f, c in file_hit_counts.items() if c >= 2),
-        key=lambda f: -file_hit_counts[f],
+        key=lambda f: (-file_hit_counts[f], f),
     )
     if repeated:
-        file_list = "; ".join(repeated[:3])
-        return ("repeated_file_read", f"file content and recent context for: {file_list}")
+        top = tuple(repeated[:3])
+        file_list = "; ".join(top)
+        return RecallTrigger(
+            "repeated_file_read",
+            f"file content and recent context for: {file_list}",
+            files=top,
+        )
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Per-session repeated-read ledger (debounce)
+# ---------------------------------------------------------------------------
+#
+# The repeated-read trigger is sticky: once two reads of the same file are in
+# the 20-message window it keeps matching until they slide out, which is up to
+# 20 consecutive turns. Each firing costs an embedding call plus a graph query,
+# so without this ledger the trigger would re-fire every turn on the same file.
+#
+# Debounce is per (session, file): a file triggers recall at most once per
+# session, and a turn fires only if it names at least one not-yet-recalled file.
+# In-memory and per-process, like the synthetic-tool circuit breaker; a proxy
+# restart or a session landing on another worker costs a duplicate injection,
+# never a wrong one.
+
+_MAX_LEDGER_SESSIONS = 10_000
+_MAX_FILES_PER_SESSION = 500
+
+# Reentrant to match circuit_breaker.py: helpers here call each other.
+_ledger_lock = threading.RLock()
+_recalled_files: OrderedDict[str, OrderedDict[str, None]] = OrderedDict()
+
+
+def new_repeated_files(session_id: str, files: tuple[str, ...] | list[str]) -> list[str]:
+    """Return the subset of `files` this session has not yet recalled for.
+
+    Read-only: call mark_files_recalled() once recall actually succeeds.
+    An empty session_id disables debouncing (every file reads as new), matching
+    the caller's own gate, which requires a session before firing recall.
+    """
+    if not session_id:
+        return list(files)
+    with _ledger_lock:
+        seen = _recalled_files.get(session_id)
+        if seen is None:
+            return list(files)
+        _recalled_files.move_to_end(session_id)
+        return [f for f in files if f not in seen]
+
+
+def mark_files_recalled(session_id: str, files: tuple[str, ...] | list[str]) -> None:
+    """Record that recall has been injected for `files` in this session.
+
+    Called only after a recall returns facts and is injected, so an empty or
+    failed recall does not suppress the next turn's attempt.
+    """
+    if not session_id or not files:
+        return
+    with _ledger_lock:
+        seen = _recalled_files.get(session_id)
+        if seen is None:
+            seen = OrderedDict()
+            _recalled_files[session_id] = seen
+        _recalled_files.move_to_end(session_id)
+        for f in files:
+            seen[f] = None
+            seen.move_to_end(f)
+        while len(seen) > _MAX_FILES_PER_SESSION:
+            seen.popitem(last=False)
+        while len(_recalled_files) > _MAX_LEDGER_SESSIONS:
+            _recalled_files.popitem(last=False)
+
+
+def reset_recall_ledger() -> None:
+    """Clear the repeated-read ledger (test isolation helper)."""
+    with _ledger_lock:
+        _recalled_files.clear()
 
 
 def inject_proxy_recall_into_body(
