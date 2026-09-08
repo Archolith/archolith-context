@@ -85,6 +85,6 @@ trace retention is disabled unless `TRACE_RETENTION_DAYS` is set. Operators can 
 
 ## License
 
-Source-available under the PolyForm Noncommercial License 1.0.0.
+Licensed under the [Apache License 2.0](LICENSE).
 
 archolith&trade; is a trademark of Charles Harvey.

@@ -3,7 +3,7 @@ name = "archolith-proxy"
 version = "0.5.0"
 description = "Experimental OpenAI-compatible proxy for context compression, session tracing, and context-curation research"
 requires-python = ">=3.12"
-license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+license = "Apache-2.0"
 authors = [
     {name = "Charles Harvey", email = "ctharvey@me.com"},
 ]
